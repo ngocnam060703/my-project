@@ -30,7 +30,7 @@ const ProfilePage: React.FC = () => {
   };
 
   return (
-    <Card title="Thông tin cá nhân">
+    <Card title="Thông tin cá nhân" style={{ borderRadius: 12 }}>
       <Form form={form} layout="vertical" onFinish={onFinish}>
         <Form.Item label="Họ tên" name="fullName" rules={[{ required: true }]}>
           <Input />

@@ -1,5 +1,6 @@
 const Bill = require("../models/Bill");
 const Contract = require("../models/Contract");
+const Notification = require("../models/Notification");
 const { getIO } = require("../socket");
 
 exports.getAll = async (req, res) => {
@@ -55,10 +56,17 @@ exports.create = async (req, res) => {
       waterFee: waterFee || 0,
       otherFee: otherFee || 0,
       total,
-      dueDate: dueDate || new Date(year, month, 15),
+      dueDate: dueDate ? new Date(dueDate) : new Date(year, month - 1, 15),
     });
     const io = getIO();
     io.emit("bill:new", { userId: contractDoc.user._id.toString(), message: "Bạn có hóa đơn mới" });
+    await Notification.create({
+      user: contractDoc.user._id,
+      title: "Hóa đơn mới",
+      message: `Bạn có hóa đơn tháng ${month}/${year}, tổng ${total.toLocaleString("vi-VN")}đ. Vui lòng thanh toán đúng hạn.`,
+      type: "bill_reminder",
+      link: "/my-bills",
+    });
     res.status(201).json(await bill.populate(["user", "room", "room.area"]));
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -67,8 +75,15 @@ exports.create = async (req, res) => {
 
 exports.markPaid = async (req, res) => {
   try {
-    const bill = await Bill.findByIdAndUpdate(req.params.id, { status: "paid", paidAt: new Date() }, { new: true });
+    const bill = await Bill.findById(req.params.id);
     if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    const isAdmin = req.user.role === "admin" || req.user.role === "manager";
+    if (!isAdmin && bill.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Không có quyền thanh toán hóa đơn này" });
+    }
+    bill.status = "paid";
+    bill.paidAt = new Date();
+    await bill.save();
     res.json(bill);
   } catch (error) {
     res.status(500).json({ message: error.message });

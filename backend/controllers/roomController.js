@@ -3,9 +3,10 @@ const Area = require("../models/Area");
 
 exports.getAll = async (req, res) => {
   try {
-    const { area, status, available, minPrice, maxPrice, minCapacity, capacity, sortBy = "roomNumber", sortOrder = "asc", page = 1, limit = 100 } = req.query;
+    const { area, status, available, minPrice, maxPrice, minCapacity, capacity, roomNumber, sortBy = "roomNumber", sortOrder = "asc", page = 1, limit = 100 } = req.query;
     const filter = {};
     if (area) filter.area = area;
+    if (roomNumber && String(roomNumber).trim()) filter.roomNumber = new RegExp(String(roomNumber).trim(), "i");
     if (status) filter.status = status;
     if (available === "true") filter.$expr = { $lt: ["$currentOccupancy", "$capacity"] };
     if (minPrice || maxPrice) {
@@ -26,7 +27,12 @@ exports.getAll = async (req, res) => {
       .limit(parseInt(limit))
       .sort(sort);
     const total = await Room.countDocuments(filter);
-    res.json({ rooms, total });
+    const [availableCount, fullCount, maintenanceCount] = await Promise.all([
+      Room.countDocuments({ ...filter, status: "available" }),
+      Room.countDocuments({ ...filter, status: "full" }),
+      Room.countDocuments({ ...filter, status: "maintenance" }),
+    ]);
+    res.json({ rooms, total, stats: { available: availableCount, full: fullCount, maintenance: maintenanceCount } });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

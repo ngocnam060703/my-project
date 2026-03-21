@@ -3,8 +3,12 @@ const Room = require("../models/Room");
 
 exports.getAll = async (req, res) => {
   try {
-    const areas = await Area.find().populate("manager", "fullName email").sort({ name: 1 });
-    res.json(areas);
+    const { search } = req.query;
+    const filter = {};
+    if (search && String(search).trim()) filter.name = new RegExp(String(search).trim(), "i");
+    const areas = await Area.find(filter).populate("manager", "fullName email").sort({ name: 1 });
+    const withManager = await Area.countDocuments({ ...filter, manager: { $exists: true, $ne: null } });
+    res.json({ areas, total: areas.length, stats: { total: areas.length, withManager, withoutManager: areas.length - withManager } });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

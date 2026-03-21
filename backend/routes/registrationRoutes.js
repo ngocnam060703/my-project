@@ -6,6 +6,7 @@ const router = express.Router();
 
 router.get("/my", auth, registrationController.getMyRegistrations);
 router.post("/", auth, registrationController.create);
+router.put("/:id/cancel", auth, registrationController.cancel);
 
 router.use(auth, requireRole("admin", "manager"));
 router.get("/", registrationController.getAll);
