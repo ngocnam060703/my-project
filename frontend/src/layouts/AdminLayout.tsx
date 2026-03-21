@@ -13,6 +13,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   BulbOutlined,
+  CalendarOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
@@ -33,9 +34,10 @@ const AdminLayout: React.FC = () => {
     { key: "/admin/users", icon: <TeamOutlined />, label: "Quản lý người dùng" },
     { key: "/admin/areas", icon: <BankOutlined />, label: "Quản lý khu" },
     { key: "/admin/rooms", icon: <HomeOutlined />, label: "Quản lý phòng" },
-    { key: "/admin/registrations", icon: <FileAddOutlined />, label: "Đơn đăng ký" },
+    { key: "/admin/registrations", icon: <FileAddOutlined />, label: "Xét duyệt đơn" },
     { key: "/admin/contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
     { key: "/admin/bills", icon: <DollarOutlined />, label: "Hóa đơn" },
+    { key: "/admin/registration-periods", icon: <CalendarOutlined />, label: "Đợt đăng ký" },
   ];
 
   const userMenu: MenuProps["items"] = [
@@ -45,7 +47,7 @@ const AdminLayout: React.FC = () => {
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Sider trigger={null} collapsible collapsed={collapsed} theme="dark">
-        <div style={{ height: 64, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: "bold" }}>
+        <div style={{ height: 64, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontWeight: 700 }}>
           {collapsed ? "FDORM" : "KTX FDORM"}
         </div>
         <Menu
@@ -62,7 +64,8 @@ const AdminLayout: React.FC = () => {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          background: "#001529",
+          background: "var(--header-bg-solid)",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
         }}>
           <Space>
             <Button type="text" icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={() => setCollapsed(!collapsed)} style={{ color: "rgba(255,255,255,0.85)" }} />
@@ -77,7 +80,7 @@ const AdminLayout: React.FC = () => {
             </Button>
           </Dropdown>
         </Header>
-        <Content style={{ margin: 24, padding: 24, background: "#fff", borderRadius: 8, minHeight: 280 }}>
+        <Content style={{ margin: 24, padding: 24, background: "var(--admin-content-bg)", borderRadius: 12, minHeight: 280 }}>
           <Outlet />
         </Content>
       </Layout>

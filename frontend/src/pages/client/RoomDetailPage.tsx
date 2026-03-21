@@ -6,6 +6,7 @@ import dayjs from "dayjs";
 import { roomsApi, registrationsApi, ratingsApi } from "../../api";
 import { useAuth } from "../../contexts/AuthContext";
 import type { Room } from "../../types";
+import { isSchoolYearNotPast, schoolYearValidationMessage } from "../../utils/schoolYear";
 
 const RoomDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -96,7 +97,22 @@ const RoomDetailPage: React.FC = () => {
               <Form.Item name="semester" label="Học kỳ" rules={[{ required: true, message: "Vui lòng nhập học kỳ" }]}>
                 <Input placeholder="VD: 1" />
               </Form.Item>
-              <Form.Item name="schoolYear" label="Năm học" rules={[{ required: true, message: "Vui lòng nhập năm học" }]}>
+              <Form.Item
+                name="schoolYear"
+                label="Năm học"
+                rules={[
+                  { required: true, message: "Vui lòng nhập năm học" },
+                  {
+                    validator: async (_rule, value: string) => {
+                      if (!value?.trim()) return Promise.resolve();
+                      if (!isSchoolYearNotPast(value)) {
+                        return Promise.reject(new Error(schoolYearValidationMessage));
+                      }
+                      return Promise.resolve();
+                    },
+                  },
+                ]}
+              >
                 <Input placeholder="VD: 2024-2025" />
               </Form.Item>
               <Form.Item

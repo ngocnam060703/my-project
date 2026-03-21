@@ -70,10 +70,15 @@ exports.terminate = async (req, res) => {
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
     contract.status = "terminated";
     await contract.save();
-    const room = await Room.findById(contract.room._id);
-    room.currentOccupancy = Math.max(0, room.currentOccupancy - 1);
-    room.status = room.currentOccupancy >= room.capacity ? "full" : "available";
-    await room.save();
+    const roomId = contract.room?._id || contract.room;
+    if (roomId) {
+      const room = await Room.findById(roomId);
+      if (room) {
+        room.currentOccupancy = Math.max(0, room.currentOccupancy - 1);
+        room.status = room.currentOccupancy >= room.capacity ? "full" : "available";
+        await room.save();
+      }
+    }
     res.json(contract);
   } catch (error) {
     res.status(500).json({ message: error.message });

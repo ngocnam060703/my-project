@@ -11,6 +11,8 @@ const roomSchema = new mongoose.Schema(
     amenities: [{ type: String }],
     status: { type: String, enum: ["available", "full", "maintenance"], default: "available" },
     description: { type: String, default: "" },
+    roomType: { type: String, default: "" },
+    roomLeader: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }
 );

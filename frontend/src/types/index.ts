@@ -35,8 +35,10 @@ export interface Registration {
   room: Room;
   semester: string;
   schoolYear: string;
+  startDate?: string;
   status: string;
   createdAt: string;
+  rejectionReason?: string;
 }
 
 export interface Contract {
@@ -58,7 +60,10 @@ export interface Bill {
   roomFee: number;
   electricityFee: number;
   waterFee: number;
+  otherFee?: number;
   total: number;
   status: string;
   dueDate: string;
+  paidAt?: string;
+  note?: string;
 }

@@ -1,14 +1,16 @@
 import React, { useState } from "react";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { Form, Input, Button, Card, message } from "antd";
 import { UserOutlined, LockOutlined, MailOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { authApi } from "../api";
 
 const RegisterPage: React.FC = () => {
+  useDocumentTitle("Đăng ký");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const onFinish = async (v: { email: string; password: string; fullName: string; phone?: string }) => {
+  const onFinish = async (v: { email: string; password: string; fullName: string; phone?: string; confirmPassword?: string }) => {
     setLoading(true);
     try {
       await authApi.register(v);
@@ -22,8 +24,15 @@ const RegisterPage: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: 400, margin: "80px auto", padding: 24 }}>
-      <Card title="Đăng ký tài khoản">
+    <div style={{
+      minHeight: "100vh",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      background: "var(--hero-gradient)",
+      padding: 24,
+    }}>
+      <Card title="Đăng ký tài khoản" style={{ maxWidth: 400, width: "100%", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.12)" }}>
         <Form onFinish={onFinish} layout="vertical">
           <Form.Item name="fullName" rules={[{ required: true }]}>
             <Input prefix={<UserOutlined />} placeholder="Họ tên" />
@@ -31,8 +40,23 @@ const RegisterPage: React.FC = () => {
           <Form.Item name="email" rules={[{ required: true, type: "email" }]}>
             <Input prefix={<MailOutlined />} placeholder="Email" />
           </Form.Item>
-          <Form.Item name="password" rules={[{ required: true, min: 6 }]}>
+          <Form.Item name="password" rules={[{ required: true, min: 6, message: "Mật khẩu tối thiểu 6 ký tự" }]}>
             <Input.Password prefix={<LockOutlined />} placeholder="Mật khẩu (tối thiểu 6 ký tự)" />
+          </Form.Item>
+          <Form.Item
+            name="confirmPassword"
+            dependencies={["password"]}
+            rules={[
+              { required: true, message: "Vui lòng xác nhận mật khẩu" },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue("password") === value) return Promise.resolve();
+                  return Promise.reject(new Error("Mật khẩu không khớp"));
+                },
+              }),
+            ]}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="Xác nhận mật khẩu" />
           </Form.Item>
           <Form.Item name="phone"><Input placeholder="Số điện thoại" /></Form.Item>
           <Form.Item>

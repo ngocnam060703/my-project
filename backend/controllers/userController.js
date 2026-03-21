@@ -20,7 +20,12 @@ exports.getAll = async (req, res) => {
       .limit(parseInt(limit))
       .sort({ createdAt: -1 });
     const total = await User.countDocuments(filter);
-    res.json({ users, total });
+    const [userCount, managerCount, adminCount] = await Promise.all([
+      User.countDocuments({ ...filter, role: "user" }),
+      User.countDocuments({ ...filter, role: "manager" }),
+      User.countDocuments({ ...filter, role: "admin" }),
+    ]);
+    res.json({ users, total, stats: { user: userCount, manager: managerCount, admin: adminCount } });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

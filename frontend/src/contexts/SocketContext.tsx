@@ -16,23 +16,24 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const { user } = useAuth();
 
   useEffect(() => {
-    if (!user?.id) return;
+    const userId = (user as { id?: string; _id?: string })?.id || (user as { id?: string; _id?: string })?._id;
+    if (!userId) return;
     const s = io(SOCKET_URL);
     setSocket(s);
     s.on("registration:approved", (data: { userId?: string; message?: string }) => {
-      if (data.userId === user.id) message.success(data.message || "Đơn đăng ký đã được duyệt");
+      if (data.userId === userId) message.success(data.message || "Đơn đăng ký đã được duyệt");
     });
     s.on("registration:rejected", (data: { userId?: string; message?: string }) => {
-      if (data.userId === user.id) message.warning(data.message || "Đơn đăng ký bị từ chối");
+      if (data.userId === userId) message.warning(data.message || "Đơn đăng ký bị từ chối");
     });
     s.on("bill:new", (data: { userId?: string; message?: string }) => {
-      if (data.userId === user.id) message.info(data.message || "Bạn có hóa đơn mới");
+      if (data.userId === userId) message.info(data.message || "Bạn có hóa đơn mới");
     });
     return () => {
       s.disconnect();
       setSocket(null);
     };
-  }, [user?.id]);
+  }, [user]);
 
   return <SocketContext.Provider value={{ socket }}>{children}</SocketContext.Provider>;
 };

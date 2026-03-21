@@ -61,8 +61,8 @@ const DashboardPage: React.FC = () => {
                 <XAxis dataKey="_id" />
                 <YAxis />
                 <Tooltip />
-                <Bar dataKey="total" fill="#1890ff" name="Tổng" />
-                <Bar dataKey="available" fill="#52c41a" name="Trống" />
+                <Bar dataKey="total" fill="#0d9488" name="Tổng" />
+                <Bar dataKey="available" fill="#059669" name="Trống" />
               </BarChart>
             </ResponsiveContainer>
           </Card>
@@ -75,7 +75,7 @@ const DashboardPage: React.FC = () => {
                 <XAxis dataKey="month" />
                 <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
                 <Tooltip formatter={(v) => [`${Number(v)?.toLocaleString("vi-VN")}đ`, "Doanh thu"]} />
-                <Line type="monotone" dataKey="doanhThu" stroke="#1890ff" name="Doanh thu" />
+                <Line type="monotone" dataKey="doanhThu" stroke="#0d9488" strokeWidth={2} name="Doanh thu" />
               </LineChart>
             </ResponsiveContainer>
           </Card>
