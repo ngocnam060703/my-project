@@ -36,8 +36,13 @@ export const contractsApi = {
   getById: (id: string) => client.get(`/contracts/${id}`),
   getAll: (params?: { status?: string; user?: string; room?: string; page?: number; limit?: number }) =>
     client.get("/contracts", { params }),
+  /** CRUD — giao diện admin có thể ẩn; gọi khi cần (Postman / tích hợp). */
+  create: (data: Record<string, unknown>) => client.post("/contracts", data),
+  update: (id: string, data: Record<string, unknown>) => client.put(`/contracts/${encodeURIComponent(String(id))}`, data),
   extend: (id: string, endDate: string) => client.put(`/contracts/${id}/extend`, { endDate }),
   terminate: (id: string) => client.put(`/contracts/${id}/terminate`),
+  sign: (id: string) => client.put(`/contracts/${id}/sign`),
+  confirmPayment: (id: string) => client.put(`/contracts/${id}/confirm-payment`),
 };
 
 export const billsApi = {
@@ -73,6 +78,11 @@ export const studentDashboardApi = {
 
 export const registrationPeriodsApi = {
   getActive: () => client.get("/registration-periods/active"),
+  getAll: () => client.get("/registration-periods"),
+  create: (data: { name: string; startDate: string; endDate: string; note?: string }) =>
+    client.post("/registration-periods", data),
+  update: (id: string, data: Record<string, unknown>) => client.put(`/registration-periods/${id}`, data),
+  delete: (id: string) => client.delete(`/registration-periods/${id}`),
 };
 
 export const notificationsApi = {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Row, Col, Card, Select, InputNumber, Button, Tag, Spin, Empty, message, Space, Skeleton, Typography, Modal, Statistic } from "antd";
+import { Row, Col, Card, Select, InputNumber, Button, Tag, Spin, Empty, message, Space, Skeleton, Statistic } from "antd";
 import { DeleteOutlined, ApartmentOutlined, FilterOutlined } from "@ant-design/icons";
 import { roomsApi, areasApi } from "../../api";
 import type { Area, Room } from "../../types";
@@ -10,7 +10,6 @@ const RoomsPage: React.FC = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [loading, setLoading] = useState(true);
-  const [registerModal, setRegisterModal] = useState<Room | null>(null);
   const [filters, setFilters] = useState<{
     area?: string;
     status?: "available" | "full" | "maintenance";
@@ -59,16 +58,6 @@ const RoomsPage: React.FC = () => {
   };
 
   const clearFilters = () => setFilters({});
-
-  const handleRegisterClick = (r: Room) => {
-    setRegisterModal(r);
-  };
-
-  const handleConfirmRegister = () => {
-    if (!registerModal) return;
-    setRegisterModal(null);
-    navigate(`/rooms/${registerModal._id}`);
-  };
 
   const statsAvailable = rooms.filter((r) => r.status === "available").length;
   const statsFull = rooms.filter((r) => r.status === "full").length;
@@ -180,9 +169,15 @@ const RoomsPage: React.FC = () => {
                   title={`Phòng ${r.roomNumber}`}
                   extra={<Tag color={status.color}>{status.text} {r.status !== "maintenance" && `(${r.currentOccupancy}/${r.capacity})`}</Tag>}
                   actions={[
-                    <Button type="link" key="detail" onClick={() => navigate(`/rooms/${r._id}`)}>Xem chi tiết</Button>,
+                    <Button type="link" key="detail" onClick={() => navigate(`/student/rooms/${r._id}`)}>Xem chi tiết</Button>,
                     r.status !== "maintenance" && (
-                      <Button type="link" key="register" onClick={() => handleRegisterClick(r)}>Đăng ký ngay</Button>
+                      <Button
+                        type="link"
+                        key="register"
+                        onClick={() => navigate(`/student/dorm-registration?roomId=${r._id}`)}
+                      >
+                        Đăng ký nội trú
+                      </Button>
                     ),
                   ].filter(Boolean) as React.ReactNode[]}
                 >
@@ -212,21 +207,6 @@ const RoomsPage: React.FC = () => {
         </Row>
       )}
 
-      <Modal
-        title="Xác nhận đăng ký"
-        open={!!registerModal}
-        onOk={handleConfirmRegister}
-        onCancel={() => setRegisterModal(null)}
-        okText="Tiếp tục đăng ký"
-      >
-        <p>
-          {registerModal && (registerModal.currentOccupancy ?? 0) >= (registerModal.capacity ?? 0) ? (
-            <>Bạn có chắc muốn đăng ký phòng {registerModal.roomNumber} không? Lưu ý: Phòng đã đủ số lượng, đơn của bạn sẽ được xếp hàng chờ.</>
-          ) : (
-            <>Bạn có chắc muốn đăng ký phòng {registerModal?.roomNumber} không?</>
-          )}
-        </p>
-      </Modal>
     </div>
   );
 };

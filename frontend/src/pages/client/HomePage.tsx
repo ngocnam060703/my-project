@@ -17,7 +17,15 @@ const { Title, Paragraph, Text } = Typography;
 
 interface DashboardData {
   studentStatus: string;
-  room: { roomNumber: string; area: string; floor: number; roomType: string } | null;
+  memberStatusLabel?: string;
+  room: {
+    roomNumber: string;
+    area?: string | { name?: string };
+    floor: number;
+    roomType: string;
+    sectionTitle?: string;
+    contextLabel?: string;
+  } | null;
   contract: { startDate: string; endDate: string; daysLeft: number } | null;
   unpaidTotal: number;
   unpaidCount: number;
@@ -102,7 +110,7 @@ const HomePage: React.FC = () => {
         </div>
         <Row gutter={[24, 24]}>
           <Col xs={24} md={8}>
-            <Card hoverable onClick={() => navigate("/rooms")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
+            <Card hoverable onClick={() => navigate("/student/rooms")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
               <HomeOutlined style={{ fontSize: 48, color: "var(--card-accent-1)", marginBottom: 16 }} />
               <Title level={4}>Xem phòng</Title>
               <Button type="primary" onClick={() => navigate("/login")}>Đăng nhập</Button>
@@ -156,9 +164,22 @@ const HomePage: React.FC = () => {
       <Row gutter={[16, 16]}>
         {dashboardData.room && (
           <Col xs={24} md={12}>
-            <Card title="Phòng hiện tại" style={{ borderRadius: 12 }}>
+            <Card
+              title={(dashboardData.room as { sectionTitle?: string }).sectionTitle || "Phòng ở"}
+              style={{ borderRadius: 12 }}
+            >
+              {(dashboardData.room as { contextLabel?: string }).contextLabel && (
+                <p style={{ marginTop: 0, color: "#6b7280", fontSize: 13 }}>
+                  {(dashboardData.room as { contextLabel?: string }).contextLabel}
+                </p>
+              )}
               <p><strong>Mã phòng:</strong> {dashboardData.room.roomNumber}</p>
-              <p><strong>Khu:</strong> {dashboardData.room.area}</p>
+              <p>
+                <strong>Khu:</strong>{" "}
+                {typeof dashboardData.room.area === "object" && dashboardData.room.area != null && "name" in dashboardData.room.area
+                  ? String((dashboardData.room.area as { name?: string }).name ?? "—")
+                  : String(dashboardData.room.area ?? "—")}
+              </p>
               <p><strong>Tầng:</strong> {dashboardData.room.floor}</p>
               <p><strong>Loại phòng:</strong> {dashboardData.room.roomType}</p>
             </Card>
@@ -170,7 +191,7 @@ const HomePage: React.FC = () => {
               <p><strong>Ngày bắt đầu:</strong> {new Date(dashboardData.contract.startDate).toLocaleDateString("vi-VN")}</p>
               <p><strong>Ngày kết thúc:</strong> {new Date(dashboardData.contract.endDate).toLocaleDateString("vi-VN")}</p>
               <Statistic title="Số ngày còn lại" value={dashboardData.contract.daysLeft} suffix="ngày" />
-              <Button type="link" onClick={() => navigate("/my-contracts")} style={{ padding: 0 }}>Xem chi tiết</Button>
+              <Button type="link" onClick={() => navigate("/student/my-contracts")} style={{ padding: 0 }}>Xem chi tiết</Button>
             </Card>
           </Col>
         )}
@@ -182,14 +203,14 @@ const HomePage: React.FC = () => {
               formatter={(v) => `${Number(v)?.toLocaleString("vi-VN")}đ`}
             />
             <p><Tag color={dashboardData.unpaidCount > 0 ? "gold" : "green"}>{dashboardData.unpaidCount > 0 ? "Chưa thanh toán" : "Đã thanh toán"}</Tag></p>
-            <Button type="primary" onClick={() => navigate("/my-bills")}>Xem hóa đơn</Button>
+            <Button type="primary" onClick={() => navigate("/student/my-bills")}>Xem hóa đơn</Button>
           </Card>
         </Col>
       </Row>
 
       <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
         <Col xs={24} md={8}>
-          <Card hoverable onClick={() => navigate("/rooms")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
+          <Card hoverable onClick={() => navigate("/student/rooms")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
             <UnorderedListOutlined style={{ fontSize: 48, color: "var(--card-accent-1)", marginBottom: 16 }} />
             <Title level={4}>Xem phòng trống</Title>
             <Paragraph>Danh sách phòng và đăng ký</Paragraph>
@@ -197,7 +218,7 @@ const HomePage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card hoverable onClick={() => navigate("/my-registrations")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
+          <Card hoverable onClick={() => navigate("/student/my-registrations")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
             <FileAddOutlined style={{ fontSize: 48, color: "var(--card-accent-2)", marginBottom: 16 }} />
             <Title level={4}>Đăng ký của tôi</Title>
             <Paragraph>Đơn đăng ký nội trú</Paragraph>
@@ -205,7 +226,7 @@ const HomePage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card hoverable onClick={() => navigate("/my-bills")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
+          <Card hoverable onClick={() => navigate("/student/my-bills")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
             <DollarOutlined style={{ fontSize: 48, color: "var(--card-accent-3)", marginBottom: 16 }} />
             <Title level={4}>Hóa đơn</Title>
             <Paragraph>Thanh toán hóa đơn</Paragraph>

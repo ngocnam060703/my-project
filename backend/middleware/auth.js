@@ -8,7 +8,7 @@ const auth = async (req, res, next) => {
       return res.status(401).json({ message: "Vui lòng đăng nhập" });
     }
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret");
-    const user = await User.findById(decoded.userId);
+    const user = await User.findById(String(decoded.userId));
     if (!user || !user.isActive) {
       return res.status(401).json({ message: "Phiên đăng nhập không hợp lệ" });
     }

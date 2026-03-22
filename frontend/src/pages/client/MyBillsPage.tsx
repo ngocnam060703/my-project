@@ -103,7 +103,7 @@ const MyBillsPage: React.FC = () => {
 
       <Card style={{ borderRadius: 12 }}>
         {data.length === 0 ? (
-          <Empty description="Chưa có hóa đơn nào" />
+          <Empty description="Bạn chưa có hóa đơn cần thanh toán" />
         ) : (
           <Table
             columns={columns}

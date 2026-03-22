@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { Table, Button, Modal, Form, Input, DatePicker, message } from "antd";
+import { Table, Button, Modal, Form, Input, DatePicker, message, Switch, Space } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
-import { client } from "../../api";
+import { registrationPeriodsApi } from "../../api";
 import dayjs from "dayjs";
 
 interface Period {
@@ -16,12 +16,13 @@ const RegistrationPeriodsPage: React.FC = () => {
   const [data, setData] = useState<Period[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [form] = Form.useForm();
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await client.get("/registration-periods");
+      const res = await registrationPeriodsApi.getAll();
       setData(res.data || []);
     } catch {
       message.error("Không tải được");
@@ -34,7 +35,7 @@ const RegistrationPeriodsPage: React.FC = () => {
 
   const onFinish = async (v: { name: string; startDate: ReturnType<typeof dayjs>; endDate: ReturnType<typeof dayjs> }) => {
     try {
-      await client.post("/registration-periods", {
+      await registrationPeriodsApi.create({
         name: v.name,
         startDate: v.startDate.toISOString(),
         endDate: v.endDate.toISOString(),
@@ -48,9 +49,25 @@ const RegistrationPeriodsPage: React.FC = () => {
     }
   };
 
+  const handleToggleActive = async (record: Period, checked: boolean) => {
+    setTogglingId(record._id);
+    try {
+      await registrationPeriodsApi.update(record._id, { isActive: checked });
+      message.success(checked ? "Đã bật đợt đăng ký (các đợt khác tự tắt)" : "Đã tắt đợt đăng ký");
+      await load();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không cập nhật được");
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
   return (
     <div>
       <h2 style={{ marginBottom: 24 }}>Quản lý đợt đăng ký nội trú</h2>
+      <p style={{ marginBottom: 16, color: "#6b7280" }}>
+        Dùng công tắc <strong>Mở đợt</strong> để bật/tắt. Chỉ một đợt được bật cùng lúc; sinh viên chỉ đăng ký khi đợt đang bật và trong khoảng thời gian đợt đó.
+      </p>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)} style={{ marginBottom: 16 }}>
         Thêm đợt đăng ký
       </Button>
@@ -62,7 +79,23 @@ const RegistrationPeriodsPage: React.FC = () => {
           { title: "Tên", dataIndex: "name", key: "name" },
           { title: "Từ ngày", dataIndex: "startDate", key: "startDate", render: (d: string) => new Date(d).toLocaleDateString("vi-VN") },
           { title: "Đến ngày", dataIndex: "endDate", key: "endDate", render: (d: string) => new Date(d).toLocaleDateString("vi-VN") },
-          { title: "Trạng thái", dataIndex: "isActive", key: "isActive", render: (v: boolean) => (v ? "Đang mở" : "Đã đóng") },
+          {
+            title: "Mở đợt (bật/tắt)",
+            key: "toggle",
+            width: 200,
+            render: (_: unknown, r: Period) => (
+              <Space>
+                <Switch
+                  checked={r.isActive}
+                  loading={togglingId === r._id}
+                  checkedChildren="Bật"
+                  unCheckedChildren="Tắt"
+                  onChange={(checked) => handleToggleActive(r, checked)}
+                />
+                <span style={{ color: "#6b7280", fontSize: 12 }}>{r.isActive ? "Đang mở" : "Đã đóng"}</span>
+              </Space>
+            ),
+          },
         ]}
       />
       <Modal title="Thêm đợt đăng ký" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null}>

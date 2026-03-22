@@ -35,7 +35,20 @@ exports.create = async (req, res) => {
 
 exports.update = async (req, res) => {
   try {
-    const period = await RegistrationPeriod.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const { name, startDate, endDate, note, isActive } = req.body;
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (startDate !== undefined) updates.startDate = startDate;
+    if (endDate !== undefined) updates.endDate = endDate;
+    if (note !== undefined) updates.note = note;
+    if (isActive !== undefined) updates.isActive = !!isActive;
+
+    // Chỉ một đợt được "bật" cùng lúc — tránh admin bật nhầm nhiều đợt.
+    if (updates.isActive === true) {
+      await RegistrationPeriod.updateMany({ _id: { $ne: req.params.id } }, { $set: { isActive: false } });
+    }
+
+    const period = await RegistrationPeriod.findByIdAndUpdate(req.params.id, updates, { new: true });
     if (!period) return res.status(404).json({ message: "Không tìm thấy đợt đăng ký" });
     res.json(period);
   } catch (error) {

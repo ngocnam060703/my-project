@@ -1,3 +1,4 @@
+const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const { validationResult } = require("express-validator");
 
@@ -59,7 +60,10 @@ exports.update = async (req, res) => {
   try {
     const { fullName, phone, studentId, role, managedArea, isActive } = req.body;
     const updateData = { fullName, phone, studentId, role, managedArea, isActive };
-    if (req.body.password) updateData.password = req.body.password;
+    // findByIdAndUpdate không chạy pre('save') → phải hash tay (tránh lưu plaintext → đăng nhập luôn sai).
+    if (req.body.password) {
+      updateData.password = await bcrypt.hash(String(req.body.password), 10);
+    }
     const user = await User.findByIdAndUpdate(req.params.id, updateData, { new: true }).select("-password");
     if (!user) return res.status(404).json({ message: "Không tìm thấy người dùng" });
     res.json(user);

@@ -19,7 +19,7 @@ const ContractRenewalPage: React.FC = () => {
       const c = res.data;
       if (c.status !== "active") {
         message.warning("Chỉ có thể gia hạn hợp đồng đang hiệu lực");
-        navigate("/my-contracts");
+        navigate("/student/my-contracts");
         return;
       }
       setContract(c);
@@ -31,7 +31,7 @@ const ContractRenewalPage: React.FC = () => {
         semester: "1",
         startDate: dayjs(c.endDate).add(1, "day"),
       });
-    }).catch(() => navigate("/my-contracts")).finally(() => setLoading(false));
+    }).catch(() => navigate("/student/my-contracts")).finally(() => setLoading(false));
   }, [id, form, navigate]);
 
   const onFinish = async (v: { room: string; semester: string; schoolYear: string; startDate: ReturnType<typeof dayjs> }) => {
@@ -48,7 +48,7 @@ const ContractRenewalPage: React.FC = () => {
         startDate: v.startDate.format("YYYY-MM-DD"),
       });
       message.success("Đã gửi đơn gia hạn! Đơn của bạn đang chờ duyệt.");
-      navigate("/my-registrations");
+      navigate("/student/my-registrations");
     } catch (err: unknown) {
       message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Gửi thất bại");
     } finally {
@@ -60,7 +60,7 @@ const ContractRenewalPage: React.FC = () => {
 
   return (
     <div>
-      <Button type="link" onClick={() => navigate("/my-contracts")} style={{ marginBottom: 16 }}>← Quay lại</Button>
+      <Button type="link" onClick={() => navigate("/student/my-contracts")} style={{ marginBottom: 16 }}>← Quay lại</Button>
       <Card title="Gia hạn hợp đồng" style={{ maxWidth: 500, borderRadius: 12 }}>
         <p style={{ color: "#666", marginBottom: 16 }}>
           Quy trình gia hạn tương tự đăng ký nội trú. Bạn sẽ đăng ký lại phòng hiện tại.
