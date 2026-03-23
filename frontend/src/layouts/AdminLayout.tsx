@@ -13,7 +13,6 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   BulbOutlined,
-  CalendarOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
@@ -37,11 +36,10 @@ const AdminLayout: React.FC = () => {
     { key: "/admin/registrations", icon: <FileAddOutlined />, label: "Xét duyệt đơn" },
     { key: "/admin/contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
     { key: "/admin/bills", icon: <DollarOutlined />, label: "Hóa đơn" },
-    { key: "/admin/registration-periods", icon: <CalendarOutlined />, label: "Đợt đăng ký" },
   ];
 
   const userMenu: MenuProps["items"] = [
-    { key: "logout", icon: <LogoutOutlined />, label: "Đăng xuất", onClick: () => { logout(); navigate("/"); } },
+    { key: "logout", icon: <LogoutOutlined />, label: "Đăng xuất", onClick: () => { logout(); navigate("/student"); } },
   ];
 
   return (

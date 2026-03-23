@@ -23,14 +23,23 @@ const MyRegistrationsPage: React.FC = () => {
 
   useEffect(() => { load(); }, []);
 
-  const handleCancel = async (id: string) => {
-    try {
-      await registrationsApi.cancel(id);
-      message.success("Đã hủy đơn");
-      load();
-    } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Hủy đơn thất bại");
-    }
+  const handleCancel = (id: string) => {
+    Modal.confirm({
+      title: "Hủy đơn đăng ký?",
+      content: "Bạn sẽ không thể hoàn tác. Chỉ hủy được khi đơn đang ở trạng thái Chờ duyệt.",
+      okText: "Hủy đơn",
+      okType: "danger",
+      cancelText: "Đóng",
+      onOk: async () => {
+        try {
+          await registrationsApi.cancel(id);
+          message.success("Đã hủy đơn");
+          load();
+        } catch (err: unknown) {
+          message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Hủy đơn thất bại");
+        }
+      },
+    });
   };
 
   const pendingCount = data.filter((r) => r.status === "pending").length;
@@ -58,9 +67,11 @@ const MyRegistrationsPage: React.FC = () => {
       render: (_: unknown, r: Registration) => (
         <Space>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
-          <Button type="link" size="small" onClick={() => navigate(`/rooms/${typeof r.room === "object" ? r.room?._id : r.room}`)}>Xem phòng</Button>
+          <Button type="link" size="small" onClick={() => navigate(`/student/rooms/${typeof r.room === "object" ? r.room?._id : r.room}`)}>Xem phòng</Button>
           {r.status === "pending" && (
-            <Button type="link" danger size="small" icon={<StopOutlined />} onClick={() => handleCancel(r._id)}>Hủy đơn</Button>
+            <Button type="link" danger size="small" icon={<StopOutlined />} onClick={() => handleCancel(r._id)}>
+              Hủy đơn
+            </Button>
           )}
         </Space>
       ),
@@ -127,6 +138,9 @@ const MyRegistrationsPage: React.FC = () => {
             <p><strong>Ngày đăng ký:</strong> {detailModal.createdAt ? new Date(detailModal.createdAt).toLocaleDateString("vi-VN") : "-"}</p>
             {detailModal.status === "rejected" && detailModal.rejectionReason && (
               <p style={{ color: "#cf1322" }}><strong>Lý do từ chối:</strong> {detailModal.rejectionReason}</p>
+            )}
+            {detailModal.note && String(detailModal.note).trim() !== "" && (
+              <p style={{ color: "#ad6800" }}><strong>Ghi chú hệ thống:</strong> {detailModal.note}</p>
             )}
           </div>
         )}

@@ -1,13 +1,21 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, ReactNode, Dispatch, SetStateAction } from "react";
 import { authApi } from "../api";
 
 interface User {
-  id: string;
+  id?: string;
+  _id?: string;
   email: string;
   fullName: string;
   role: string;
   phone?: string;
   studentId?: string;
+  className?: string;
+  major?: string;
+  gender?: string;
+  citizenId?: string;
+  dateOfBirth?: string | null;
+  address?: string;
+  profileComplete?: boolean;
 }
 
 interface AuthContextType {
@@ -15,7 +23,7 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
-  setUser: (u: User | null) => void;
+  setUser: Dispatch<SetStateAction<User | null>>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,11 +51,39 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const login = async (email: string, password: string) => {
-    const res = await authApi.login(email, password);
-    const { user: u, token } = res.data;
+    const normalizedEmail = email.trim().toLowerCase();
+    // Xóa token cũ trước khi đăng nhập để request không gửi Bearer hết hạn (tránh lỗi lạ từ API khác song song).
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    setUser(null);
+    const res = await authApi.login({ email: normalizedEmail, password });
+    const raw = res?.data;
+    const payload =
+      raw && typeof raw === "object" && raw !== null && "data" in raw && (raw as { data: unknown }).data != null
+        ? (raw as { data: Record<string, unknown> }).data
+        : raw && typeof raw === "object" && raw !== null
+          ? (raw as Record<string, unknown>)
+          : null;
+
+    const u = payload?.user as User | undefined;
+    const tokenVal = payload?.token;
+    const token = typeof tokenVal === "string" ? tokenVal : "";
+
+    if (!u || !token) {
+      throw new Error("Phản hồi đăng nhập không hợp lệ từ máy chủ (thiếu user hoặc token).");
+    }
+
+    const merged: User = {
+      ...u,
+      id: u.id ?? u._id ?? String((u as unknown as { _id?: string })._id ?? ""),
+      email: String(u.email ?? ""),
+      fullName: String(u.fullName ?? ""),
+      role: String(u.role ?? "user"),
+    };
+
     localStorage.setItem("token", token);
-    localStorage.setItem("user", JSON.stringify(u));
-    setUser(u);
+    localStorage.setItem("user", JSON.stringify(merged));
+    setUser(merged);
   };
 
   const logout = () => {

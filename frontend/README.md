@@ -1,3 +1,15 @@
+# Frontend KTX
+
+## Chạy cùng backend (quan trọng)
+
+1. Mở terminal **backend**: `cd backend` → `npm run dev` (phải thấy server cổng **5000**).
+2. Mở terminal **frontend**: `cd frontend` → `npm start`.
+
+Ở dev, API dùng **`/api`** và được **proxy** sang `http://127.0.0.1:5000` (xem `package.json` → `"proxy"`).  
+Nếu báo *Không kết nối được máy chủ*: backend chưa chạy hoặc sai cổng — thử mở http://127.0.0.1:5000 trong trình duyệt.
+
+---
+
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).

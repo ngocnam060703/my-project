@@ -1,13 +1,34 @@
 import React, { useState, useEffect } from "react";
-import { Table, Button, Modal, Form, DatePicker, Tag, message, Space, Card, Row, Col, Statistic, Select } from "antd";
-import { EyeOutlined, StopOutlined, DownloadOutlined, FilterOutlined, CalendarOutlined } from "@ant-design/icons";
+import {
+  Table,
+  Button,
+  Modal,
+  Form,
+  DatePicker,
+  Tag,
+  message,
+  Space,
+  Card,
+  Row,
+  Col,
+  Statistic,
+  Select,
+} from "antd";
+import {
+  EyeOutlined,
+  StopOutlined,
+  DownloadOutlined,
+  FilterOutlined,
+  CalendarOutlined,
+} from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
 import { contractsApi, client } from "../../api";
 import type { Contract } from "../../types";
 import dayjs from "dayjs";
 
 const statusMap: Record<string, { color: string; text: string }> = {
-  active: { color: "green", text: "Đang hiệu lực" },
+  pending_payment: { color: "gold", text: "Chưa hiệu lực (chờ ký + xác nhận thanh toán)" },
+  active: { color: "green", text: "Có hiệu lực" },
   expired: { color: "default", text: "Hết hạn" },
   terminated: { color: "red", text: "Đã chấm dứt" },
 };
@@ -46,7 +67,9 @@ const ContractsPage: React.FC = () => {
     }
   };
 
-  useEffect(() => { load(); }, [page, filters.status, filters.room]);
+  useEffect(() => {
+    void load();
+  }, [page, filters.status, filters.room]);
 
   const handleTerminate = (c: Contract) => {
     Modal.confirm({
@@ -132,15 +155,46 @@ const ContractsPage: React.FC = () => {
     {
       title: "Thao tác",
       key: "action",
-      width: 180,
+      width: 220,
       fixed: "right" as const,
       render: (_: unknown, r: Contract) => (
-        <Space>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
+        <Space wrap size="small">
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>
+            Chi tiết
+          </Button>
+          {r.status === "pending_payment" && (
+            <Button
+              type="link"
+              size="small"
+              onClick={async () => {
+                try {
+                  await contractsApi.confirmPayment(r._id);
+                  message.success("Đã xác nhận thanh toán. Hợp đồng có hiệu lực.");
+                  load();
+                } catch (err: unknown) {
+                  message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+                }
+              }}
+            >
+              Xác nhận thanh toán
+            </Button>
+          )}
           {r.status === "active" && (
             <>
-              <Button type="link" size="small" icon={<CalendarOutlined />} onClick={() => { setExtendModal(r); form.setFieldsValue({ endDate: dayjs(r.endDate) }); }}>Gia hạn</Button>
-              <Button type="link" danger size="small" icon={<StopOutlined />} onClick={() => handleTerminate(r)}>Chấm dứt</Button>
+              <Button
+                type="link"
+                size="small"
+                icon={<CalendarOutlined />}
+                onClick={() => {
+                  setExtendModal(r);
+                  form.setFieldsValue({ endDate: dayjs(r.endDate) });
+                }}
+              >
+                Gia hạn
+              </Button>
+              <Button type="link" danger size="small" icon={<StopOutlined />} onClick={() => handleTerminate(r)}>
+                Chấm dứt
+              </Button>
             </>
           )}
         </Space>
@@ -152,13 +206,20 @@ const ContractsPage: React.FC = () => {
     <div>
       <div style={{ marginBottom: 24 }}>
         <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Quản lý hợp đồng</h2>
-        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Xem, gia hạn và chấm dứt hợp đồng thuê phòng</p>
+        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
+          Xem, gia hạn, chấm dứt và xác nhận thanh toán hợp đồng
+        </p>
       </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={8}>
           <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
-            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Hợp đồng đang hiệu lực</span>} value={activeCount} suffix="hợp đồng" valueStyle={{ color: "#fff", fontSize: 20 }} />
+            <Statistic
+              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Hợp đồng đang hiệu lực</span>}
+              value={activeCount}
+              suffix="hợp đồng"
+              valueStyle={{ color: "#fff", fontSize: 20 }}
+            />
           </Card>
         </Col>
         <Col xs={24} sm={8}>
@@ -181,9 +242,13 @@ const ContractsPage: React.FC = () => {
             allowClear
             style={{ width: 150 }}
             value={filters.status}
-            onChange={(v) => { setFilters((f) => ({ ...f, status: v })); setPage(1); }}
+            onChange={(v) => {
+              setFilters((f) => ({ ...f, status: v }));
+              setPage(1);
+            }}
           >
-            <Select.Option value="active">Đang hiệu lực</Select.Option>
+            <Select.Option value="pending_payment">Chưa hiệu lực (chờ ký + xác nhận thanh toán)</Select.Option>
+            <Select.Option value="active">Có hiệu lực</Select.Option>
             <Select.Option value="expired">Hết hạn</Select.Option>
             <Select.Option value="terminated">Đã chấm dứt</Select.Option>
           </Select>
@@ -192,26 +257,44 @@ const ContractsPage: React.FC = () => {
             allowClear
             style={{ width: 180 }}
             value={filters.room}
-            onChange={(v) => { setFilters((f) => ({ ...f, room: v })); setPage(1); }}
+            onChange={(v) => {
+              setFilters((f) => ({ ...f, room: v }));
+              setPage(1);
+            }}
             showSearch
             optionFilterProp="children"
           >
             {rooms.map((r) => (
-              <Select.Option key={r._id} value={r._id}>Phòng {r.roomNumber} {r.area?.name ? `- ${r.area.name}` : ""}</Select.Option>
+              <Select.Option key={r._id} value={r._id}>
+                Phòng {r.roomNumber} {r.area?.name ? `- ${r.area.name}` : ""}
+              </Select.Option>
             ))}
           </Select>
-          <Button onClick={() => { setFilters({}); setPage(1); }}>Xóa bộ lọc</Button>
+          <Button
+            onClick={() => {
+              setFilters({});
+              setPage(1);
+            }}
+          >
+            Xóa bộ lọc
+          </Button>
           <div style={{ flex: 1 }} />
           <Button
             icon={<DownloadOutlined />}
-            onClick={() => exportToExcel(data.map((c) => ({
-              "Số HĐ": c.contractNumber,
-              "Sinh viên": c.user && typeof c.user === "object" ? (c.user as { fullName?: string }).fullName : "-",
-              "Phòng": c.room && typeof c.room === "object" ? (c.room as { roomNumber?: string }).roomNumber : "-",
-              "Từ ngày": c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "-",
-              "Đến ngày": c.endDate ? new Date(c.endDate).toLocaleDateString("vi-VN") : "-",
-              "Trạng thái": statusMap[c.status]?.text || c.status,
-            })), "danh-sach-hop-dong", "Hợp đồng")}
+            onClick={() =>
+              exportToExcel(
+                data.map((c) => ({
+                  "Số HĐ": c.contractNumber,
+                  "Sinh viên": c.user && typeof c.user === "object" ? (c.user as { fullName?: string }).fullName : "-",
+                  "Phòng": c.room && typeof c.room === "object" ? (c.room as { roomNumber?: string }).roomNumber : "-",
+                  "Từ ngày": c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "-",
+                  "Đến ngày": c.endDate ? new Date(c.endDate).toLocaleDateString("vi-VN") : "-",
+                  "Trạng thái": statusMap[c.status]?.text || c.status,
+                })),
+                "danh-sach-hop-dong",
+                "Hợp đồng",
+              )
+            }
           >
             Xuất Excel
           </Button>
@@ -222,7 +305,14 @@ const ContractsPage: React.FC = () => {
           dataSource={data}
           rowKey="_id"
           loading={loading}
-          pagination={{ total, current: page, pageSize: 10, onChange: setPage, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hợp đồng` }}
+          pagination={{
+            total,
+            current: page,
+            pageSize: 10,
+            onChange: setPage,
+            showSizeChanger: false,
+            showTotal: (t) => `Tổng ${t} hợp đồng`,
+          }}
           scroll={{ x: 900 }}
           size="middle"
         />
@@ -233,28 +323,74 @@ const ContractsPage: React.FC = () => {
         open={!!detailModal}
         onCancel={() => setDetailModal(null)}
         footer={[
-          <Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>,
+          <Button key="close" onClick={() => setDetailModal(null)}>
+            Đóng
+          </Button>,
           detailModal?.status === "active" && (
-            <Button key="terminate" danger icon={<StopOutlined />} onClick={() => { handleTerminate(detailModal); setDetailModal(null); }}>Chấm dứt hợp đồng</Button>
+            <Button
+              key="terminate"
+              danger
+              icon={<StopOutlined />}
+              onClick={() => {
+                handleTerminate(detailModal);
+                setDetailModal(null);
+              }}
+            >
+              Chấm dứt hợp đồng
+            </Button>
           ),
         ].filter(Boolean) as React.ReactNode[]}
         width={480}
       >
         {detailModal && (
           <div style={{ lineHeight: 2 }}>
-            <p><strong>Số hợp đồng:</strong> {detailModal.contractNumber || "-"}</p>
-            <p><strong>Sinh viên:</strong> {detailModal.user && typeof detailModal.user === "object" ? (detailModal.user as { fullName?: string; email?: string; phone?: string }).fullName : "-"}</p>
+            <p>
+              <strong>Số hợp đồng:</strong> {detailModal.contractNumber || "-"}
+            </p>
+            <p>
+              <strong>Sinh viên:</strong>{" "}
+              {detailModal.user && typeof detailModal.user === "object"
+                ? (detailModal.user as { fullName?: string; email?: string; phone?: string }).fullName
+                : "-"}
+            </p>
             {detailModal.user && typeof detailModal.user === "object" && (detailModal.user as { email?: string }).email && (
-              <p><strong>Email:</strong> {(detailModal.user as { email?: string }).email}</p>
+              <p>
+                <strong>Email:</strong> {(detailModal.user as { email?: string }).email}
+              </p>
             )}
             {detailModal.user && typeof detailModal.user === "object" && (detailModal.user as { phone?: string }).phone && (
-              <p><strong>SĐT:</strong> {(detailModal.user as { phone?: string }).phone}</p>
+              <p>
+                <strong>SĐT:</strong> {(detailModal.user as { phone?: string }).phone}
+              </p>
             )}
-            <p><strong>Phòng:</strong> {detailModal.room && typeof detailModal.room === "object" ? `${(detailModal.room as { roomNumber?: string }).roomNumber}${(detailModal.room as { area?: { name?: string } })?.area?.name ? ` - Khu ${(detailModal.room as { area?: { name?: string } }).area?.name}` : ""}` : "-"}</p>
+            <p>
+              <strong>Phòng:</strong>{" "}
+              {detailModal.room && typeof detailModal.room === "object"
+                ? `${(detailModal.room as { roomNumber?: string }).roomNumber}${
+                    (detailModal.room as { area?: { name?: string } })?.area?.name
+                      ? ` - Khu ${(detailModal.room as { area?: { name?: string } }).area?.name}`
+                      : ""
+                  }`
+                : "-"}
+            </p>
             <hr style={{ margin: "12px 0" }} />
-            <p><strong>Ngày bắt đầu:</strong> {detailModal.startDate ? new Date(detailModal.startDate).toLocaleDateString("vi-VN") : "-"}</p>
-            <p><strong>Ngày kết thúc:</strong> {detailModal.endDate ? new Date(detailModal.endDate).toLocaleDateString("vi-VN") : "-"}</p>
-            <p><strong>Trạng thái:</strong> <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag></p>
+            <p>
+              <strong>Ngày bắt đầu:</strong>{" "}
+              {detailModal.startDate ? new Date(detailModal.startDate).toLocaleDateString("vi-VN") : "-"}
+            </p>
+            <p>
+              <strong>Ngày kết thúc:</strong>{" "}
+              {detailModal.endDate ? new Date(detailModal.endDate).toLocaleDateString("vi-VN") : "-"}
+            </p>
+            <p>
+              <strong>Trạng thái:</strong>{" "}
+              <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag>
+            </p>
+            {detailModal.terms ? (
+              <p style={{ whiteSpace: "pre-wrap" }}>
+                <strong>Điều khoản:</strong> {detailModal.terms}
+              </p>
+            ) : null}
           </div>
         )}
       </Modal>
@@ -262,21 +398,35 @@ const ContractsPage: React.FC = () => {
       <Modal
         title="Gia hạn hợp đồng"
         open={!!extendModal}
-        onCancel={() => { setExtendModal(null); form.resetFields(); }}
+        onCancel={() => {
+          setExtendModal(null);
+          form.resetFields();
+        }}
         footer={null}
+        destroyOnClose
       >
         {extendModal && (
           <div style={{ marginBottom: 16 }}>
-            <p><strong>Số HĐ:</strong> {extendModal.contractNumber}</p>
-            <p><strong>Hết hạn hiện tại:</strong> {new Date(extendModal.endDate).toLocaleDateString("vi-VN")}</p>
+            <p>
+              <strong>Số HĐ:</strong> {extendModal.contractNumber}
+            </p>
+            <p>
+              <strong>Hết hạn hiện tại:</strong> {new Date(extendModal.endDate).toLocaleDateString("vi-VN")}
+            </p>
           </div>
         )}
         <Form form={form} onFinish={handleExtend} layout="vertical">
           <Form.Item name="endDate" label="Ngày kết thúc mới" rules={[{ required: true }]}>
-            <DatePicker style={{ width: "100%" }} minDate={extendModal ? dayjs(extendModal.endDate) : undefined} />
+            <DatePicker
+              style={{ width: "100%" }}
+              format="DD/MM/YYYY"
+              disabledDate={(d) => (extendModal ? d.isBefore(dayjs(extendModal.endDate), "day") : false)}
+            />
           </Form.Item>
           <Form.Item>
-            <Button type="primary" htmlType="submit" block>Xác nhận gia hạn</Button>
+            <Button type="primary" htmlType="submit" block>
+              Xác nhận gia hạn
+            </Button>
           </Form.Item>
         </Form>
       </Modal>

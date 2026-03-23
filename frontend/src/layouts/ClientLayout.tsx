@@ -11,14 +11,14 @@ import type { MenuProps } from "antd";
 const { Header, Content } = Layout;
 
 const menuItems = [
-  { key: "/", icon: <HomeOutlined />, label: "Trang chủ" },
-  { key: "/rooms", icon: <UnorderedListOutlined />, label: "Danh sách phòng" },
-  { key: "/my-registrations", icon: <FileTextOutlined />, label: "Đăng ký của tôi" },
-  { key: "/my-contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
-  { key: "/my-bills", icon: <DollarOutlined />, label: "Hóa đơn" },
-  { key: "/damage-report", icon: <ToolOutlined />, label: "Khai báo hư hỏng" },
-  { key: "/calendar", icon: <CalendarOutlined />, label: "Lịch" },
-  { key: "/profile", icon: <UserOutlined />, label: "Tài khoản" },
+  { key: "/student", icon: <HomeOutlined />, label: "Trang chủ" },
+  { key: "/student/rooms", icon: <UnorderedListOutlined />, label: "Danh sách phòng" },
+  { key: "/student/dorm-registration", icon: <FileTextOutlined />, label: "Đăng ký nội trú" },
+  { key: "/student/my-registrations", icon: <FileTextOutlined />, label: "Đơn của tôi" },
+  { key: "/student/my-contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
+  { key: "/student/my-bills", icon: <DollarOutlined />, label: "Hóa đơn" },
+  { key: "/student/damage-report", icon: <ToolOutlined />, label: "Khai báo hư hỏng" },
+  { key: "/student/calendar", icon: <CalendarOutlined />, label: "Lịch" },
 ];
 
 const ClientLayout: React.FC = () => {
@@ -29,15 +29,19 @@ const ClientLayout: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const userMenu: MenuProps["items"] = [
-    { key: "profile", icon: <UserOutlined />, label: "Thông tin cá nhân", onClick: () => navigate("/profile") },
+    { key: "profile", icon: <UserOutlined />, label: "Thông tin cá nhân", onClick: () => navigate("/student/profile") },
     { type: "divider" },
-    { key: "logout", icon: <LogoutOutlined />, label: "Đăng xuất", onClick: () => { logout(); navigate("/"); } },
+    { key: "logout", icon: <LogoutOutlined />, label: "Đăng xuất", onClick: () => { logout(); navigate("/student"); } },
   ];
 
   const handleMenuClick = (key: string) => {
     navigate(key);
     setMobileMenuOpen(false);
   };
+
+  const selectedMenuKey =
+    menuItems.map((m) => m.key).find((k) => location.pathname === k || location.pathname.startsWith(`${k}/`)) ||
+    location.pathname;
 
   return (
     <Layout style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -54,7 +58,7 @@ const ClientLayout: React.FC = () => {
           <Menu
             theme="dark"
             mode="horizontal"
-            selectedKeys={[location.pathname]}
+            selectedKeys={[selectedMenuKey]}
             items={menuItems}
             onClick={({ key }) => navigate(key)}
             style={{ flex: 1, minWidth: 320, borderBottom: "none" }}
@@ -91,7 +95,7 @@ const ClientLayout: React.FC = () => {
       >
         <Menu
           mode="inline"
-          selectedKeys={[location.pathname]}
+          selectedKeys={[selectedMenuKey]}
           items={menuItems}
           onClick={({ key }) => handleMenuClick(key)}
           style={{ height: "100%", borderRight: "none" }}

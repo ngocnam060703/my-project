@@ -82,6 +82,30 @@ const RegistrationsPage: React.FC = () => {
     return v != null ? String(v) : "";
   };
 
+  const getAreaName = (r: Registration) => {
+    const roomValue: unknown = r.room;
+
+    if (roomValue && typeof roomValue === "object") {
+      const roomObj = roomValue as { _id?: string; area?: unknown };
+      const area = roomObj.area;
+      if (area && typeof area === "object" && "name" in area) {
+        const areaName = (area as { name?: string }).name;
+        if (areaName) return areaName;
+      }
+      if (roomObj._id) {
+        const roomId = String(roomObj._id);
+        const roomMatched = rooms.find((room) => room._id === roomId);
+        if (roomMatched?.area?.name) return roomMatched.area.name;
+      }
+    }
+
+    if (typeof roomValue === "string") {
+      const roomMatched = rooms.find((room) => room._id === roomValue);
+      if (roomMatched?.area?.name) return roomMatched.area.name;
+    }
+    return "";
+  };
+
   const pendingCount = data.filter((r) => r.status === "pending").length;
 
   const columns = [
@@ -113,7 +137,7 @@ const RegistrationsPage: React.FC = () => {
       title: "Khu",
       key: "area",
       width: 90,
-      render: (_: unknown, r: Registration) => (r.room && typeof r.room === "object" && (r.room as { area?: { name?: string } }).area?.name) || "-",
+      render: (_: unknown, r: Registration) => getAreaName(r) || "-",
     },
     { title: "Học kỳ", dataIndex: "semester", key: "semester", width: 80, render: (v: string) => v || "-" },
     { title: "Năm học", dataIndex: "schoolYear", key: "schoolYear", width: 100, render: (v: string) => v || "-" },
@@ -211,7 +235,7 @@ const RegistrationsPage: React.FC = () => {
               "Sinh viên": getVal(r.user, "fullName"),
               "MSSV": getVal(r.user, "studentId"),
               "Phòng": getVal(r.room, "roomNumber"),
-              "Khu": r.room && typeof r.room === "object" ? (r.room as { area?: { name?: string } }).area?.name : "-",
+              "Khu": getAreaName(r) || "-",
               "Học kỳ": r.semester,
               "Năm học": r.schoolYear,
               "Ngày ĐK": r.createdAt ? new Date(r.createdAt).toLocaleDateString("vi-VN") : "-",
@@ -255,7 +279,7 @@ const RegistrationsPage: React.FC = () => {
             <p><strong>Email:</strong> {getVal(detailModal.user, "email") || "-"}</p>
             <p><strong>SĐT:</strong> {getVal(detailModal.user, "phone") || "-"}</p>
             <p><strong>Phòng đăng ký:</strong> {getVal(detailModal.room, "roomNumber") || "-"}</p>
-            <p><strong>Khu:</strong> {(detailModal.room && typeof detailModal.room === "object" && (detailModal.room as { area?: { name?: string } }).area?.name) || "-"}</p>
+            <p><strong>Khu:</strong> {getAreaName(detailModal) || "-"}</p>
             <p><strong>Học kỳ:</strong> {detailModal.semester || "-"}</p>
             <p><strong>Năm học:</strong> {detailModal.schoolYear || "-"}</p>
             <p><strong>Ngày bắt đầu ở:</strong> {detailModal.startDate ? new Date(detailModal.startDate).toLocaleDateString("vi-VN") : "-"}</p>

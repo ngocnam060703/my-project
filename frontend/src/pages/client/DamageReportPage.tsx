@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
-import { Card, Form, Input, Select, Button, message, Table, Tag, Spin, Empty, Row, Col, Statistic } from "antd";
+import React, { useState, useEffect, useMemo } from "react";
+import { Card, Form, Input, Select, Button, message, Table, Tag, Spin, Empty, Row, Col, Statistic, Alert } from "antd";
 import { ToolOutlined } from "@ant-design/icons";
 import { contractsApi, damageReportsApi } from "../../api";
+import { useAuth } from "../../contexts/AuthContext";
 
 const DEVICE_OPTIONS = [
   "Điều hòa", "Quạt", "Bàn", "Ghế", "Giường", "Tủ", "Vòi nước", "Bồn cầu",
@@ -11,12 +12,30 @@ const DEVICE_OPTIONS = [
 const statusMap: Record<string, string> = { pending: "Chờ xử lý", processing: "Đang xử lý", resolved: "Đã xử lý" };
 const statusColor: Record<string, string> = { pending: "gold", processing: "blue", resolved: "green" };
 
+type RoomLeaderRef = string | { _id?: string } | null | undefined;
+
 const DamageReportPage: React.FC = () => {
+  const { user } = useAuth();
   const [form] = Form.useForm();
-  const [contracts, setContracts] = useState<{ _id: string; room: { _id: string; roomNumber: string; area?: { name: string } } }[]>([]);
+  const [contracts, setContracts] = useState<
+    { _id: string; room: { _id: string; roomNumber: string; area?: { name: string }; roomLeader?: RoomLeaderRef } }[]
+  >([]);
   const [reports, setReports] = useState<{ _id: string; room: { roomNumber: string }; device: string; description: string; status: string; createdAt: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  const uid = String(user?.id || user?._id || "");
+
+  const leaderContracts = useMemo(() => {
+    if (!uid) return [];
+    return contracts.filter((c) => {
+      const room = c.room as { roomLeader?: RoomLeaderRef } | undefined;
+      if (!room || typeof room !== "object") return false;
+      const leader = room.roomLeader;
+      const leaderId = typeof leader === "object" && leader?._id != null ? leader._id : leader;
+      return leaderId != null && String(leaderId) === uid;
+    });
+  }, [contracts, uid]);
 
   useEffect(() => {
     contractsApi.getMy().then((res) => {
@@ -69,33 +88,44 @@ const DamageReportPage: React.FC = () => {
 
       <Card title="Gửi khai báo (chỉ trưởng phòng)" style={{ marginBottom: 24, borderRadius: 12 }}>
         <p style={{ color: "#6b7280", marginBottom: 16, fontSize: 14 }}>Chỉ trưởng phòng mới được phép khai báo hư hỏng cơ sở vật chất.</p>
-        <Form form={form} layout="vertical" onFinish={onFinish}>
-          <Form.Item name="room" label="Phòng" rules={[{ required: true, message: "Chọn phòng" }]}>
-            <Select placeholder="Chọn phòng của bạn">
-              {contracts.map((c) => {
-                const room = c.room as { _id?: string; roomNumber?: string; area?: { name?: string } } | string | undefined;
-                const roomId = typeof room === "object" && room ? room._id : typeof room === "string" ? room : undefined;
-                const roomNum = typeof room === "object" && room ? room.roomNumber : "";
-                const areaName = typeof room === "object" && room?.area && typeof room.area === "object" ? room.area.name : "";
-                if (!roomId) return null;
-                return (
-                  <Select.Option key={c._id} value={roomId}>
-                    Phòng {roomNum} {areaName ? `- Khu ${areaName}` : ""}
-                  </Select.Option>
-                );
-              })}
-            </Select>
-          </Form.Item>
-          <Form.Item name="device" label="Thiết bị" rules={[{ required: true }]}>
-            <Select placeholder="Chọn thiết bị" options={DEVICE_OPTIONS.map((d) => ({ label: d, value: d }))} />
-          </Form.Item>
-          <Form.Item name="description" label="Mô tả lỗi" rules={[{ required: true }]}>
-            <Input.TextArea rows={4} placeholder="Mô tả chi tiết lỗi hư hỏng" />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit" loading={submitting}>Gửi khai báo</Button>
-          </Form.Item>
-        </Form>
+        {leaderContracts.length === 0 ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="Bạn không phải trưởng phòng"
+            description="Khi admin chỉ định bạn là trưởng phòng, biểu mẫu gửi khai báo sẽ hiển thị tại đây."
+          />
+        ) : (
+          <Form form={form} layout="vertical" onFinish={onFinish}>
+            <Form.Item name="room" label="Phòng" rules={[{ required: true, message: "Chọn phòng" }]}>
+              <Select placeholder="Chọn phòng của bạn">
+                {leaderContracts.map((c) => {
+                  const room = c.room as { _id?: string; roomNumber?: string; area?: { name?: string } } | string | undefined;
+                  const roomId = typeof room === "object" && room ? room._id : typeof room === "string" ? room : undefined;
+                  const roomNum = typeof room === "object" && room ? room.roomNumber : "";
+                  const areaName = typeof room === "object" && room?.area && typeof room.area === "object" ? room.area.name : "";
+                  if (!roomId) return null;
+                  return (
+                    <Select.Option key={c._id} value={roomId}>
+                      Phòng {roomNum} {areaName ? `- Khu ${areaName}` : ""}
+                    </Select.Option>
+                  );
+                })}
+              </Select>
+            </Form.Item>
+            <Form.Item name="device" label="Thiết bị" rules={[{ required: true }]}>
+              <Select placeholder="Chọn thiết bị" options={DEVICE_OPTIONS.map((d) => ({ label: d, value: d }))} />
+            </Form.Item>
+            <Form.Item name="description" label="Mô tả lỗi" rules={[{ required: true }]}>
+              <Input.TextArea rows={4} placeholder="Mô tả chi tiết lỗi hư hỏng" />
+            </Form.Item>
+            <Form.Item>
+              <Button type="primary" htmlType="submit" loading={submitting}>
+                Gửi khai báo
+              </Button>
+            </Form.Item>
+          </Form>
+        )}
       </Card>
 
       <Card title="Lịch sử khai báo" style={{ borderRadius: 12 }}>

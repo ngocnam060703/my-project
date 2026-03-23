@@ -7,7 +7,17 @@ const notificationSchema = new mongoose.Schema(
     message: { type: String, required: true },
     type: {
       type: String,
-      enum: ["registration_approved", "registration_rejected", "bill_reminder", "contract_renewal", "payment_confirmed", "general"],
+      enum: [
+        "registration_approved",
+        "registration_rejected",
+        "bill_reminder",
+        "contract_renewal",
+        "payment_confirmed",
+        "contract_signed",
+        "contract_pending_admin_confirm",
+        "contract_active",
+        "general",
+      ],
       default: "general",
     },
     link: { type: String, default: "" },

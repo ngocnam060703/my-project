@@ -39,6 +39,7 @@ export interface Registration {
   status: string;
   createdAt: string;
   rejectionReason?: string;
+  note?: string;
 }
 
 export interface Contract {
@@ -49,6 +50,8 @@ export interface Contract {
   endDate: string;
   status: string;
   contractNumber?: string;
+  signedAt?: string | null;
+  terms?: string;
 }
 
 export interface Bill {

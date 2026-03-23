@@ -65,7 +65,7 @@ exports.create = async (req, res) => {
       title: "Hóa đơn mới",
       message: `Bạn có hóa đơn tháng ${month}/${year}, tổng ${total.toLocaleString("vi-VN")}đ. Vui lòng thanh toán đúng hạn.`,
       type: "bill_reminder",
-      link: "/my-bills",
+      link: "/student/my-bills",
     });
     res.status(201).json(await bill.populate(["user", "room", "room.area"]));
   } catch (error) {

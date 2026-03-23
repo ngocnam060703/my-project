@@ -5,6 +5,7 @@ const Notification = require("../models/Notification");
 const { getIO } = require("../socket");
 const { isSchoolYearNotPast } = require("../utils/schoolYear");
 const RegistrationPeriod = require("../models/RegistrationPeriod");
+const { hasDormRegistrationProfile, REQUIRED_DORM_REGISTRATION_FIELDS } = require("../utils/profileComplete");
 
 exports.getAll = async (req, res) => {
   try {
@@ -19,8 +20,7 @@ exports.getAll = async (req, res) => {
     }
     const registrations = await Registration.find(filter)
       .populate("user", "fullName email phone studentId")
-      .populate("room")
-      .populate("room.area", "name")
+      .populate({ path: "room", populate: { path: "area", select: "name" } })
       .populate("reviewedBy", "fullName")
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
@@ -35,8 +35,7 @@ exports.getAll = async (req, res) => {
 exports.getMyRegistrations = async (req, res) => {
   try {
     const registrations = await Registration.find({ user: req.user._id })
-      .populate("room")
-      .populate("room.area", "name")
+      .populate({ path: "room", populate: { path: "area", select: "name" } })
       .sort({ createdAt: -1 });
     res.json(registrations);
   } catch (error) {
@@ -47,11 +46,22 @@ exports.getMyRegistrations = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const { room, semester, schoolYear, startDate } = req.body;
+    if (req.user.role !== "user") {
+      return res.status(403).json({ message: "Chỉ sinh viên mới được gửi đơn đăng ký nội trú" });
+    }
     const existing = await Registration.findOne({ user: req.user._id, status: "pending" });
     if (existing) return res.status(400).json({ message: "Bạn đã có đơn đăng ký đang chờ duyệt" });
+    const activeContract = await Contract.findOne({ user: req.user._id, status: "active" });
+    if (activeContract) {
+      return res.status(400).json({ message: "Bạn đã là thành viên KTX (đang có hợp đồng hiệu lực)" });
+    }
+    if (!hasDormRegistrationProfile(req.user)) {
+      return res.status(400).json({
+        message: `Vui lòng cập nhật đầy đủ hồ sơ trước khi đăng ký nội trú: ${REQUIRED_DORM_REGISTRATION_FIELDS.join(", ")}`,
+      });
+    }
     const roomDoc = await Room.findById(room);
     if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng" });
-    if (roomDoc.currentOccupancy >= roomDoc.capacity) return res.status(400).json({ message: "Phòng đã đầy" });
     const start = startDate ? new Date(startDate) : null;
     if (!start || isNaN(start.getTime())) {
       return res.status(400).json({ message: "Vui lòng chọn ngày bắt đầu" });
@@ -77,7 +87,15 @@ exports.create = async (req, res) => {
         return res.status(400).json({ message: "Đăng ký nội trú hiện đã đóng. Vui lòng đợi đợt đăng ký tiếp theo." });
       }
     }
-    const registration = await Registration.create({ user: req.user._id, room, semester, schoolYear, startDate: startNormalized });
+    const overCapacity = roomDoc.currentOccupancy >= roomDoc.capacity;
+    const registration = await Registration.create({
+      user: req.user._id,
+      room,
+      semester,
+      schoolYear,
+      startDate: startNormalized,
+      note: overCapacity ? "Đăng ký vượt sức chứa hiện tại của phòng" : "",
+    });
     res.status(201).json(await registration.populate(["room", "room.area"]));
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -90,7 +108,6 @@ exports.approve = async (req, res) => {
     if (!reg) return res.status(404).json({ message: "Không tìm thấy đơn đăng ký" });
     if (reg.status !== "pending") return res.status(400).json({ message: "Đơn đã được xử lý" });
     const room = await Room.findById(reg.room._id);
-    if (room.currentOccupancy >= room.capacity) return res.status(400).json({ message: "Phòng đã đầy" });
     reg.status = "approved";
     reg.reviewedBy = req.user._id;
     reg.reviewedAt = new Date();
@@ -105,9 +122,9 @@ exports.approve = async (req, res) => {
     await Notification.create({
       user: reg.user._id,
       title: "Đơn được duyệt",
-      message: "Đơn của bạn đã được phê duyệt, vui lòng thanh toán để hoàn tất.",
+      message: "Đơn của bạn đã được phê duyệt, yêu cầu thanh toán hóa đơn hợp đồng để hoàn tất quá trình.",
       type: "registration_approved",
-      link: "/my-contracts",
+      link: "/student/my-contracts",
     });
 
     const contract = await Contract.create({
@@ -117,7 +134,9 @@ exports.approve = async (req, res) => {
       startDate,
       endDate: new Date(new Date(startDate).setFullYear(new Date(startDate).getFullYear() + 1)),
       contractNumber: `HD-${Date.now()}`,
-      signedAt: new Date(),
+      status: "pending_payment",
+      signedAt: null,
+      createdBy: req.user._id,
     });
     res.json({ registration: reg, contract });
   } catch (error) {
@@ -143,7 +162,7 @@ exports.reject = async (req, res) => {
         title: "Đơn bị từ chối",
         message: reason ? `Đơn của bạn đã bị từ chối. Lý do: ${reason}` : "Đơn của bạn đã bị từ chối.",
         type: "registration_rejected",
-        link: "/my-registrations",
+        link: "/student/my-registrations",
       });
     }
     res.json(reg);

@@ -27,8 +27,23 @@ const seed = async () => {
   await User.create({
     email: "sv@ktx.vn",
     password: "123456",
-    fullName: "Nguyễn Văn Sinh viên",
+    fullName: "Nguyễn Văn An",
     studentId: "SV001",
+    className: "11DHTH1",
+    major: "Công nghệ thông tin",
+    gender: "Nam",
+    dateOfBirth: new Date("2002-04-24"),
+    phone: "0387079343",
+    address: "Bến Tre",
+    citizenId: "0123456789",
+    role: "user",
+  });
+
+  /** Tài khoản chưa đủ hồ sơ — dùng để thử chỉnh sửa trang profile */
+  await User.create({
+    email: "incomplete@ktx.vn",
+    password: "123456",
+    fullName: "Trần Thị Chưa Cập Nhật",
     role: "user",
   });
 
@@ -195,7 +210,9 @@ const seed = async () => {
     },
   ]);
 
-  console.log("Seed done!\nAdmin: admin@ktx.vn / 123456\nManager: manager@ktx.vn / 123456\nSinh viên: sv@ktx.vn / 123456");
+  console.log(
+    "Seed done!\nAdmin: admin@ktx.vn / 123456\nManager: manager@ktx.vn / 123456\nSinh viên (hồ sơ đầy đủ): sv@ktx.vn / 123456\nSinh viên (hồ sơ chưa đủ): incomplete@ktx.vn / 123456"
+  );
   process.exit(0);
 };
 seed().catch(console.error);

@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
 import { Spin } from "antd";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -20,6 +20,7 @@ import CalendarPage from "./pages/client/CalendarPage";
 import ProfilePage from "./pages/client/ProfilePage";
 import DamageReportPage from "./pages/client/DamageReportPage";
 import ContractRenewalPage from "./pages/client/ContractRenewalPage";
+import DormRegistrationPage from "./pages/client/DormRegistrationPage";
 import DashboardPage from "./pages/admin/DashboardPage";
 import UsersPage from "./pages/admin/UsersPage";
 import AreasPage from "./pages/admin/AreasPage";
@@ -27,54 +28,93 @@ import RoomsPageAdmin from "./pages/admin/RoomsPage";
 import RegistrationsPage from "./pages/admin/RegistrationsPage";
 import ContractsPage from "./pages/admin/ContractsPage";
 import BillsPage from "./pages/admin/BillsPage";
-import RegistrationPeriodsPage from "./pages/admin/RegistrationPeriodsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
-const RoleRedirect: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+/** `/` → admin vào /admin, còn lại (khách + sinh viên) vào /student */
+const RootRedirect: React.FC = () => {
+  const { user, loading } = useAuth();
+  if (loading) return <Spin size="large" style={{ display: "block", margin: "100px auto" }} />;
+  if (user?.role === "admin" || user?.role === "manager") return <Navigate to="/admin" replace />;
+  return <Navigate to="/student" replace />;
+};
+
+/** Không cho admin/manager dùng layout sinh viên */
+const StudentAreaGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
   if (loading) return <Spin size="large" style={{ display: "block", margin: "100px auto" }} />;
   if (user?.role === "admin" || user?.role === "manager") return <Navigate to="/admin" replace />;
   return <>{children}</>;
 };
 
+const LegacyRoomDetailRedirect: React.FC = () => {
+  const { id } = useParams();
+  return <Navigate to={`/student/rooms/${id ?? ""}`} replace />;
+};
+
+const LegacyContractRenewalRedirect: React.FC = () => {
+  const { id } = useParams();
+  return <Navigate to={`/student/contract-renewal/${id ?? ""}`} replace />;
+};
+
+const LegacyDormRegistrationRedirect: React.FC = () => {
+  const { search } = useLocation();
+  return <Navigate to={`/student/dorm-registration${search}`} replace />;
+};
+
 function App() {
   return (
     <ThemeProvider>
       <ErrorBoundary>
-    <BrowserRouter>
-        <AuthProvider>
-        <SocketProvider>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
-            <Route path="/manager" element={<Navigate to="/admin" replace />} />
-            <Route path="/admin" element={<ProtectedRoute roles={["admin", "manager"]}><AdminLayout /></ProtectedRoute>}>
-              <Route index element={<DashboardPage />} />
-              <Route path="users" element={<UsersPage />} />
-              <Route path="areas" element={<AreasPage />} />
-              <Route path="rooms" element={<RoomsPageAdmin />} />
-              <Route path="registrations" element={<RegistrationsPage />} />
-              <Route path="contracts" element={<ContractsPage />} />
-              <Route path="bills" element={<BillsPage />} />
-              <Route path="registration-periods" element={<RegistrationPeriodsPage />} />
-            </Route>
-            <Route path="/" element={<RoleRedirect><ClientLayout /></RoleRedirect>}>
-              <Route index element={<HomePage />} />
-              <Route path="rooms" element={<RoomsPage />} />
-              <Route path="rooms/:id" element={<RoomDetailPage />} />
-              <Route path="my-registrations" element={<ProtectedRoute><MyRegistrationsPage /></ProtectedRoute>} />
-              <Route path="my-contracts" element={<ProtectedRoute><MyContractsPage /></ProtectedRoute>} />
-              <Route path="my-bills" element={<ProtectedRoute><MyBillsPage /></ProtectedRoute>} />
-              <Route path="calendar" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />
-              <Route path="profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-              <Route path="damage-report" element={<ProtectedRoute><DamageReportPage /></ProtectedRoute>} />
-              <Route path="contract-renewal/:id" element={<ProtectedRoute><ContractRenewalPage /></ProtectedRoute>} />
-            </Route>
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </SocketProvider>
-        </AuthProvider>
-      </BrowserRouter>
+        <BrowserRouter>
+          <AuthProvider>
+            <SocketProvider>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
+                <Route path="/manager" element={<Navigate to="/admin" replace />} />
+                <Route path="/admin" element={<ProtectedRoute roles={["admin", "manager"]}><AdminLayout /></ProtectedRoute>}>
+                  <Route index element={<DashboardPage />} />
+                  <Route path="users" element={<UsersPage />} />
+                  <Route path="areas" element={<AreasPage />} />
+                  <Route path="rooms" element={<RoomsPageAdmin />} />
+                  <Route path="registrations" element={<RegistrationsPage />} />
+                  <Route path="contracts" element={<ContractsPage />} />
+                  <Route path="bills" element={<BillsPage />} />
+                </Route>
+
+                <Route path="/student" element={<StudentAreaGuard><ClientLayout /></StudentAreaGuard>}>
+                  <Route index element={<HomePage />} />
+                  <Route path="rooms" element={<RoomsPage />} />
+                  <Route path="rooms/:id" element={<RoomDetailPage />} />
+                  <Route path="dorm-registration" element={<ProtectedRoute><DormRegistrationPage /></ProtectedRoute>} />
+                  <Route path="my-registrations" element={<ProtectedRoute><MyRegistrationsPage /></ProtectedRoute>} />
+                  <Route path="my-contracts" element={<ProtectedRoute><MyContractsPage /></ProtectedRoute>} />
+                  <Route path="my-bills" element={<ProtectedRoute><MyBillsPage /></ProtectedRoute>} />
+                  <Route path="calendar" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />
+                  <Route path="profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+                  <Route path="damage-report" element={<ProtectedRoute><DamageReportPage /></ProtectedRoute>} />
+                  <Route path="contract-renewal/:id" element={<ProtectedRoute><ContractRenewalPage /></ProtectedRoute>} />
+                </Route>
+
+                <Route path="/" element={<RootRedirect />} />
+
+                {/* Tương thích URL cũ (bookmark / thông báo cũ) */}
+                <Route path="/rooms" element={<Navigate to="/student/rooms" replace />} />
+                <Route path="/rooms/:id" element={<LegacyRoomDetailRedirect />} />
+                <Route path="/dorm-registration" element={<LegacyDormRegistrationRedirect />} />
+                <Route path="/my-registrations" element={<Navigate to="/student/my-registrations" replace />} />
+                <Route path="/my-contracts" element={<Navigate to="/student/my-contracts" replace />} />
+                <Route path="/my-bills" element={<Navigate to="/student/my-bills" replace />} />
+                <Route path="/calendar" element={<Navigate to="/student/calendar" replace />} />
+                <Route path="/profile" element={<Navigate to="/student/profile" replace />} />
+                <Route path="/damage-report" element={<Navigate to="/student/damage-report" replace />} />
+                <Route path="/contract-renewal/:id" element={<LegacyContractRenewalRedirect />} />
+
+                <Route path="*" element={<NotFoundPage />} />
+              </Routes>
+            </SocketProvider>
+          </AuthProvider>
+        </BrowserRouter>
       </ErrorBoundary>
     </ThemeProvider>
   );
