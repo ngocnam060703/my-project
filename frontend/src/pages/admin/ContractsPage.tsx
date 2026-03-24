@@ -23,15 +23,18 @@ import {
 } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
 import { contractsApi, client } from "../../api";
-import type { Contract } from "../../types";
+import type { Contract, User } from "../../types";
 import dayjs from "dayjs";
 
 const statusMap: Record<string, { color: string; text: string }> = {
-  pending_payment: { color: "gold", text: "Chưa hiệu lực (chờ ký + xác nhận thanh toán)" },
+  pending_payment: { color: "gold", text: "Chưa hiệu lực (chờ ký + xác nhận ký)" },
   active: { color: "green", text: "Có hiệu lực" },
   expired: { color: "default", text: "Hết hạn" },
   terminated: { color: "red", text: "Đã chấm dứt" },
 };
+
+const lessorAddress = "................................................................................................";
+const lessorPhone = ".............................................................................................";
 
 const ContractsPage: React.FC = () => {
   const [data, setData] = useState<Contract[]>([]);
@@ -169,14 +172,14 @@ const ContractsPage: React.FC = () => {
               onClick={async () => {
                 try {
                   await contractsApi.confirmPayment(r._id);
-                  message.success("Đã xác nhận thanh toán. Hợp đồng có hiệu lực.");
+                  message.success("Đã xác nhận. Hợp đồng có hiệu lực.");
                   load();
                 } catch (err: unknown) {
                   message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
                 }
               }}
             >
-              Xác nhận thanh toán
+              Xác nhận
             </Button>
           )}
           {r.status === "active" && (
@@ -207,7 +210,7 @@ const ContractsPage: React.FC = () => {
       <div style={{ marginBottom: 24 }}>
         <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Quản lý hợp đồng</h2>
         <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
-          Xem, gia hạn, chấm dứt và xác nhận thanh toán hợp đồng
+          Xem, gia hạn, chấm dứt và xác nhận hợp đồng
         </p>
       </div>
 
@@ -247,7 +250,7 @@ const ContractsPage: React.FC = () => {
               setPage(1);
             }}
           >
-            <Select.Option value="pending_payment">Chưa hiệu lực (chờ ký + xác nhận thanh toán)</Select.Option>
+            <Select.Option value="pending_payment">Chưa hiệu lực (chờ ký + xác nhận )</Select.Option>
             <Select.Option value="active">Có hiệu lực</Select.Option>
             <Select.Option value="expired">Hết hạn</Select.Option>
             <Select.Option value="terminated">Đã chấm dứt</Select.Option>
@@ -340,59 +343,126 @@ const ContractsPage: React.FC = () => {
             </Button>
           ),
         ].filter(Boolean) as React.ReactNode[]}
-        width={480}
+        width={900}
       >
-        {detailModal && (
-          <div style={{ lineHeight: 2 }}>
-            <p>
-              <strong>Số hợp đồng:</strong> {detailModal.contractNumber || "-"}
-            </p>
-            <p>
-              <strong>Sinh viên:</strong>{" "}
-              {detailModal.user && typeof detailModal.user === "object"
-                ? (detailModal.user as { fullName?: string; email?: string; phone?: string }).fullName
-                : "-"}
-            </p>
-            {detailModal.user && typeof detailModal.user === "object" && (detailModal.user as { email?: string }).email && (
+        {detailModal && (() => {
+          const u = typeof detailModal.user === "object" ? (detailModal.user as User) : null;
+          const studentName = u?.fullName || "-";
+          const studentGender = u?.gender || "-";
+          const studentIdVal = u?.studentId || "-";
+          const citizenId = u?.citizenId || "-";
+          const dateOfBirth = u?.dateOfBirth ? new Date(u.dateOfBirth).toLocaleDateString("vi-VN") : "-";
+          const ethnicity = "-";
+          return (
+            <div style={{ maxHeight: "70vh", overflowY: "auto", lineHeight: 1.8, paddingRight: 6 }}>
+              <h3 style={{ textAlign: "center", marginBottom: 4 }}>HỢP ĐỒNG THUÊ CHỖ Ở NỘI TRÚ</h3>
+              <p style={{ marginBottom: 12, textAlign: "center" }}>
+                <strong>Số hợp đồng:</strong> {detailModal.contractNumber || "-"}
+              </p>
+
+              <p><strong>BÊN CHO THUÊ (BÊN A):</strong> KÝ TÚC XÁ TRƯỜNG ĐẠI HỌC (ĐH)</p>
+              <p><strong>Địa chỉ:</strong> {lessorAddress}</p>
+              <p><strong>Điện thoại:</strong> {lessorPhone}</p>
+
+              <p style={{ marginTop: 10 }}><strong>BÊN THUÊ (BÊN B):</strong></p>
+              <p><strong>Họ và tên:</strong> {studentName} &nbsp;&nbsp;&nbsp; <strong>Nam/Nữ:</strong> {studentGender}</p>
+              <p><strong>Mã SV:</strong> {studentIdVal} &nbsp;&nbsp;&nbsp; <strong>CCCD:</strong> {citizenId}</p>
+              <p><strong>Ngày sinh:</strong> {dateOfBirth} &nbsp;&nbsp;&nbsp; <strong>Dân tộc:</strong> {ethnicity}</p>
+              {u?.email ? <p><strong>Email:</strong> {u.email}</p> : null}
+              {u?.phone ? <p><strong>SĐT:</strong> {u.phone}</p> : null}
+
+              <p style={{ marginTop: 10 }}><strong>ĐIỀU 1: NỘI DUNG THUÊ</strong></p>
               <p>
-                <strong>Email:</strong> {(detailModal.user as { email?: string }).email}
+                Bên A đồng ý cho Bên B thuê 01 chỗ ở nội trú tại: Phòng{" "}
+                <strong>{typeof detailModal.room === "object" ? detailModal.room?.roomNumber : "-"}</strong>, Tầng{" "}
+                <strong>{typeof detailModal.room === "object" ? detailModal.room?.floor || "-" : "-"}</strong>, Nhà{" "}
+                <strong>
+                  {typeof detailModal.room === "object" && detailModal.room?.area && typeof detailModal.room.area === "object"
+                    ? detailModal.room.area.name
+                    : "-"}
+                </strong>{" "}
+                của KTX Trường ĐH.
               </p>
-            )}
-            {detailModal.user && typeof detailModal.user === "object" && (detailModal.user as { phone?: string }).phone && (
+              <p>Bên B được sử dụng trang thiết bị tại phòng theo nội quy của Trường ĐH.</p>
+
+              <p style={{ marginTop: 10 }}><strong>ĐIỀU 2: CHI PHÍ VÀ THANH TOÁN</strong></p>
               <p>
-                <strong>SĐT:</strong> {(detailModal.user as { phone?: string }).phone}
+                Giá thuê:{" "}
+                <strong>
+                  {typeof detailModal.room === "object" ? `${Number(detailModal.room?.price || 0).toLocaleString("vi-VN")} VNĐ/tháng` : "-"}
+                </strong>
+                . Tổng cộng:{" "}
+                <strong>
+                  {typeof detailModal.room === "object" ? `${(Number(detailModal.room?.price || 0) * 12).toLocaleString("vi-VN")} VNĐ` : "-"}
+                </strong>
+                .
               </p>
-            )}
-            <p>
-              <strong>Phòng:</strong>{" "}
-              {detailModal.room && typeof detailModal.room === "object"
-                ? `${(detailModal.room as { roomNumber?: string }).roomNumber}${
-                    (detailModal.room as { area?: { name?: string } })?.area?.name
-                      ? ` - Khu ${(detailModal.room as { area?: { name?: string } }).area?.name}`
-                      : ""
-                  }`
-                : "-"}
-            </p>
-            <hr style={{ margin: "12px 0" }} />
-            <p>
-              <strong>Ngày bắt đầu:</strong>{" "}
-              {detailModal.startDate ? new Date(detailModal.startDate).toLocaleDateString("vi-VN") : "-"}
-            </p>
-            <p>
-              <strong>Ngày kết thúc:</strong>{" "}
-              {detailModal.endDate ? new Date(detailModal.endDate).toLocaleDateString("vi-VN") : "-"}
-            </p>
-            <p>
-              <strong>Trạng thái:</strong>{" "}
-              <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag>
-            </p>
-            {detailModal.terms ? (
-              <p style={{ whiteSpace: "pre-wrap" }}>
-                <strong>Điều khoản:</strong> {detailModal.terms}
+              <p>Tiền thế chấp tài sản: <strong>100.000 VNĐ/sinh viên</strong>.</p>
+              <p>
+                Thời hạn thuê: Từ ngày <strong>{new Date(detailModal.startDate).toLocaleDateString("vi-VN")}</strong> đến ngày{" "}
+                <strong>{new Date(detailModal.endDate).toLocaleDateString("vi-VN")}</strong>.
               </p>
-            ) : null}
-          </div>
-        )}
+              <p>Phương thức thanh toán: Thanh toán trực tuyến qua tài khoản của Trường ĐH tại thời điểm nhận phòng.</p>
+              <p>Tiền điện, nước: Thanh toán hàng tháng theo chỉ số công tơ và đơn giá quy định.</p>
+
+              <p style={{ marginTop: 10 }}><strong>ĐIỀU 3: TRÁCH NHIỆM CỦA SINH VIÊN</strong></p>
+              <p>Chấp hành nghiêm chỉnh pháp luật, nội quy KTX và quy định về PCCC.</p>
+              <p>Ở đúng vị trí được sắp xếp; không tự ý chuyển nhượng chỗ ở cho người khác.</p>
+              <p>Giữ gìn vệ sinh, bảo quản tài sản công. Bồi thường nếu gây hư hỏng, mất mát.</p>
+              <p>Thanh toán đầy đủ các khoản phí dịch vụ (điện, nước, gửi xe, wifi...) đúng hạn.</p>
+              <p>Bàn giao phòng và chìa khóa ngay khi hết hạn hợp đồng hoặc nghỉ hè/Tết.</p>
+
+              <p style={{ marginTop: 10 }}><strong>ĐIỀU 4: CHẤM DỨT HỢP ĐỒNG</strong></p>
+              <p>
+                Hợp đồng chấm dứt khi: Hết thời hạn; SV tự nguyện xin ra; SV tốt nghiệp/thôi học; hoặc SV vi phạm kỷ luật bị buộc ra khỏi KTX.
+              </p>
+              <p>(Lưu ý: Trường ĐH không hoàn trả phí nội trú nếu SV vi phạm kỷ luật hoặc chấm dứt hợp đồng sau 01 tháng).</p>
+
+              <p style={{ marginTop: 10 }}><strong>ĐIỀU 5: ĐIỀU KHOẢN CHUNG</strong></p>
+              <p>
+                Mọi hư hỏng tài sản hoặc nợ phí sẽ được trừ vào tiền thế chấp. Sau khi hoàn tất thủ tục trả phòng, Trường ĐH sẽ hoàn trả lại tiền thế chấp cho sinh viên.
+              </p>
+
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 24 }}>
+                <div style={{ textAlign: "center", width: "48%" }}>
+                  <strong>ĐẠI DIỆN BÊN B</strong>
+                  <div>(Ký, ghi rõ họ tên)</div>
+                  <div style={{ marginTop: 16, minHeight: 24 }}>
+                    {detailModal.signedAt
+                      ? `${studentName} - Đã ký ngày ${new Date(detailModal.signedAt).toLocaleString("vi-VN")}`
+                      : "Chưa ký"}
+                  </div>
+                </div>
+                <div style={{ textAlign: "center", width: "48%" }}>
+                  <strong>ĐẠI DIỆN BÊN A</strong>
+                  <div>(Ký, ghi rõ họ tên)</div>
+                  <div style={{ marginTop: 16, minHeight: 24 }}>
+                    {detailModal.status === "active" ? "Đã ký - Hợp đồng có hiệu lực" : "Chờ admin xác nhận"}
+                  </div>
+                </div>
+              </div>
+
+              <p style={{ marginTop: 16 }}>
+                <strong>Trạng thái hiện tại:</strong>{" "}
+                <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag>
+              </p>
+              {detailModal.status === "pending_payment" && (
+                <p style={{ color: "#ad6800" }}>
+                  <strong>Hướng dẫn:</strong>{" "}
+                  {detailModal.signedAt
+                    ? "Sinh viên đã ký xác nhận, chờ admin xác nhận để hợp đồng có hiệu lực."
+                    : "Sinh viên chưa ký xác nhận hợp đồng."}
+                </p>
+              )}
+              {detailModal.terms ? (
+                <div style={{ marginTop: 16 }}>
+                  <strong>Điều khoản bổ sung / ghi chú:</strong>
+                  <p style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{detailModal.terms}</p>
+                </div>
+              ) : null}
+            </div>
+          );
+        })()}
       </Modal>
 
       <Modal

@@ -265,7 +265,7 @@ const DormRegistrationPage: React.FC = () => {
               <Col xs={24} md={12}>
                 <Form.Item name="areaFilter" label="Chọn khu" rules={[{ required: true, message: "Vui lòng chọn khu" }]}>
                   <Select
-                    placeholder="Chọn khu (Nam/Nữ)"
+                    placeholder="Chọn khu "
                     options={areaOptions}
                     onChange={() => form.setFieldsValue({ room: undefined })}
                   />

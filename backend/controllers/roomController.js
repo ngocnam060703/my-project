@@ -1,5 +1,14 @@
 const Room = require("../models/Room");
 const Area = require("../models/Area");
+const Contract = require("../models/Contract");
+
+function sanitizeAmenities(input) {
+  const list = Array.isArray(input) ? input : [];
+  return list
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .filter((x) => !/^wi-?fi$/i.test(x));
+}
 
 exports.getAll = async (req, res) => {
   try {
@@ -48,6 +57,75 @@ exports.getById = async (req, res) => {
   }
 };
 
+exports.getResidents = async (req, res) => {
+  try {
+    const room = await Room.findById(req.params.id)
+      .populate("area", "name")
+      .populate("roomLeader", "fullName studentId email phone");
+    if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
+    const contracts = await Contract.find({
+      room: room._id,
+      status: { $in: ["active", "pending_payment"] },
+    })
+      .populate("user", "fullName studentId email phone gender")
+      .sort({ createdAt: 1 });
+    const residents = contracts
+      .filter((c) => c.user)
+      .map((c) => ({
+        contractId: c._id,
+        status: c.status,
+        contractNumber: c.contractNumber,
+        startDate: c.startDate,
+        endDate: c.endDate,
+        user: c.user,
+        isRoomLeader: String(room.roomLeader?._id || "") === String(c.user?._id || ""),
+      }));
+    res.json({
+      room: {
+        _id: room._id,
+        roomNumber: room.roomNumber,
+        area: room.area,
+        capacity: room.capacity,
+        currentOccupancy: room.currentOccupancy,
+      },
+      residents,
+      totalResidents: residents.length,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.setRoomLeader = async (req, res) => {
+  try {
+    const { userId } = req.body || {};
+    if (!userId) return res.status(400).json({ message: "Thiếu userId" });
+    const room = await Room.findById(req.params.id);
+    if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
+    const activeContract = await Contract.findOne({
+      room: room._id,
+      user: userId,
+      status: { $in: ["active", "pending_payment"] },
+    });
+    if (!activeContract) {
+      return res.status(400).json({ message: "Sinh viên này không thuộc phòng hiện tại" });
+    }
+    room.roomLeader = userId;
+    await room.save();
+    const updatedRoom = await Room.findById(room._id).populate("roomLeader", "fullName studentId email phone");
+    res.json({
+      message: "Đã cập nhật trưởng phòng",
+      room: {
+        _id: updatedRoom._id,
+        roomNumber: updatedRoom.roomNumber,
+        roomLeader: updatedRoom.roomLeader,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.create = async (req, res) => {
   try {
     const {
@@ -69,7 +147,7 @@ exports.create = async (req, res) => {
       capacity,
       price,
       floor,
-      amenities,
+      amenities: sanitizeAmenities(amenities),
       description,
       status,
       currentOccupancy,
@@ -82,7 +160,11 @@ exports.create = async (req, res) => {
 
 exports.update = async (req, res) => {
   try {
-    const room = await Room.findByIdAndUpdate(req.params.id, req.body, { new: true }).populate("area", "name");
+    const updateData = { ...req.body };
+    if (updateData.amenities !== undefined) {
+      updateData.amenities = sanitizeAmenities(updateData.amenities);
+    }
+    const room = await Room.findByIdAndUpdate(req.params.id, updateData, { new: true }).populate("area", "name");
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
     res.json(room);
   } catch (error) {

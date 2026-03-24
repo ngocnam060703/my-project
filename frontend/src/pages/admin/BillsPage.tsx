@@ -13,31 +13,56 @@ const statusMap: Record<string, { color: string; text: string }> = {
 
 const formatMoney = (v: number | undefined) => (v ?? 0).toLocaleString("vi-VN") + "đ";
 
+type PersonalLine = NonNullable<Bill["personalServiceBreakdown"]>[number];
+
+const formatPersonalServiceLine = (it: PersonalLine) => {
+  const name = it.name || "Dịch vụ";
+  const amt = formatMoney(it.amount || 0);
+  const suffix = it.unit === "once" ? ` (${it.quantity ?? 0} lần)` : " (/ tháng)";
+  return `${name}: ${amt}${suffix}`;
+};
+
 const BillsPage: React.FC = () => {
   const [data, setData] = useState<Bill[]>([]);
   const [total, setTotal] = useState(0);
-  const [contracts, setContracts] = useState<unknown[]>([]);
+  const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { _id?: string; name?: string }; capacity?: number; price?: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [detailModal, setDetailModal] = useState<Bill | null>(null);
   const [form] = Form.useForm();
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<{ status?: string; month?: number; year?: number }>({});
+  const [filters, setFilters] = useState<{ status?: string; room?: string; month?: number; year?: number; billType?: string }>({});
+  const [genMonth, setGenMonth] = useState(new Date().getMonth() + 1);
+  const [genYear, setGenYear] = useState(new Date().getFullYear());
 
   const load = async () => {
     setLoading(true);
     try {
       const params: Record<string, unknown> = { page, limit: 10 };
       if (filters.status) params.status = filters.status;
+      if (filters.room) params.room = filters.room;
       if (filters.month) params.month = filters.month;
       if (filters.year) params.year = filters.year;
-      const [billsRes, contractsRes] = await Promise.all([
+      if (filters.billType === "monthly" || filters.billType === "penalty") params.billType = filters.billType;
+      const [billsRes, roomsRes, contractsRes] = await Promise.all([
         client.get("/bills", { params }),
-        client.get("/contracts?status=active"),
+        client.get("/rooms", { params: { limit: 500 } }),
+        client.get("/contracts", { params: { limit: 1000, status: "active" } }),
       ]);
       setData(billsRes.data.bills || []);
       setTotal(billsRes.data.total || 0);
-      setContracts(contractsRes.data.contracts || []);
+      const allRooms = (roomsRes.data.rooms || []) as { _id: string; roomNumber: string; area?: { _id?: string; name?: string }; capacity?: number; price?: number }[];
+      const contracts = (contractsRes.data.contracts || []) as { room?: string | { _id?: string } }[];
+      const roomIdsWithActiveContracts = new Set(
+        contracts
+          .map((c) => {
+            const r = c.room;
+            if (!r) return "";
+            return typeof r === "string" ? r : String(r._id || "");
+          })
+          .filter(Boolean),
+      );
+      setRooms(allRooms.filter((r) => roomIdsWithActiveContracts.has(String(r._id))));
     } catch {
       message.error("Không tải được dữ liệu");
     } finally {
@@ -45,25 +70,29 @@ const BillsPage: React.FC = () => {
     }
   };
 
-  useEffect(() => { load(); }, [page, filters.status, filters.month, filters.year]);
+  useEffect(() => { load(); }, [page, filters.status, filters.room, filters.month, filters.year, filters.billType]);
 
   const handleCreate = async (v: Record<string, unknown>) => {
     try {
-      const roomFee = (v.roomFee as number) ?? undefined;
       const electricityFee = (v.electricityFee as number) ?? 0;
       const waterFee = (v.waterFee as number) ?? 0;
       const otherFee = (v.otherFee as number) ?? 0;
-      await billsApi.create({
-        contract: v.contract as string,
+      const res = await billsApi.create({
+        roomId: v.roomId as string,
         month: v.month as number,
         year: v.year as number,
-        roomFee,
         electricityFee,
         waterFee,
         otherFee,
         dueDate: v.dueDate ? new Date(v.dueDate as string).toISOString().split("T")[0] : undefined,
       });
-      message.success("Tạo hóa đơn thành công");
+      const created = (res.data as { created?: number })?.created;
+      const skipped = (res.data as { skipped?: number })?.skipped;
+      if (created != null || skipped != null) {
+        message.success(`Tạo theo phòng xong: ${created || 0}, bỏ qua: ${skipped || 0}`);
+      } else {
+        message.success("Tạo hóa đơn thành công");
+      }
       setModalOpen(false);
       form.resetFields();
       load();
@@ -75,7 +104,7 @@ const BillsPage: React.FC = () => {
   const handleMarkPaid = (r: Bill) => {
     Modal.confirm({
       title: "Xác nhận thanh toán",
-      content: `Xác nhận sinh viên ${(r.user as { fullName?: string })?.fullName} đã thanh toán hóa đơn ${r.month}/${r.year} (${formatMoney(r.total)})?`,
+      content: `Xác nhận sinh viên ${(r.user as { fullName?: string })?.fullName} đã thanh toán ${r.billType === "penalty" ? "hóa đơn phạt" : `hóa đơn ${r.month}/${r.year}`} (${formatMoney(r.total)})?`,
       okText: "Xác nhận",
       cancelText: "Hủy",
       onOk: async () => {
@@ -101,6 +130,13 @@ const BillsPage: React.FC = () => {
       render: (_: unknown, r: Bill) => <strong>{r.month}/{r.year}</strong>,
     },
     {
+      title: "Loại",
+      key: "billType",
+      width: 100,
+      render: (_: unknown, r: Bill) =>
+        r.billType === "penalty" ? <Tag color="red">Phạt VP</Tag> : <Tag color="blue">Tháng</Tag>,
+    },
+    {
       title: "Sinh viên",
       dataIndex: ["user", "fullName"],
       key: "user",
@@ -117,28 +153,49 @@ const BillsPage: React.FC = () => {
       dataIndex: "roomFee",
       key: "roomFee",
       width: 110,
-      render: (v: number) => <span style={{ color: "#0d9488" }}>{formatMoney(v)}</span>,
+      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : <span style={{ color: "#0d9488" }}>{formatMoney(v)}</span>),
     },
     {
       title: "Điện",
       dataIndex: "electricityFee",
       key: "electricityFee",
       width: 90,
-      render: (v: number) => formatMoney(v),
+      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : formatMoney(v)),
     },
     {
       title: "Nước",
       dataIndex: "waterFee",
       key: "waterFee",
       width: 90,
-      render: (v: number) => formatMoney(v),
+      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : formatMoney(v)),
     },
     {
-      title: "Khác",
-      dataIndex: "otherFee",
-      key: "otherFee",
-      width: 80,
-      render: (v: number) => (v ? formatMoney(v) : "-"),
+      title: "Dịch vụ cá nhân / Phạt",
+      dataIndex: "personalServiceFee",
+      key: "personalServiceFee",
+      width: 260,
+      render: (_: number, r: Bill) => {
+        if (r.billType === "penalty") {
+          const lines = r.penaltyBreakdown || [];
+          if (!lines.length) return "-";
+          return (
+            <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55, fontSize: 13 }}>
+              {lines.map((line, idx) => (
+                <li key={idx}>{line.label}: {formatMoney(line.amount)}</li>
+              ))}
+            </ul>
+          );
+        }
+        const items = r.personalServiceBreakdown || [];
+        if (!items.length) return "-";
+        return (
+          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55, fontSize: 13 }}>
+            {items.map((it, idx) => (
+              <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
+            ))}
+          </ul>
+        );
+      },
     },
     {
       title: "Tổng",
@@ -220,22 +277,49 @@ const BillsPage: React.FC = () => {
             <Select.Option value="paid">Đã thanh toán</Select.Option>
             <Select.Option value="overdue">Quá hạn</Select.Option>
           </Select>
+          <Select
+            placeholder="Loại HĐ"
+            allowClear
+            style={{ width: 140 }}
+            value={filters.billType}
+            onChange={(v) => { setFilters((f) => ({ ...f, billType: v })); setPage(1); }}
+          >
+            <Select.Option value="monthly">Hóa đơn tháng</Select.Option>
+            <Select.Option value="penalty">Hóa đơn phạt</Select.Option>
+          </Select>
           <InputNumber placeholder="Tháng" min={1} max={12} style={{ width: 90 }} value={filters.month} onChange={(v) => { setFilters((f) => ({ ...f, month: v || undefined })); setPage(1); }} />
           <InputNumber placeholder="Năm" min={2020} style={{ width: 100 }} value={filters.year} onChange={(v) => { setFilters((f) => ({ ...f, year: v || undefined })); setPage(1); }} />
+          <Input placeholder="Lọc phòng" style={{ width: 120 }} value={filters.room} onChange={(e) => { setFilters((f) => ({ ...f, room: e.target.value || undefined })); setPage(1); }} />
           <Button onClick={() => { setFilters({}); setPage(1); }}>Xóa bộ lọc</Button>
           <div style={{ flex: 1 }} />
           <Space>
             <Button icon={<DownloadOutlined />} onClick={() => exportToExcel(data.map((b) => ({
+              "Loại": b.billType === "penalty" ? "Phạt VP" : "Tháng",
               "Tháng/Năm": `${b.month}/${b.year}`,
               "Sinh viên": (b.user as { fullName?: string })?.fullName,
               "Phòng": (b.room as { roomNumber?: string })?.roomNumber,
-              "Tiền phòng": b.roomFee,
-              "Điện": b.electricityFee,
-              "Nước": b.waterFee,
+              "Tiền phòng": b.billType === "penalty" ? "" : b.roomFee,
+              "Điện": b.billType === "penalty" ? "" : b.electricityFee,
+              "Nước": b.billType === "penalty" ? "" : b.waterFee,
+              "Dịch vụ cá nhân / Phạt": b.billType === "penalty"
+                ? (b.penaltyBreakdown || []).map((x) => `${x.label || "Mục"}: ${x.amount ?? 0}`).join("; ")
+                : (b.personalServiceBreakdown || []).map((x) => formatPersonalServiceLine(x)).join("; "),
+              "Phí dịch vụ cá nhân": b.personalServiceFee || 0,
               "Tổng": b.total,
               "Hạn": new Date(b.dueDate).toLocaleDateString("vi-VN"),
               "Trạng thái": statusMap[b.status]?.text || b.status,
             })), "danh-sach-hoa-don", "Hóa đơn")}>Xuất Excel</Button>
+            <InputNumber value={genMonth} min={1} max={12} onChange={(v) => setGenMonth(Number(v || 1))} placeholder="Tháng" style={{ width: 90 }} />
+            <InputNumber value={genYear} min={2020} onChange={(v) => setGenYear(Number(v || new Date().getFullYear()))} placeholder="Năm" style={{ width: 100 }} />
+            <Button onClick={async () => {
+              try {
+                const r = await billsApi.generate({ month: genMonth, year: genYear });
+                message.success(`Tạo hóa đơn xong: ${r.data?.created || 0}, bỏ qua: ${r.data?.skipped || 0}`);
+                load();
+              } catch (err: unknown) {
+                message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được hóa đơn tháng");
+              }
+            }}>Tạo theo tháng</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>Tạo hóa đơn</Button>
           </Space>
         </div>
@@ -246,21 +330,46 @@ const BillsPage: React.FC = () => {
           rowKey="_id"
           loading={loading}
           pagination={{ total, current: page, pageSize: 10, onChange: setPage, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hóa đơn` }}
-          scroll={{ x: 1100 }}
+          scroll={{ x: 1220 }}
           size="middle"
         />
       </Card>
 
       <Modal title="Tạo hóa đơn" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={500}>
         <Form form={form} onFinish={handleCreate} layout="vertical" initialValues={{ month: currentMonth, year: currentYear }}>
-          <Form.Item name="contract" label="Hợp đồng" rules={[{ required: true, message: "Chọn hợp đồng" }]}>
-            <Select placeholder="Chọn hợp đồng" showSearch optionFilterProp="children">
-              {(contracts as { _id: string; contractNumber?: string; user?: { fullName: string }; room?: { roomNumber: string; area?: { name: string } } }[]).map((c) => (
-                <Select.Option key={c._id} value={c._id}>
-                  {c.contractNumber} — {(c.user as { fullName?: string })?.fullName} — Phòng {(c.room as { roomNumber?: string })?.roomNumber}
+          <Form.Item name="areaId" label="Khu (lọc phòng)">
+            <Select allowClear placeholder="Chọn khu để lọc phòng">
+              {Array.from(new Map(rooms.filter((r) => r.area?._id).map((r) => [String(r.area?._id), r.area])).values()).map((a) => (
+                <Select.Option key={a?._id} value={a?._id}>
+                  {a?.name}
                 </Select.Option>
               ))}
             </Select>
+          </Form.Item>
+          <Form.Item shouldUpdate noStyle>
+            {() => {
+              const areaId = form.getFieldValue("areaId") as string | undefined;
+              const filteredRooms = areaId ? rooms.filter((r) => String(r.area?._id || "") === String(areaId)) : rooms;
+              return (
+                <Form.Item name="roomId" label="Phòng" rules={[{ required: true, message: "Chọn phòng" }]}>
+                  <Select
+                    placeholder="Chọn phòng để tạo hóa đơn"
+                    showSearch
+                    optionFilterProp="children"
+                    onChange={(rid) => {
+                      const room = rooms.find((r) => r._id === rid);
+                      form.setFieldsValue({ roomFeePreview: room?.price || 0 });
+                    }}
+                  >
+                    {filteredRooms.map((r) => (
+                      <Select.Option key={r._id} value={r._id}>
+                        Phòng {r.roomNumber} {r.area?.name ? `- Khu ${r.area.name}` : ""} {r.capacity ? `(${r.capacity} người)` : ""}
+                      </Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              );
+            }}
           </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
@@ -270,7 +379,9 @@ const BillsPage: React.FC = () => {
               <Form.Item name="year" label="Năm" rules={[{ required: true }]}><InputNumber min={2020} style={{ width: "100%" }} /></Form.Item>
             </Col>
           </Row>
-          <Form.Item name="roomFee" label="Tiền phòng (đ)"><InputNumber min={0} style={{ width: "100%" }} placeholder="Mặc định lấy từ giá phòng" /></Form.Item>
+          <Form.Item name="roomFeePreview" label="Tiền phòng (đ) — tự lấy theo loại phòng">
+            <InputNumber min={0} style={{ width: "100%" }} disabled />
+          </Form.Item>
           <Form.Item name="electricityFee" label="Tiền điện (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="waterFee" label="Tiền nước (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="otherFee" label="Phí khác (Wifi, gửi xe...)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
@@ -280,7 +391,7 @@ const BillsPage: React.FC = () => {
       </Modal>
 
       <Modal
-        title={`Chi tiết hóa đơn ${detailModal ? `${detailModal.month}/${detailModal.year}` : ""}`}
+        title={`Chi tiết hóa đơn ${detailModal ? (detailModal.billType === "penalty" ? "phạt vi phạm" : `${detailModal.month}/${detailModal.year}`) : ""}`}
         open={!!detailModal}
         onCancel={() => setDetailModal(null)}
         footer={[
@@ -295,12 +406,44 @@ const BillsPage: React.FC = () => {
           <div style={{ lineHeight: 2 }}>
             <p><strong>Sinh viên:</strong> {(detailModal.user as { fullName?: string })?.fullName}</p>
             <p><strong>Phòng:</strong> {(detailModal.room as { roomNumber?: string })?.roomNumber} — {(detailModal.room as { area?: { name?: string } })?.area?.name || ""}</p>
-            <p><strong>Kỳ:</strong> Tháng {detailModal.month}/{detailModal.year}</p>
-            <hr style={{ margin: "12px 0" }} />
-            <p><strong>Tiền phòng:</strong> {formatMoney(detailModal.roomFee)}</p>
-            <p><strong>Tiền điện:</strong> {formatMoney(detailModal.electricityFee)}</p>
-            <p><strong>Tiền nước:</strong> {formatMoney(detailModal.waterFee)}</p>
-            {detailModal.otherFee ? <p><strong>Phí khác:</strong> {formatMoney(detailModal.otherFee)}</p> : null}
+            {detailModal.billType === "penalty" ? (
+              <>
+                <p><strong>Loại:</strong> <Tag color="red">Hóa đơn phạt vi phạm</Tag></p>
+                {(detailModal.penaltyBreakdown?.length || 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Mục phạt / bồi thường:</strong>
+                    <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                      {detailModal.penaltyBreakdown?.map((line, idx) => (
+                        <li key={idx}>{line.label}: {formatMoney(line.amount)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <p><strong>Kỳ:</strong> Tháng {detailModal.month}/{detailModal.year}</p>
+                <hr style={{ margin: "12px 0" }} />
+                <p><strong>Số người trong phòng:</strong> {detailModal.occupants || 1}</p>
+                <p><strong>Tiền phòng:</strong> {formatMoney(detailModal.roomFee)}</p>
+                <p><strong>Tiền điện:</strong> {formatMoney(detailModal.electricityFee)}</p>
+                <p><strong>Tiền nước:</strong> {formatMoney(detailModal.waterFee)}</p>
+                {detailModal.sharedCommonFee ? <p><strong>Wifi:</strong> {formatMoney(detailModal.sharedCommonFee)}</p> : null}
+                {detailModal.otherFee ? <p><strong>Phí khác:</strong> {formatMoney(detailModal.otherFee)}</p> : null}
+                {detailModal.personalServiceFee ? <p><strong>Dịch vụ cá nhân:</strong> {formatMoney(detailModal.personalServiceFee)}</p> : null}
+                {(detailModal.personalServiceBreakdown?.length || 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Chi tiết dịch vụ cá nhân:</strong>
+                    <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                      {detailModal.personalServiceBreakdown?.map((it, idx) => (
+                        <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {detailModal.note ? <p style={{ color: "#6b7280" }}><strong>Cách tính:</strong> {detailModal.note}</p> : null}
+              </>
+            )}
             <p><strong>Tổng cộng:</strong> <span style={{ fontSize: 18, color: "#0d9488" }}>{formatMoney(detailModal.total)}</span></p>
             <hr style={{ margin: "12px 0" }} />
             <p><strong>Hạn thanh toán:</strong> {new Date(detailModal.dueDate).toLocaleDateString("vi-VN")}</p>

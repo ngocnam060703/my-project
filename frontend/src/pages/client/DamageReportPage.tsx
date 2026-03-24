@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Card, Form, Input, Select, Button, message, Table, Tag, Spin, Empty, Row, Col, Statistic, Alert } from "antd";
 import { ToolOutlined } from "@ant-design/icons";
-import { contractsApi, damageReportsApi } from "../../api";
+import { contractsApi, facilityReportsApi } from "../../api";
 import { useAuth } from "../../contexts/AuthContext";
 
-const DEVICE_OPTIONS = [
-  "Điều hòa", "Quạt", "Bàn", "Ghế", "Giường", "Tủ", "Vòi nước", "Bồn cầu",
-  "Cửa", "Cửa sổ", "Ổ điện", "Đèn", "Wifi", "Khác",
-];
-
-const statusMap: Record<string, string> = { pending: "Chờ xử lý", processing: "Đang xử lý", resolved: "Đã xử lý" };
-const statusColor: Record<string, string> = { pending: "gold", processing: "blue", resolved: "green" };
+const statusMap: Record<string, string> = {
+  pending: "Chờ duyệt",
+  approved: "Đã duyệt",
+  fixing: "Đang sửa",
+  done: "Đã sửa xong",
+  rejected: "Từ chối",
+};
+const statusColor: Record<string, string> = { pending: "gold", approved: "blue", fixing: "processing", done: "green", rejected: "red" };
 
 type RoomLeaderRef = string | { _id?: string } | null | undefined;
 
@@ -20,9 +21,13 @@ const DamageReportPage: React.FC = () => {
   const [contracts, setContracts] = useState<
     { _id: string; room: { _id: string; roomNumber: string; area?: { name: string }; roomLeader?: RoomLeaderRef } }[]
   >([]);
-  const [reports, setReports] = useState<{ _id: string; room: { roomNumber: string }; device: string; description: string; status: string; createdAt: string }[]>([]);
+  const [reports, setReports] = useState<
+    { _id: string; room: { roomNumber: string }; facility?: { _id?: string; name?: string; code?: string }; description: string; status: string; createdAt: string }[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [roomFacilities, setRoomFacilities] = useState<{ _id: string; name: string; code?: string; roomId?: string }[]>([]);
+  const selectedRoomId = Form.useWatch("room", form);
 
   const uid = String(user?.id || user?._id || "");
 
@@ -39,22 +44,47 @@ const DamageReportPage: React.FC = () => {
 
   useEffect(() => {
     contractsApi.getMy().then((res) => {
-      const active = (res.data || []).filter((c: { status: string }) => c.status === "active");
+      const active = (res.data || []).filter((c: { status: string }) => c.status === "active" || c.status === "pending_payment");
       setContracts(active);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    damageReportsApi.getMy().then((res) => setReports(res.data || [])).catch(() => {});
-  }, []);
+  const loadReports = () => {
+    facilityReportsApi.getMy().then((res) => setReports(res.data || [])).catch(() => {});
+  };
+  useEffect(() => { loadReports(); }, []);
 
-  const onFinish = async (v: { room: string; device: string; description: string }) => {
+  useEffect(() => {
+    if (!selectedRoomId) {
+      setRoomFacilities([]);
+      form.setFieldValue("facilityId", undefined);
+      return;
+    }
+    facilityReportsApi
+      .getRoomFacilities(String(selectedRoomId))
+      .then((res) => {
+        const list = (res.data?.facilities || []) as { _id: string; name: string; code?: string }[];
+        setRoomFacilities(list);
+        const current = String(form.getFieldValue("facilityId") || "");
+        if (current && !list.some((x) => x._id === current)) {
+          form.setFieldValue("facilityId", undefined);
+        }
+      })
+      .catch((err: unknown) => {
+        setRoomFacilities([]);
+        form.setFieldValue("facilityId", undefined);
+        const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+        if (msg) message.error(msg);
+      });
+  }, [selectedRoomId, form]);
+
+  const onFinish = async (v: { room: string; facilityId: string; description: string }) => {
     setSubmitting(true);
     try {
-      await damageReportsApi.create({ room: v.room, device: v.device, description: v.description });
+      await facilityReportsApi.create({ roomId: v.room, facilityId: v.facilityId, description: v.description });
       message.success("Đã gửi khai báo");
       form.resetFields();
-      damageReportsApi.getMy().then((res) => setReports(res.data || []));
+      loadReports();
     } catch (err: unknown) {
       message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Gửi thất bại");
     } finally {
@@ -113,9 +143,22 @@ const DamageReportPage: React.FC = () => {
                 })}
               </Select>
             </Form.Item>
-            <Form.Item name="device" label="Thiết bị" rules={[{ required: true }]}>
-              <Select placeholder="Chọn thiết bị" options={DEVICE_OPTIONS.map((d) => ({ label: d, value: d }))} />
+            <Form.Item name="facilityId" label="Thiết bị" rules={[{ required: true, message: "Chọn thiết bị trong phòng" }]}>
+              <Select
+                placeholder={selectedRoomId ? "Chọn thiết bị trong phòng" : "Chọn phòng trước"}
+                disabled={!selectedRoomId}
+                options={roomFacilities.map((d) => ({ label: `${d.name}${d.code ? ` (${d.code})` : ""}`, value: d._id }))}
+              />
             </Form.Item>
+            {selectedRoomId && roomFacilities.length === 0 ? (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="Phòng này chưa có thiết bị được cấu hình"
+                description="Vui lòng liên hệ admin cập nhật danh mục CSVC của phòng trước khi khai báo."
+              />
+            ) : null}
             <Form.Item name="description" label="Mô tả lỗi" rules={[{ required: true }]}>
               <Input.TextArea rows={4} placeholder="Mô tả chi tiết lỗi hư hỏng" />
             </Form.Item>
@@ -137,7 +180,7 @@ const DamageReportPage: React.FC = () => {
             rowKey="_id"
             columns={[
               { title: "Phòng", dataIndex: ["room", "roomNumber"], key: "room", width: 80, render: (v: string, r: { room: { roomNumber: string } }) => (typeof r.room === "object" ? r.room?.roomNumber : v) || "-" },
-              { title: "Thiết bị", dataIndex: "device", key: "device", width: 100 },
+              { title: "Thiết bị", key: "device", width: 180, render: (_: unknown, r: { facility?: { name?: string; code?: string } }) => `${r.facility?.name || "-"}${r.facility?.code ? ` (${r.facility.code})` : ""}` },
               { title: "Mô tả", dataIndex: "description", key: "description", ellipsis: true },
               { title: "Trạng thái", dataIndex: "status", key: "status", width: 110, render: (s: string) => <Tag color={statusColor[s]}>{statusMap[s] || s}</Tag> },
               { title: "Ngày", dataIndex: "createdAt", key: "createdAt", width: 100, render: (d: string) => new Date(d).toLocaleDateString("vi-VN") },

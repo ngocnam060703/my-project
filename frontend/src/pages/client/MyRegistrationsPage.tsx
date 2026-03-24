@@ -10,6 +10,10 @@ const statusMap: Record<string, { color: string; text: string }> = {
   approved: { color: "green", text: "Đã duyệt" },
   rejected: { color: "red", text: "Từ chối" },
 };
+const typeMap: Record<string, { color: string; text: string }> = {
+  dorm: { color: "blue", text: "Nội trú mới" },
+  transfer: { color: "purple", text: "Chuyển phòng" },
+};
 
 const MyRegistrationsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -49,6 +53,15 @@ const MyRegistrationsPage: React.FC = () => {
   const columns = [
     { title: "Mã đơn", dataIndex: "_id", key: "_id", width: 100, render: (id: string) => <strong>{id?.slice(-8).toUpperCase()}</strong> },
     { title: "Phòng", dataIndex: ["room", "roomNumber"], key: "room", width: 80 },
+    {
+      title: "Loại đơn",
+      key: "registrationType",
+      width: 120,
+      render: (_: unknown, r: Registration) => {
+        const t = r.registrationType || "dorm";
+        return <Tag color={typeMap[t]?.color}>{typeMap[t]?.text || t}</Tag>;
+      },
+    },
     { title: "Khu", dataIndex: ["room", "area", "name"], key: "area", width: 90 },
     { title: "Học kỳ", dataIndex: "semester", key: "semester", width: 80 },
     { title: "Năm học", dataIndex: "schoolYear", key: "schoolYear", width: 100 },
@@ -131,6 +144,10 @@ const MyRegistrationsPage: React.FC = () => {
           <div style={{ lineHeight: 2 }}>
             <p><strong>Mã đơn:</strong> {detailModal._id?.slice(-8).toUpperCase()}</p>
             <p><strong>Phòng:</strong> {typeof detailModal.room === "object" ? detailModal.room?.roomNumber : "-"}</p>
+            {(detailModal.registrationType || "dorm") === "transfer" && (
+              <p><strong>Phòng hiện tại:</strong> {typeof detailModal.fromRoom === "object" ? detailModal.fromRoom?.roomNumber : "-"}</p>
+            )}
+            <p><strong>Loại đơn:</strong> <Tag color={typeMap[detailModal.registrationType || "dorm"]?.color}>{typeMap[detailModal.registrationType || "dorm"]?.text}</Tag></p>
             <p><strong>Khu:</strong> {typeof detailModal.room === "object" && detailModal.room?.area && typeof detailModal.room.area === "object" ? detailModal.room.area.name : "-"}</p>
             <p><strong>Học kỳ:</strong> {detailModal.semester}</p>
             <p><strong>Năm học:</strong> {detailModal.schoolYear}</p>

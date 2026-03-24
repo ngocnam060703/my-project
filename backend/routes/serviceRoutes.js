@@ -1,0 +1,21 @@
+const express = require("express");
+const serviceController = require("../controllers/serviceController");
+const { auth, requireRole } = require("../middleware/auth");
+
+const router = express.Router();
+
+router.use(auth);
+
+// Shared
+router.get("/", serviceController.getServices);
+
+// Student
+router.get("/my-registrations", requireRole("user"), serviceController.getMyServiceRegistrations);
+router.post("/my-registrations", requireRole("user"), serviceController.upsertMyServiceRegistration);
+
+// Admin/manager
+router.post("/", requireRole("admin", "manager"), serviceController.createService);
+router.put("/:id", requireRole("admin", "manager"), serviceController.updateService);
+router.put("/:id/toggle", requireRole("admin", "manager"), serviceController.toggleService);
+
+module.exports = router;

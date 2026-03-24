@@ -2,15 +2,16 @@ import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Card, Descriptions, Button, Tag, Spin, message, Form, Input, Rate, List } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
-import { roomsApi, ratingsApi } from "../../api";
+import { contractsApi, roomsApi, ratingsApi } from "../../api";
 import { useAuth } from "../../contexts/AuthContext";
-import type { Room } from "../../types";
+import type { Contract, Room } from "../../types";
 
 const RoomDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
   const [room, setRoom] = useState<Room | null>(null);
+  const [activeContract, setActiveContract] = useState<Contract | null>(null);
   const [loading, setLoading] = useState(true);
   const [ratings, setRatings] = useState<{ ratings: { user?: { fullName?: string }; rating: number; comment?: string }[]; average: number } | null>(null);
   const [ratingForm] = Form.useForm();
@@ -23,6 +24,15 @@ const RoomDetailPage: React.FC = () => {
     if (!id) return;
     ratingsApi.getByRoom(id).then((res) => setRatings(res.data)).catch(() => {});
   }, [id]);
+  useEffect(() => {
+    contractsApi
+      .getMy()
+      .then((res) => {
+        const contracts = (res.data || []) as Contract[];
+        setActiveContract(contracts.find((c) => c.status === "active" || c.status === "pending_payment") || null);
+      })
+      .catch(() => setActiveContract(null));
+  }, []);
 
   if (loading || !room) return <Spin size="large" style={{ display: "block", margin: "40px auto" }} />;
   const available = room.currentOccupancy < room.capacity;
@@ -66,14 +76,16 @@ const RoomDetailPage: React.FC = () => {
           </Card>
         )}
         {user && (
-          <Card type="inner" title="Đăng ký nội trú" style={{ marginTop: 16 }}>
+          <Card type="inner" title="Đăng ký chuyển phòng" style={{ marginTop: 16 }}>
             <p>
-              Sinh viên không đăng ký trực tiếp tại trang phòng. Vui lòng vào trang{" "}
-              <strong>Đăng ký nội trú</strong> để hệ thống kiểm tra:
-              đợt đăng ký đang mở và hồ sơ cá nhân đã đầy đủ.
+              Chức năng này dành cho sinh viên đã là thành viên KTX và muốn chuyển phòng trong cùng khu.
             </p>
-            <Button type="primary" onClick={() => navigate(`/student/dorm-registration?roomId=${room._id}`)}>
-              Đăng ký nội trú phòng này
+            <Button
+              type="primary"
+              disabled={!activeContract}
+              onClick={() => navigate(`/student/room-transfer?roomId=${room._id}`)}
+            >
+              Đăng ký chuyển sang phòng này
             </Button>
           </Card>
         )}

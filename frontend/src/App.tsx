@@ -16,11 +16,14 @@ import RoomDetailPage from "./pages/client/RoomDetailPage";
 import MyRegistrationsPage from "./pages/client/MyRegistrationsPage";
 import MyContractsPage from "./pages/client/MyContractsPage";
 import MyBillsPage from "./pages/client/MyBillsPage";
+import MyViolationsPage from "./pages/client/MyViolationsPage";
 import CalendarPage from "./pages/client/CalendarPage";
 import ProfilePage from "./pages/client/ProfilePage";
 import DamageReportPage from "./pages/client/DamageReportPage";
 import ContractRenewalPage from "./pages/client/ContractRenewalPage";
 import DormRegistrationPage from "./pages/client/DormRegistrationPage";
+import RoomTransferPage from "./pages/client/RoomTransferPage";
+import RegulationsPage from "./pages/client/RegulationsPage";
 import DashboardPage from "./pages/admin/DashboardPage";
 import UsersPage from "./pages/admin/UsersPage";
 import AreasPage from "./pages/admin/AreasPage";
@@ -28,6 +31,10 @@ import RoomsPageAdmin from "./pages/admin/RoomsPage";
 import RegistrationsPage from "./pages/admin/RegistrationsPage";
 import ContractsPage from "./pages/admin/ContractsPage";
 import BillsPage from "./pages/admin/BillsPage";
+import FacilitiesPage from "./pages/admin/FacilitiesPage";
+import ViolationsPage from "./pages/admin/ViolationsPage";
+import ServicesPageAdmin from "./pages/admin/ServicesPage";
+import ServicesPageClient from "./pages/client/ServicesPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 /** `/` → admin vào /admin, còn lại (khách + sinh viên) vào /student */
@@ -80,6 +87,9 @@ function App() {
                   <Route path="registrations" element={<RegistrationsPage />} />
                   <Route path="contracts" element={<ContractsPage />} />
                   <Route path="bills" element={<BillsPage />} />
+                  <Route path="violations" element={<ViolationsPage />} />
+                  <Route path="facilities" element={<FacilitiesPage />} />
+                  <Route path="services" element={<ServicesPageAdmin />} />
                 </Route>
 
                 <Route path="/student" element={<StudentAreaGuard><ClientLayout /></StudentAreaGuard>}>
@@ -87,11 +97,15 @@ function App() {
                   <Route path="rooms" element={<RoomsPage />} />
                   <Route path="rooms/:id" element={<RoomDetailPage />} />
                   <Route path="dorm-registration" element={<ProtectedRoute><DormRegistrationPage /></ProtectedRoute>} />
+                  <Route path="room-transfer" element={<ProtectedRoute><RoomTransferPage /></ProtectedRoute>} />
                   <Route path="my-registrations" element={<ProtectedRoute><MyRegistrationsPage /></ProtectedRoute>} />
                   <Route path="my-contracts" element={<ProtectedRoute><MyContractsPage /></ProtectedRoute>} />
                   <Route path="my-bills" element={<ProtectedRoute><MyBillsPage /></ProtectedRoute>} />
+                  <Route path="my-violations" element={<ProtectedRoute><MyViolationsPage /></ProtectedRoute>} />
+                  <Route path="regulations" element={<ProtectedRoute><RegulationsPage /></ProtectedRoute>} />
                   <Route path="calendar" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />
                   <Route path="profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+                  <Route path="services" element={<ProtectedRoute><ServicesPageClient /></ProtectedRoute>} />
                   <Route path="damage-report" element={<ProtectedRoute><DamageReportPage /></ProtectedRoute>} />
                   <Route path="contract-renewal/:id" element={<ProtectedRoute><ContractRenewalPage /></ProtectedRoute>} />
                 </Route>
@@ -108,6 +122,7 @@ function App() {
                 <Route path="/calendar" element={<Navigate to="/student/calendar" replace />} />
                 <Route path="/profile" element={<Navigate to="/student/profile" replace />} />
                 <Route path="/damage-report" element={<Navigate to="/student/damage-report" replace />} />
+                <Route path="/services" element={<Navigate to="/student/services" replace />} />
                 <Route path="/contract-renewal/:id" element={<LegacyContractRenewalRedirect />} />
 
                 <Route path="*" element={<NotFoundPage />} />

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Row, Col, Card, Statistic, Spin, Progress, Switch, Space, message, Button, Modal, Form, Input, DatePicker } from "antd";
 import { HomeOutlined, TeamOutlined, FileAddOutlined } from "@ant-design/icons";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
+import { useNavigate } from "react-router-dom";
 import { dashboardApi, registrationPeriodsApi } from "../../api";
 import dayjs from "dayjs";
 
@@ -24,6 +25,7 @@ interface RegistrationPeriod {
 }
 
 const DashboardPage: React.FC = () => {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [periods, setPeriods] = useState<RegistrationPeriod[]>([]);
@@ -201,7 +203,13 @@ const DashboardPage: React.FC = () => {
           <Card><Statistic title="Sinh viên" value={s.totalStudents ?? 0} prefix={<TeamOutlined />} /></Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="Đơn chờ duyệt" value={s.pendingRegistrations ?? 0} prefix={<FileAddOutlined />} /></Card>
+          <Card
+            hoverable
+            onClick={() => navigate("/admin/registrations")}
+            style={{ cursor: "pointer" }}
+          >
+            <Statistic title="Đơn chờ duyệt" value={s.pendingRegistrations ?? 0} prefix={<FileAddOutlined />} />
+          </Card>
         </Col>
       </Row>
       <Row gutter={[24, 24]} style={{ marginTop: 16 }}>
@@ -237,23 +245,9 @@ const DashboardPage: React.FC = () => {
               <span>Chưa có đợt đăng ký nào. Vui lòng tạo đợt trước khi bật.</span>
             ) : (
               <Space direction="vertical" style={{ width: "100%" }}>
-                {periods.map((p) => (
-                  <div key={p._id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                    <div>
-                      <div style={{ fontWeight: 600 }}>{p.name}</div>
-                      <div style={{ color: "#6b7280", fontSize: 12 }}>
-                        {new Date(p.startDate).toLocaleDateString("vi-VN")} - {new Date(p.endDate).toLocaleDateString("vi-VN")}
-                      </div>
-                    </div>
-                    <Switch
-                      checked={p.isActive}
-                      loading={togglingId === p._id}
-                      checkedChildren="Bật"
-                      unCheckedChildren="Tắt"
-                      onChange={(checked) => handleToggleActive(p, checked)}
-                    />
-                  </div>
-                ))}
+                <div style={{ color: "#6b7280", fontSize: 12 }}>
+                  Dùng công tắc phía trên để bật/tắt nhanh đợt đăng ký hiện tại.
+                </div>
               </Space>
             )}
           </Card>

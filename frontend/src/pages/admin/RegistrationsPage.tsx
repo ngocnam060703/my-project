@@ -10,6 +10,10 @@ const statusMap: Record<string, { color: string; text: string }> = {
   approved: { color: "green", text: "Đã duyệt" },
   rejected: { color: "red", text: "Từ chối" },
 };
+const typeMap: Record<string, { color: string; text: string }> = {
+  dorm: { color: "blue", text: "Nội trú mới" },
+  transfer: { color: "purple", text: "Chuyển phòng" },
+};
 
 const RegistrationsPage: React.FC = () => {
   const [data, setData] = useState<Registration[]>([]);
@@ -17,7 +21,7 @@ const RegistrationsPage: React.FC = () => {
   const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { name: string } }[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<{ status?: string; room?: string }>({});
+  const [filters, setFilters] = useState<{ status?: string; room?: string }>({ status: "all" });
   const [rejectModal, setRejectModal] = useState<{ id: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [detailModal, setDetailModal] = useState<Registration | null>(null);
@@ -26,7 +30,7 @@ const RegistrationsPage: React.FC = () => {
     setLoading(true);
     try {
       const params: Record<string, unknown> = { page, limit: 10 };
-      if (filters.status) params.status = filters.status;
+      if (filters.status && filters.status !== "all") params.status = filters.status;
       if (filters.room) params.room = filters.room;
       const [res, roomsRes] = await Promise.all([
         client.get("/registrations", { params }),
@@ -47,7 +51,7 @@ const RegistrationsPage: React.FC = () => {
   const handleApprove = (id: string) => {
     Modal.confirm({
       title: "Xác nhận duyệt đơn",
-      content: "Bạn có chắc muốn duyệt đơn đăng ký này? Sinh viên sẽ nhận thông báo và cần thanh toán để hoàn tất.",
+      content: "Bạn có chắc muốn duyệt đơn đăng ký này? Sinh viên sẽ nhận thông báo và kí hợp đồng để xác nhận ở nội trú.",
       okText: "Duyệt",
       cancelText: "Hủy",
       onOk: async () => {
@@ -139,6 +143,15 @@ const RegistrationsPage: React.FC = () => {
       width: 90,
       render: (_: unknown, r: Registration) => getAreaName(r) || "-",
     },
+    {
+      title: "Loại đơn",
+      key: "registrationType",
+      width: 120,
+      render: (_: unknown, r: Registration) => {
+        const t = r.registrationType || "dorm";
+        return <Tag color={typeMap[t]?.color}>{typeMap[t]?.text || t}</Tag>;
+      },
+    },
     { title: "Học kỳ", dataIndex: "semester", key: "semester", width: 80, render: (v: string) => v || "-" },
     { title: "Năm học", dataIndex: "schoolYear", key: "schoolYear", width: 100, render: (v: string) => v || "-" },
     {
@@ -204,11 +217,12 @@ const RegistrationsPage: React.FC = () => {
           <FilterOutlined style={{ color: "#6b7280" }} />
           <Select
             placeholder="Trạng thái"
-            allowClear
+            allowClear={false}
             style={{ width: 150 }}
             value={filters.status}
             onChange={(v) => { setFilters((f) => ({ ...f, status: v })); setPage(1); }}
           >
+            <Select.Option value="all">Tất cả</Select.Option>
             <Select.Option value="pending">Chờ duyệt</Select.Option>
             <Select.Option value="approved">Đã duyệt</Select.Option>
             <Select.Option value="rejected">Từ chối</Select.Option>
@@ -226,7 +240,7 @@ const RegistrationsPage: React.FC = () => {
               <Select.Option key={r._id} value={r._id}>Phòng {r.roomNumber} {r.area?.name ? `- ${r.area.name}` : ""}</Select.Option>
             ))}
           </Select>
-          <Button onClick={() => { setFilters({}); setPage(1); }}>Xóa bộ lọc</Button>
+          <Button onClick={() => { setFilters({ status: "all" }); setPage(1); }}>Xóa bộ lọc</Button>
           <div style={{ flex: 1 }} />
           <Button
             icon={<DownloadOutlined />}
@@ -279,7 +293,11 @@ const RegistrationsPage: React.FC = () => {
             <p><strong>Email:</strong> {getVal(detailModal.user, "email") || "-"}</p>
             <p><strong>SĐT:</strong> {getVal(detailModal.user, "phone") || "-"}</p>
             <p><strong>Phòng đăng ký:</strong> {getVal(detailModal.room, "roomNumber") || "-"}</p>
+            {(detailModal.registrationType || "dorm") === "transfer" && (
+              <p><strong>Phòng hiện tại:</strong> {typeof detailModal.fromRoom === "object" ? detailModal.fromRoom?.roomNumber : "-"}</p>
+            )}
             <p><strong>Khu:</strong> {getAreaName(detailModal) || "-"}</p>
+            <p><strong>Loại đơn:</strong> <Tag color={typeMap[detailModal.registrationType || "dorm"]?.color}>{typeMap[detailModal.registrationType || "dorm"]?.text}</Tag></p>
             <p><strong>Học kỳ:</strong> {detailModal.semester || "-"}</p>
             <p><strong>Năm học:</strong> {detailModal.schoolYear || "-"}</p>
             <p><strong>Ngày bắt đầu ở:</strong> {detailModal.startDate ? new Date(detailModal.startDate).toLocaleDateString("vi-VN") : "-"}</p>

@@ -26,7 +26,7 @@ exports.getAll = async (req, res) => {
     if (user) filter.user = user;
     if (room) filter.room = room;
     const contracts = await Contract.find(filter)
-      .populate("user", "fullName email phone studentId")
+      .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
         path: "room",
         populate: [
@@ -107,7 +107,7 @@ exports.create = async (req, res) => {
       createdBy: req.user._id,
     });
     const populated = await Contract.findById(contract._id)
-      .populate("user", "fullName email phone studentId")
+      .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
         path: "room",
         populate: [{ path: "area", select: "name" }, { path: "roomLeader", select: "_id fullName" }],
@@ -158,7 +158,7 @@ exports.update = async (req, res) => {
     if (terms !== undefined) contract.terms = String(terms);
     await contract.save();
     const populated = await Contract.findById(contract._id)
-      .populate("user", "fullName email phone studentId")
+      .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
         path: "room",
         populate: [{ path: "area", select: "name" }, { path: "roomLeader", select: "_id fullName" }],
@@ -173,7 +173,7 @@ exports.update = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const contract = await Contract.findById(req.params.id)
-      .populate("user", "fullName email phone studentId")
+      .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
         path: "room",
         populate: [
@@ -269,7 +269,7 @@ exports.confirmPayment = async (req, res) => {
       return res.status(400).json({ message: "Hợp đồng không ở trạng thái chờ thanh toán" });
     }
     if (!contract.signedAt) {
-      return res.status(400).json({ message: "Sinh viên chưa ký xác nhận thanh toán" });
+      return res.status(400).json({ message: "Sinh viên chưa ký hợp đồng" });
     }
     contract.status = "active";
     contract.paymentConfirmedAt = new Date();

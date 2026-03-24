@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Tag, Space, Row, Col, Statistic } from "antd";
+import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Tag, Space, Row, Col, Statistic, List } from "antd";
 import { PlusOutlined, ApartmentOutlined, EditOutlined, DeleteOutlined, FilterOutlined, EyeOutlined, DownloadOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { roomsApi, areasApi } from "../../api";
+import { roomsApi, areasApi, facilitiesApi } from "../../api";
 import type { Room } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -12,14 +12,39 @@ const statusMap: Record<string, { color: string; text: string }> = {
 };
 
 const formatPrice = (v: number) => (v ?? 0).toLocaleString("vi-VN") + "đ";
+const removeWifiFromAmenities = (arr: string[] = []) =>
+  arr.map((s) => String(s || "").trim()).filter(Boolean).filter((s) => !/^wi-?fi$/i.test(s));
+type FacilityLocation = {
+  room?: string | { _id?: string };
+  facility?: { _id?: string; name?: string };
+  quantity?: number;
+};
+type ResidentRow = {
+  contractId: string;
+  status: string;
+  contractNumber?: string;
+  startDate?: string;
+  endDate?: string;
+  isRoomLeader?: boolean;
+  user?: { _id?: string; fullName?: string; studentId?: string; email?: string; phone?: string; gender?: string };
+};
 
 const RoomsPage: React.FC = () => {
   const [data, setData] = useState<Room[]>([]);
   const [total, setTotal] = useState(0);
   const [areas, setAreas] = useState<{ _id: string; name: string }[]>([]);
+  const [roomFacilities, setRoomFacilities] = useState<Record<string, { name: string; quantity: number }[]>>({});
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [detailModal, setDetailModal] = useState<Room | null>(null);
+  const [residentModal, setResidentModal] = useState<{
+    open: boolean;
+    roomId?: string;
+    room?: { roomNumber?: string; area?: { name?: string }; capacity?: number; currentOccupancy?: number };
+    residents: ResidentRow[];
+    loading: boolean;
+    settingLeaderUserId?: string;
+  }>({ open: false, residents: [], loading: false });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
   const [query, setQuery] = useState<string>("");
@@ -45,14 +70,25 @@ const RoomsPage: React.FC = () => {
       if (filters.minCapacity != null) params.minCapacity = filters.minCapacity;
       if (filters.capacity != null) params.capacity = filters.capacity;
       if (query.trim()) params.roomNumber = query.trim();
-      const [roomsRes, areasRes] = await Promise.all([
+      const [roomsRes, areasRes, locationsRes] = await Promise.all([
         roomsApi.getAll(params),
         areasApi.getAll(),
+        facilitiesApi.getLocations({ limit: 2000 }),
       ]);
       setData(roomsRes.data.rooms || []);
       setTotal(roomsRes.data.total || 0);
       setStats(roomsRes.data.stats || { available: 0, full: 0, maintenance: 0 });
       setAreas(areasRes.data?.areas ?? areasRes.data ?? []);
+      const grouped: Record<string, { name: string; quantity: number }[]> = {};
+      const locations = (locationsRes.data?.items || []) as FacilityLocation[];
+      locations.forEach((loc) => {
+        const rid = typeof loc.room === "string" ? loc.room : String(loc.room?._id || "");
+        const name = String(loc.facility?.name || "").trim();
+        if (!rid || !name) return;
+        if (!grouped[rid]) grouped[rid] = [];
+        grouped[rid].push({ name, quantity: Number(loc.quantity || 0) });
+      });
+      setRoomFacilities(grouped);
     } catch {
       message.error("Không tải được dữ liệu");
     } finally {
@@ -68,7 +104,7 @@ const RoomsPage: React.FC = () => {
   const handleSubmit = async (v: Record<string, unknown>) => {
     try {
       const amenitiesInput = (v.amenities as string | undefined) || "";
-      const amenities = amenitiesInput.split(",").map((s) => s.trim()).filter(Boolean);
+      const amenities = removeWifiFromAmenities(amenitiesInput.split(","));
       const payload = { ...v, amenities };
       if (editingId) {
         await roomsApi.update(editingId, payload);
@@ -97,7 +133,7 @@ const RoomsPage: React.FC = () => {
       status: r.status,
       currentOccupancy: r.currentOccupancy,
       description: r.description,
-      amenities: r.amenities?.join(", "),
+      amenities: removeWifiFromAmenities(r.amenities || []).join(", "),
     });
     setModalOpen(true);
   };
@@ -119,6 +155,35 @@ const RoomsPage: React.FC = () => {
         }
       },
     });
+  };
+
+  const openResidents = async (r: Room) => {
+    setResidentModal({ open: true, roomId: r._id, loading: true, residents: [], room: { roomNumber: r.roomNumber, area: typeof r.area === "object" ? r.area : undefined, capacity: r.capacity, currentOccupancy: r.currentOccupancy } });
+    try {
+      const res = await roomsApi.getResidents(r._id);
+      setResidentModal({ open: true, roomId: r._id, loading: false, residents: res.data?.residents || [], room: res.data?.room || undefined });
+    } catch {
+      setResidentModal((prev) => ({ ...prev, loading: false }));
+      message.error("Không tải được danh sách sinh viên trong phòng");
+    }
+  };
+
+  const setRoomLeader = async (resident: ResidentRow) => {
+    if (!residentModal.roomId || !resident.user?._id) return;
+    try {
+      setResidentModal((prev) => ({ ...prev, settingLeaderUserId: resident.user?._id }));
+      await roomsApi.setRoomLeader(residentModal.roomId, resident.user._id);
+      setResidentModal((prev) => ({
+        ...prev,
+        residents: prev.residents.map((r) => ({ ...r, isRoomLeader: r.user?._id === resident.user?._id })),
+        settingLeaderUserId: undefined,
+      }));
+      message.success("Đã cập nhật trưởng phòng");
+      load();
+    } catch (err: unknown) {
+      setResidentModal((prev) => ({ ...prev, settingLeaderUserId: undefined }));
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không cập nhật được trưởng phòng");
+    }
   };
 
   const columns = [
@@ -146,19 +211,20 @@ const RoomsPage: React.FC = () => {
       render: (s: string) => <Tag color={statusMap[s]?.color} style={{ fontWeight: 500 }}>{statusMap[s]?.text || s}</Tag>,
     },
     {
-      title: "Tiện ích",
-      dataIndex: "amenities",
-      key: "amenities",
-      render: (a?: string[]) =>
-        a?.length ? (
+      title: "CSVC phòng",
+      key: "facilities",
+      render: (_: unknown, r: Room) => {
+        const items = roomFacilities[r._id] || [];
+        return items.length ? (
           <Space wrap size="small">
-            {a.slice(0, 4).map((x) => (
-              <Tag key={x} color="cyan">{x}</Tag>
+            {items.slice(0, 4).map((x) => (
+              <Tag key={`${r._id}-${x.name}`} color="cyan">{x.name}{x.quantity > 0 ? ` (${x.quantity})` : ""}</Tag>
             ))}
           </Space>
         ) : (
           <span style={{ color: "#999" }}>-</span>
-        ),
+        );
+      },
     },
     {
       title: "Thao tác",
@@ -168,6 +234,7 @@ const RoomsPage: React.FC = () => {
       render: (_: unknown, r: Room) => (
         <Space>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
+          <Button type="link" size="small" onClick={() => openResidents(r)}>Sinh viên</Button>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(r)}>Sửa</Button>
           <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => handleDelete(r)} disabled={(r.currentOccupancy ?? 0) > 0}>Xóa</Button>
         </Space>
@@ -231,6 +298,7 @@ const RoomsPage: React.FC = () => {
               "Sức chứa": `${r.currentOccupancy}/${r.capacity}`,
               "Giá": r.price,
               "Trạng thái": statusMap[r.status]?.text || r.status,
+              "CSVC phòng": (roomFacilities[r._id] || []).map((x) => `${x.name}${x.quantity > 0 ? ` (${x.quantity})` : ""}`).join(", "),
             })), "danh-sach-phong", "Phòng")}>Xuất Excel</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); form.setFieldsValue({ capacity: 4, floor: 1, status: "available", currentOccupancy: 0 }); setModalOpen(true); }}>Thêm phòng</Button>
           </Space>
@@ -263,7 +331,7 @@ const RoomsPage: React.FC = () => {
             <Col span={12}><Form.Item name="currentOccupancy" label="Đã ở"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item></Col>
           </Row>
           <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2} /></Form.Item>
-          <Form.Item name="amenities" label="Tiện ích (ngăn cách bằng dấu phẩy)"><Input placeholder="VD: Wi-Fi, Điều hòa, Bàn học" /></Form.Item>
+          <Form.Item name="amenities" label="Tiện ích (ngăn cách bằng dấu phẩy)"><Input placeholder="VD: Điều hòa, Bàn học, Tủ đồ" /></Form.Item>
           <Form.Item><Button type="primary" htmlType="submit" block>{editingId ? "Cập nhật" : "Thêm phòng"}</Button></Form.Item>
         </Form>
       </Modal>
@@ -278,9 +346,70 @@ const RoomsPage: React.FC = () => {
             <p><strong>Giá:</strong> <span style={{ color: "#0d9488" }}>{formatPrice(detailModal.price)}/tháng</span></p>
             <p><strong>Trạng thái:</strong> <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag></p>
             {detailModal.description && <p><strong>Mô tả:</strong> {detailModal.description}</p>}
-            {detailModal.amenities?.length ? <p><strong>Tiện ích:</strong> <Space wrap>{detailModal.amenities.map((a) => <Tag key={a} color="cyan">{a}</Tag>)}</Space></p> : null}
+            {(roomFacilities[detailModal._id] || []).length ? (
+              <p>
+                <strong>CSVC phòng:</strong>{" "}
+                <Space wrap>
+                  {(roomFacilities[detailModal._id] || []).map((x) => (
+                    <Tag key={`${detailModal._id}-${x.name}`} color="cyan">
+                      {x.name}{x.quantity > 0 ? ` (${x.quantity})` : ""}
+                    </Tag>
+                  ))}
+                </Space>
+              </p>
+            ) : null}
+            <Button style={{ marginTop: 8 }} onClick={() => openResidents(detailModal)}>
+              Xem sinh viên trong phòng
+            </Button>
           </div>
         )}
+      </Modal>
+      <Modal
+        title={`Sinh viên phòng ${residentModal.room?.roomNumber || ""}`}
+        open={residentModal.open}
+        onCancel={() => setResidentModal({ open: false, residents: [], loading: false, roomId: undefined, settingLeaderUserId: undefined })}
+        footer={[<Button key="close" onClick={() => setResidentModal({ open: false, residents: [], loading: false, roomId: undefined, settingLeaderUserId: undefined })}>Đóng</Button>]}
+      >
+        <p style={{ marginBottom: 12 }}>
+          <strong>Khu:</strong> {residentModal.room?.area?.name || "-"} |{" "}
+          <strong>Sức chứa:</strong> {residentModal.room?.currentOccupancy ?? 0}/{residentModal.room?.capacity ?? 0}
+        </p>
+        <List
+          loading={residentModal.loading}
+          locale={{ emptyText: "Phòng này chưa có sinh viên ở" }}
+          dataSource={residentModal.residents}
+          renderItem={(it) => (
+            <List.Item>
+              <List.Item.Meta
+                title={
+                  <Space>
+                    <span>{it.user?.fullName || "-"}</span>
+                    {it.isRoomLeader ? <Tag color="gold">Trưởng phòng</Tag> : null}
+                    <Tag color={it.status === "active" ? "green" : "blue"}>{it.status === "active" ? "Đang ở" : "Chờ thanh toán"}</Tag>
+                  </Space>
+                }
+                description={
+                  <Space direction="vertical" size={6}>
+                    <span>
+                      MSSV: {it.user?.studentId || "-"} | SĐT: {it.user?.phone || "-"} | Email: {it.user?.email || "-"}
+                    </span>
+                    <div>
+                      <Button
+                        size="small"
+                        type={it.isRoomLeader ? "default" : "primary"}
+                        disabled={!!it.isRoomLeader}
+                        loading={residentModal.settingLeaderUserId === it.user?._id}
+                        onClick={() => setRoomLeader(it)}
+                      >
+                        {it.isRoomLeader ? "Đang là trưởng phòng" : "Chọn làm trưởng phòng"}
+                      </Button>
+                    </div>
+                  </Space>
+                }
+              />
+            </List.Item>
+          )}
+        />
       </Modal>
     </div>
   );
