@@ -7,6 +7,8 @@ router.get("/", roomController.getAll);
 router.get("/:id", roomController.getById);
 
 router.use(auth, requireRole("admin", "manager"));
+router.get("/:id/residents", roomController.getResidents);
+router.put("/:id/room-leader", roomController.setRoomLeader);
 router.post("/", roomController.create);
 router.put("/:id", roomController.update);
 router.delete("/:id", roomController.delete);

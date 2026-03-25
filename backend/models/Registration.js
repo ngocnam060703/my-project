@@ -4,6 +4,9 @@ const registrationSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     room: { type: mongoose.Schema.Types.ObjectId, ref: "Room", required: true },
+    registrationType: { type: String, enum: ["dorm", "transfer"], default: "dorm" },
+    fromRoom: { type: mongoose.Schema.Types.ObjectId, ref: "Room", default: null },
+    currentContract: { type: mongoose.Schema.Types.ObjectId, ref: "Contract", default: null },
     semester: { type: String, required: true },
     schoolYear: { type: String, required: true },
     startDate: { type: Date, default: Date.now },

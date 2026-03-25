@@ -10,5 +10,6 @@ router.put("/:id/paid", auth, billController.markPaid);
 router.use(auth, requireRole("admin", "manager"));
 router.get("/", billController.getAll);
 router.post("/", billController.create);
+router.post("/generate", billController.generateByMonth);
 
 module.exports = router;

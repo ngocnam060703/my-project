@@ -21,6 +21,11 @@ const studentDashboardRoutes = require("./routes/studentDashboardRoutes");
 const registrationPeriodRoutes = require("./routes/registrationPeriodRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const damageReportRoutes = require("./routes/damageReportRoutes");
+const facilityRoutes = require("./routes/facilityRoutes");
+const facilityReportRoutes = require("./routes/facilityReportRoutes");
+const serviceRoutes = require("./routes/serviceRoutes");
+const roomCostRoutes = require("./routes/roomCostRoutes");
+const violationRoutes = require("./routes/violationRoutes");
 
 const app = express();
 /** CRA/webpack proxy gửi X-Forwarded-For → express-rate-limit v8 sẽ lỗi nếu không trust proxy */
@@ -63,6 +68,11 @@ app.use("/api/student-dashboard", studentDashboardRoutes);
 app.use("/api/registration-periods", registrationPeriodRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/damage-reports", damageReportRoutes);
+app.use("/api/facilities", facilityRoutes);
+app.use("/api/facility-reports", facilityReportRoutes);
+app.use("/api/services", serviceRoutes);
+app.use("/api/room-costs", roomCostRoutes);
+app.use("/api/violations", violationRoutes);
 app.use("/api/ratings", ratingRoutes);
 
 // Lỗi parse JSON body (body-parser) — trước đây bị middleware dưới trả 500 gây nhầm.

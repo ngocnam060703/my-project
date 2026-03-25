@@ -10,6 +10,10 @@ import {
   FileAddOutlined,
   FileTextOutlined,
   DollarOutlined,
+  ToolOutlined,
+  AppstoreOutlined,
+  ThunderboltOutlined,
+  ExclamationCircleOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   BulbOutlined,
@@ -36,6 +40,9 @@ const AdminLayout: React.FC = () => {
     { key: "/admin/registrations", icon: <FileAddOutlined />, label: "Xét duyệt đơn" },
     { key: "/admin/contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
     { key: "/admin/bills", icon: <DollarOutlined />, label: "Hóa đơn" },
+    { key: "/admin/violations", icon: <ExclamationCircleOutlined />, label: "Vi phạm kỷ luật" },
+    { key: "/admin/services", icon: <AppstoreOutlined />, label: "Dịch vụ" },
+    { key: "/admin/facilities", icon: <ToolOutlined />, label: "Quản lý CSVC" },
   ];
 
   const userMenu: MenuProps["items"] = [

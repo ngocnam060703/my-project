@@ -2,14 +2,18 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Row, Col, Card, Select, InputNumber, Button, Tag, Spin, Empty, message, Space, Skeleton, Statistic } from "antd";
 import { DeleteOutlined, ApartmentOutlined, FilterOutlined } from "@ant-design/icons";
-import { roomsApi, areasApi } from "../../api";
-import type { Area, Room } from "../../types";
+import { roomsApi, areasApi, contractsApi } from "../../api";
+import type { Area, Contract, Room } from "../../types";
+
+const withoutWifi = (arr: string[] = []) =>
+  arr.map((s) => String(s || "").trim()).filter(Boolean).filter((s) => !/^wi-?fi$/i.test(s));
 
 const RoomsPage: React.FC = () => {
   const navigate = useNavigate();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeContract, setActiveContract] = useState<Contract | null>(null);
   const [filters, setFilters] = useState<{
     area?: string;
     status?: "available" | "full" | "maintenance";
@@ -47,7 +51,18 @@ const RoomsPage: React.FC = () => {
     }
   };
 
-  useEffect(() => { loadAreas(); }, []);
+  const loadMembership = async () => {
+    try {
+      const res = await contractsApi.getMy();
+      const contracts = (res.data || []) as Contract[];
+      const active = contracts.find((c) => c.status === "active" || c.status === "pending_payment") || null;
+      setActiveContract(active);
+    } catch {
+      setActiveContract(null);
+    }
+  };
+
+  useEffect(() => { loadAreas(); void loadMembership(); }, []);
   useEffect(() => { loadRooms(); }, [filters]);
 
   const getRoomStatus = (r: Room) => {
@@ -174,9 +189,10 @@ const RoomsPage: React.FC = () => {
                       <Button
                         type="link"
                         key="register"
-                        onClick={() => navigate(`/student/dorm-registration?roomId=${r._id}`)}
+                        disabled={!activeContract}
+                        onClick={() => navigate(`/student/room-transfer?roomId=${r._id}`)}
                       >
-                        Đăng ký nội trú
+                        Đăng ký chuyển phòng
                       </Button>
                     ),
                   ].filter(Boolean) as React.ReactNode[]}
@@ -193,9 +209,9 @@ const RoomsPage: React.FC = () => {
                   <p style={{ marginBottom: 10 }}>
                     <strong>Tầng:</strong> {r.floor}
                   </p>
-                  {!!r.amenities?.length && (
+                  {!!withoutWifi(r.amenities || []).length && (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {r.amenities.slice(0, 5).map((a) => (
+                      {withoutWifi(r.amenities || []).slice(0, 5).map((a) => (
                         <Tag key={a} color="cyan">{a}</Tag>
                       ))}
                     </div>

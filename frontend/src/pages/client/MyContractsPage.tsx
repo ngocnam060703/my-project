@@ -6,7 +6,7 @@ import { authApi, contractsApi } from "../../api";
 import type { Contract } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
-  pending_payment: { color: "gold", text: "Chưa hiệu lực (chờ ký + xác nhận thanh toán)" },
+  pending_payment: { color: "gold", text: "Chưa hiệu lực (chờ admin xác nhận)" },
   active: { color: "green", text: "Có hiệu lực" },
   expired: { color: "default", text: "Hết hạn" },
   terminated: { color: "red", text: "Đã chấm dứt" },
@@ -54,7 +54,7 @@ const MyContractsPage: React.FC = () => {
               onClick={async () => {
                 try {
                   await contractsApi.sign(r._id);
-                  message.success("Đã ký xác nhận. Chờ admin xác nhận thanh toán.");
+                  message.success("Đã ký xác nhận. Chờ admin xác nhận.");
                   const res = await contractsApi.getMy();
                   setData(res.data || []);
                 } catch (err: unknown) {
@@ -110,7 +110,7 @@ const MyContractsPage: React.FC = () => {
             columns={columns}
             dataSource={data}
             rowKey="_id"
-            pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hợp đồng` }}
+            pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hợp đồng/năm` }}
             size="middle"
           />
         )}
@@ -130,7 +130,7 @@ const MyContractsPage: React.FC = () => {
                 onClick={async () => {
                   try {
                     await contractsApi.sign(detailModal._id);
-                    message.success("Đã ký xác nhận. Chờ admin xác nhận thanh toán.");
+                    message.success("Đã ký xác nhận. Chờ admin xác nhận.");
                     const res = await contractsApi.getMy();
                     setData(res.data || []);
                     setDetailModal((prev) => (prev ? { ...prev, signedAt: new Date().toISOString() } : prev));
@@ -231,7 +231,7 @@ const MyContractsPage: React.FC = () => {
                 <strong>ĐẠI DIỆN BÊN A</strong>
                 <div>(Ký, ghi rõ họ tên)</div>
                 <div style={{ marginTop: 16, minHeight: 24 }}>
-                  {detailModal.status === "active" ? "Đã xác nhận thanh toán - Hợp đồng có hiệu lực" : "Chờ admin xác nhận"}
+                  {detailModal.status === "active" ? "Đã ký - Hợp đồng có hiệu lực" : "Chờ admin xác nhận"}
                 </div>
               </div>
             </div>
@@ -244,8 +244,8 @@ const MyContractsPage: React.FC = () => {
               <p style={{ color: "#ad6800" }}>
                 <strong>Hướng dẫn:</strong>{" "}
                 {detailModal.signedAt
-                  ? "Bạn đã ký xác nhận, vui lòng chờ admin xác nhận thanh toán để trở thành thành viên KTX."
-                  : "Vui lòng bấm 'Ký xác nhận hợp đồng' sau khi thanh toán để admin duyệt kích hoạt hợp đồng."}
+                  ? "Bạn đã ký xác nhận, vui lòng chờ admin xác nhận để trở thành thành viên KTX."
+                  : "Vui lòng bấm 'Ký xác nhận hợp đồng' để admin trở thành thành viên của ktx."}
               </p>
             )}
           </div>

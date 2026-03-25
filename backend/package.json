@@ -7,6 +7,8 @@
     "dev": "node index.js",
     "start": "node index.js",
     "seed": "node scripts/seed.js",
+    "seed:facilities": "node scripts/seedFacilitiesFromRooms.js",
+    "seed:violations": "node scripts/seedViolationRules.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

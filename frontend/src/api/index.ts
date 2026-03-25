@@ -15,6 +15,8 @@ export const roomsApi = {
   getAll: (params?: { area?: string; status?: string; available?: string; minPrice?: number; maxPrice?: number; minCapacity?: number; capacity?: number; roomNumber?: string; sortBy?: string; sortOrder?: "asc" | "desc"; page?: number; limit?: number }) =>
     client.get("/rooms", { params }),
   getById: (id: string) => client.get(`/rooms/${id}`),
+  getResidents: (id: string) => client.get(`/rooms/${id}/residents`),
+  setRoomLeader: (id: string, userId: string) => client.put(`/rooms/${id}/room-leader`, { userId }),
   create: (data: Record<string, unknown>) => client.post("/rooms", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/rooms/${id}`, data),
   delete: (id: string) => client.delete(`/rooms/${id}`),
@@ -22,8 +24,10 @@ export const roomsApi = {
 
 export const registrationsApi = {
   getMy: () => client.get("/registrations/my"),
-  create: (data: { room: string; semester: string; schoolYear: string; startDate: string }) =>
+  create: (data: { room: string; semester: string; schoolYear: string; startDate: string; registrationType?: "dorm" | "transfer" }) =>
     client.post("/registrations", data),
+  createTransfer: (data: { room: string; startDate?: string; semester?: string; schoolYear?: string }) =>
+    client.post("/registrations", { ...data, registrationType: "transfer" }),
   cancel: (id: string) => client.put(`/registrations/${id}/cancel`),
   getAll: (params?: { status?: string; page?: number; limit?: number }) =>
     client.get("/registrations", { params }),
@@ -48,10 +52,11 @@ export const contractsApi = {
 export const billsApi = {
   getMy: () => client.get("/bills/my"),
   markPaid: (id: string) => client.put(`/bills/${id}/paid`),
-  getAll: (params?: { status?: string; month?: number; year?: number; page?: number; limit?: number }) =>
+  getAll: (params?: { status?: string; room?: string; month?: number; year?: number; billType?: "monthly" | "penalty"; page?: number; limit?: number }) =>
     client.get("/bills", { params }),
-  create: (data: { contract: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; otherFee?: number; dueDate?: string }) =>
+  create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; otherFee?: number; dueDate?: string }) =>
     client.post("/bills", data),
+  generate: (data: { month: number; year: number; dueDate?: string }) => client.post("/bills/generate", data),
 };
 
 export const usersApi = {
@@ -94,6 +99,67 @@ export const notificationsApi = {
 
 export const damageReportsApi = {
   getMy: () => client.get("/damage-reports/my"),
+  getRoomDevices: (roomId: string) => client.get(`/damage-reports/room/${roomId}/devices`),
   create: (data: { room: string; device: string; description: string; images?: string[] }) =>
     client.post("/damage-reports", data),
+};
+
+export const facilitiesApi = {
+  // Student
+  getMyRoom: () => client.get("/facilities/my-room"),
+  // Admin
+  getStats: () => client.get("/facilities/stats"),
+  getAll: (params?: { q?: string; category?: string; status?: string; page?: number; limit?: number }) =>
+    client.get("/facilities", { params }),
+  getLocations: (params?: { roomId?: string; areaId?: string; facilityId?: string; page?: number; limit?: number }) =>
+    client.get("/facilities/locations", { params }),
+  create: (data: { name: string; code: string; category?: string; status?: string; quantityTotal?: number }) =>
+    client.post("/facilities", data),
+  update: (id: string, data: Record<string, unknown>) => client.put(`/facilities/${id}`, data),
+  delete: (id: string) => client.delete(`/facilities/${id}`),
+  assignLocation: (data: { facilityId: string; areaId?: string; floor?: number; roomId: string; quantity: number }) =>
+    client.post("/facilities/locations", data),
+  updateLocation: (id: string, data: { quantity: number }) => client.put(`/facilities/locations/${id}`, data),
+  deleteLocation: (id: string) => client.delete(`/facilities/locations/${id}`),
+};
+
+export const facilityReportsApi = {
+  // Student
+  getMy: () => client.get("/facility-reports/my"),
+  getRoomFacilities: (roomId: string) => client.get(`/facility-reports/room/${roomId}/facilities`),
+  create: (data: { facilityId: string; roomId: string; description: string }) =>
+    client.post("/facility-reports", data),
+  // Admin
+  getAll: (params?: { status?: string; room?: string; page?: number; limit?: number }) =>
+    client.get("/facility-reports", { params }),
+  approve: (id: string, adminNote?: string) => client.put(`/facility-reports/${id}/approve`, { adminNote }),
+  reject: (id: string, adminNote: string) => client.put(`/facility-reports/${id}/reject`, { adminNote }),
+  done: (id: string, adminNote?: string) => client.put(`/facility-reports/${id}/done`, { adminNote }),
+};
+
+export const servicesApi = {
+  getAll: (params?: { type?: "common" | "personal"; activeOnly?: string }) => client.get("/services", { params }),
+  create: (data: { name: string; type: "common" | "personal"; price: number; unit: "monthly" | "once"; description?: string; isActive?: boolean }) =>
+    client.post("/services", data),
+  update: (id: string, data: Record<string, unknown>) => client.put(`/services/${id}`, data),
+  toggle: (id: string) => client.put(`/services/${id}/toggle`),
+  getMyRegistrations: (params?: { month?: number; year?: number }) => client.get("/services/my-registrations", { params }),
+  upsertMyRegistration: (data: { serviceId: string; month: number; year: number; quantity?: number; enabled?: boolean }) =>
+    client.post("/services/my-registrations", data),
+};
+
+export const roomCostsApi = {
+  getAll: (params?: { month?: number; year?: number }) => client.get("/room-costs", { params }),
+  upsert: (data: { roomId: string; month: number; year: number; electricityFee: number; waterFee: number; note?: string }) =>
+    client.post("/room-costs", data),
+};
+
+export const violationsApi = {
+  getRules: () => client.get("/violations/rules"),
+  getMy: () => client.get("/violations/my"),
+  getMyStats: (params: { schoolYear: string; semester: string }) => client.get("/violations/my/stats", { params }),
+  getAll: (params?: { user?: string; room?: string; schoolYear?: string; semester?: string; page?: number; limit?: number }) =>
+    client.get("/violations", { params }),
+  getStudentsSummary: (params: { schoolYear: string; semester: string }) => client.get("/violations/students-summary", { params }),
+  create: (data: Record<string, unknown>) => client.post("/violations", data),
 };

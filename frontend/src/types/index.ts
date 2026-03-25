@@ -5,6 +5,8 @@ export interface User {
   role: string;
   phone?: string;
   studentId?: string;
+  gender?: string;
+  citizenId?: string;
   dateOfBirth?: string;
   address?: string;
 }
@@ -33,6 +35,9 @@ export interface Registration {
   _id: string;
   user: User;
   room: Room;
+  registrationType?: "dorm" | "transfer";
+  fromRoom?: Room;
+  currentContract?: { _id: string; contractNumber?: string; status?: string };
   semester: string;
   schoolYear: string;
   startDate?: string;
@@ -64,9 +69,57 @@ export interface Bill {
   electricityFee: number;
   waterFee: number;
   otherFee?: number;
+  sharedCommonFee?: number;
+  personalServiceFee?: number;
+  occupants?: number;
   total: number;
   status: string;
   dueDate: string;
   paidAt?: string;
   note?: string;
+  billType?: "monthly" | "penalty";
+  violation?: string | { _id?: string; ruleName?: string; description?: string; fineAmount?: number; compensationAmount?: number; createdAt?: string };
+  penaltyBreakdown?: Array<{ label?: string; amount?: number }>;
+  personalServiceBreakdown?: Array<{
+    service?: string;
+    name?: string;
+    unit?: string;
+    quantity?: number;
+    amount?: number;
+  }>;
+}
+
+export interface ViolationRule {
+  _id: string;
+  order: number;
+  code: string;
+  name: string;
+  severity: "light" | "medium" | "heavy";
+  points: number;
+  fineMin: number;
+  fineMax: number;
+  compensationRequired: boolean;
+  compensationNote?: string;
+  handlingAction?: string;
+  canImmediateExpulsion?: boolean;
+}
+
+export interface Violation {
+  _id: string;
+  rule?: ViolationRule | string;
+  user?: User | string;
+  room?: Room | string;
+  semester: string;
+  schoolYear: string;
+  ruleName?: string;
+  severity: string;
+  points: number;
+  fineAmount: number;
+  compensationAmount: number;
+  description?: string;
+  images?: string[];
+  splitToRoom?: boolean;
+  noIndividualPoints?: boolean;
+  immediateExpulsion?: boolean;
+  createdAt?: string;
 }
