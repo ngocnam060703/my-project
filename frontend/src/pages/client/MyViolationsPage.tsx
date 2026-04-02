@@ -10,6 +10,16 @@ const severityVi: Record<string, string> = {
   heavy: "Nặng",
 };
 
+const actionTypeVi: Record<string, string> = {
+  warning: "Cảnh cáo / nhắc nhở",
+  fine: "Phạt tiền",
+  expulsion: "Buộc rời KTX",
+};
+
+function isPending(r: Violation) {
+  return !r.status || r.status === "pending";
+}
+
 function defaultSchoolYear(): string {
   const d = new Date();
   const y = d.getFullYear();
@@ -67,12 +77,17 @@ const MyViolationsPage: React.FC = () => {
       </Space>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
-        <Col xs={24} md={12}>
+        <Col xs={24} md={8}>
+          <Card>
+            <Statistic title="Số lần vi phạm (đã ghi)" value={items.length} suffix="lần" />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
           <Card>
             <Statistic title="Tổng điểm vi phạm (kỳ đã chọn)" value={stats?.totalPoints ?? 0} suffix="điểm" />
           </Card>
         </Col>
-        <Col xs={24} md={12}>
+        <Col xs={24} md={8}>
           <Card>
             <div style={{ color: "#64748b", fontSize: 13 }}>Mức xử lý gợi ý</div>
             <Tag color="blue" style={{ marginTop: 8, fontSize: 14, padding: "4px 10px" }}>
@@ -103,12 +118,37 @@ const MyViolationsPage: React.FC = () => {
             rowKey="_id"
             dataSource={items}
             pagination={{ pageSize: 10 }}
+            scroll={{ x: 980 }}
             columns={[
               { title: "Ngày", key: "d", width: 170, render: (_: unknown, r: Violation) => (r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN") : "-") },
               { title: "Vi phạm", dataIndex: "ruleName", ellipsis: true },
-              { title: "Mức độ", dataIndex: "severity", width: 110, render: (s: string) => severityVi[s] || s },
-              { title: "Điểm", dataIndex: "points", width: 70 },
-              { title: "Phạt", dataIndex: "fineAmount", width: 110, render: (n: number) => `${(n || 0).toLocaleString("vi-VN")}đ` },
+              { title: "Mức độ", dataIndex: "severity", width: 100, render: (s: string) => severityVi[s] || s },
+              { title: "Điểm", dataIndex: "points", width: 64 },
+              {
+                title: "Trạng thái xử lý",
+                key: "st",
+                width: 120,
+                render: (_: unknown, r: Violation) =>
+                  isPending(r) ? <Tag color="orange">Chờ xử lý</Tag> : <Tag color="success">Đã xử lý</Tag>,
+              },
+              {
+                title: "Quyết định",
+                key: "res",
+                width: 140,
+                ellipsis: true,
+                render: (_: unknown, r: Violation) =>
+                  r.resolution ? actionTypeVi[r.resolution.actionType] || r.resolution.actionType : "—",
+              },
+              {
+                title: "Phạt (quyết định)",
+                key: "pen",
+                width: 130,
+                render: (_: unknown, r: Violation) =>
+                  r.resolution?.penaltyAmount && r.resolution.penaltyAmount > 0
+                    ? `${r.resolution.penaltyAmount.toLocaleString("vi-VN")}đ`
+                    : "—",
+              },
+              { title: "Phạt (ghi nhận)", dataIndex: "fineAmount", width: 120, render: (n: number) => `${(n || 0).toLocaleString("vi-VN")}đ` },
               { title: "Bồi thường", dataIndex: "compensationAmount", width: 110, render: (n: number) => `${(n || 0).toLocaleString("vi-VN")}đ` },
               {
                 title: "Phòng",

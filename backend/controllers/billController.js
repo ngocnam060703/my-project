@@ -65,6 +65,31 @@ async function buildPersonalFeeForUser({ userId, month, year }) {
   return { total, breakdown };
 }
 
+/** Ghi điện/nước đã dùng khi lập HĐ vào RoomMonthlyCost để màn phòng & sinh hàng loạt luôn khớp. */
+async function syncRoomMonthlyUtilityCost({ roomId, month, year, electricityFee, waterFee, userId }) {
+  const m = Number(month);
+  const y = Number(year);
+  const elec = Math.max(0, Number(electricityFee || 0));
+  const water = Math.max(0, Number(waterFee || 0));
+  await RoomMonthlyCost.findOneAndUpdate(
+    { room: roomId, month: m, year: y },
+    {
+      $set: {
+        electricityFee: elec,
+        waterFee: water,
+        enteredBy: userId,
+      },
+      $setOnInsert: {
+        room: roomId,
+        month: m,
+        year: y,
+        note: "",
+      },
+    },
+    { upsert: true, new: true, runValidators: true }
+  );
+}
+
 exports.getAll = async (req, res) => {
   try {
     const { status, user, room, month, year, billType, page = 1, limit = 20 } = req.query;
@@ -148,6 +173,15 @@ exports.create = async (req, res) => {
         commonBreakdown.push({ service: s._id, name: s.name, unit: s.unit, totalAmount: amt });
       }
 
+      await syncRoomMonthlyUtilityCost({
+        roomId,
+        month: m,
+        year: y,
+        electricityFee: electricityTotal,
+        waterFee: waterTotal,
+        userId: req.user._id,
+      });
+
       const io = getIO();
       let created = 0;
       let skipped = 0;
@@ -219,6 +253,14 @@ exports.create = async (req, res) => {
       otherFee: Number(otherFee || 0),
       total,
       dueDate: due,
+    });
+    await syncRoomMonthlyUtilityCost({
+      roomId: contractDoc.room._id,
+      month: m,
+      year: y,
+      electricityFee: Number(electricityFee || 0),
+      waterFee: Number(waterFee || 0),
+      userId: req.user._id,
     });
     const io = getIO();
     io.emit("bill:new", { userId: String(contractDoc.user._id), message: "Bạn có hóa đơn mới" });

@@ -104,6 +104,18 @@ export interface ViolationRule {
   canImmediateExpulsion?: boolean;
 }
 
+export type ViolationStatus = "pending" | "resolved";
+
+export type DisciplinaryActionType = "warning" | "fine" | "expulsion";
+
+export interface ViolationResolution {
+  actionType: DisciplinaryActionType;
+  penaltyAmount?: number;
+  note?: string;
+  resolvedAt?: string;
+  resolvedBy?: User | string;
+}
+
 export interface Violation {
   _id: string;
   rule?: ViolationRule | string;
@@ -122,4 +134,8 @@ export interface Violation {
   noIndividualPoints?: boolean;
   immediateExpulsion?: boolean;
   createdAt?: string;
+  recordedBy?: User | string;
+  bill?: string | { _id?: string };
+  status?: ViolationStatus;
+  resolution?: ViolationResolution | null;
 }

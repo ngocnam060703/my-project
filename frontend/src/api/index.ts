@@ -158,8 +158,26 @@ export const violationsApi = {
   getRules: () => client.get("/violations/rules"),
   getMy: () => client.get("/violations/my"),
   getMyStats: (params: { schoolYear: string; semester: string }) => client.get("/violations/my/stats", { params }),
-  getAll: (params?: { user?: string; room?: string; schoolYear?: string; semester?: string; page?: number; limit?: number }) =>
-    client.get("/violations", { params }),
+  getAll: (params?: {
+    user?: string;
+    room?: string;
+    schoolYear?: string;
+    semester?: string;
+    search?: string;
+    severity?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+  }) => client.get("/violations", { params }),
+  getById: (id: string) => client.get(`/violations/${id}`),
   getStudentsSummary: (params: { schoolYear: string; semester: string }) => client.get("/violations/students-summary", { params }),
   create: (data: Record<string, unknown>) => client.post("/violations", data),
+  update: (id: string, data: Record<string, unknown>) => client.put(`/violations/${id}`, data),
+  remove: (id: string) => client.delete(`/violations/${id}`),
+};
+
+export const disciplinaryApi = {
+  resolve: (data: { violationId: string; actionType: string; penaltyAmount?: number; note?: string }) =>
+    client.post("/disciplinary", data),
+  get: (violationId: string) => client.get(`/disciplinary/${violationId}`),
 };

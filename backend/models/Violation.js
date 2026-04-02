@@ -1,5 +1,16 @@
 const mongoose = require("mongoose");
 
+const resolutionSchema = new mongoose.Schema(
+  {
+    actionType: { type: String, enum: ["warning", "fine", "expulsion"], required: true },
+    penaltyAmount: { type: Number, default: 0, min: 0 },
+    note: { type: String, default: "" },
+    resolvedAt: { type: Date, required: true },
+    resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  },
+  { _id: false }
+);
+
 const violationSchema = new mongoose.Schema(
   {
     rule: { type: mongoose.Schema.Types.ObjectId, ref: "ViolationRule", required: true },
@@ -24,11 +35,16 @@ const violationSchema = new mongoose.Schema(
     batchId: { type: mongoose.Schema.Types.ObjectId, default: null },
     recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     bill: { type: mongoose.Schema.Types.ObjectId, ref: "Bill", default: null },
+    /** pending: chờ xử lý chính thức | resolved: đã có quyết định kỷ luật */
+    status: { type: String, enum: ["pending", "resolved"], default: "pending" },
+    /** Một vi phạm chỉ một lần xử lý (khi resolved) */
+    resolution: { type: resolutionSchema, default: undefined },
   },
   { timestamps: true }
 );
 
 violationSchema.index({ user: 1, schoolYear: 1, semester: 1 });
 violationSchema.index({ room: 1, createdAt: -1 });
+violationSchema.index({ status: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Violation", violationSchema);

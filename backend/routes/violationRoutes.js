@@ -1,6 +1,7 @@
 const express = require("express");
 const violationController = require("../controllers/violationController");
 const { auth, requireRole } = require("../middleware/auth");
+const { updateViolationRules } = require("../validators/violationValidators");
 
 const router = express.Router();
 
@@ -12,6 +13,9 @@ router.get("/my/stats", auth, requireRole("user"), violationController.getMyDisc
 router.use(auth, requireRole("admin", "manager"));
 router.get("/", violationController.getAllViolations);
 router.get("/students-summary", violationController.getStudentSummary);
+router.get("/:id", violationController.getViolationById);
+router.put("/:id", updateViolationRules, violationController.updateViolation);
+router.delete("/:id", violationController.deleteViolation);
 router.post("/", violationController.createViolation);
 
 module.exports = router;
