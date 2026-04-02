@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getToken, clearSessionAuth, clearLegacyLocalAuth, hasToken } from "../utils/authStorage";
 
 /** Chuẩn hóa base URL: nhiều người cấu hình thiếu /api → mọi request 404. */
 function normalizeApiBaseUrl(raw: string | undefined): string {
@@ -41,7 +42,7 @@ const client = axios.create({
 });
 
 client.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
+  const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -58,13 +59,13 @@ client.interceptors.response.use(
       /\/auth\/register\b/i.test(fullPath) ||
       requestUrl.includes("/auth/login") ||
       requestUrl.includes("/auth/register");
-    const hasToken = !!localStorage.getItem("token");
+    const hadToken = hasToken();
 
     // Only force logout for expired/invalid authenticated sessions.
     // Do not redirect for login/register failures.
-    if (status === 401 && hasToken && !isAuthEndpoint) {
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
+    if (status === 401 && hadToken && !isAuthEndpoint) {
+      clearSessionAuth();
+      clearLegacyLocalAuth();
       window.location.href = "/login";
     }
     return Promise.reject(err);

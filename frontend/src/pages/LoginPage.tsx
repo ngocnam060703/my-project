@@ -4,6 +4,7 @@ import { Form, Input, Button, Card, message } from "antd";
 import { UserOutlined, LockOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import { getUserString } from "../utils/authStorage";
 
 const LoginPage: React.FC = () => {
   useDocumentTitle("Đăng nhập");
@@ -50,7 +51,7 @@ const LoginPage: React.FC = () => {
     setLoading(true);
     try {
       await login(v.email, v.password);
-      const userStr = localStorage.getItem("user");
+      const userStr = getUserString();
       if (!userStr) throw new Error("Không lấy được thông tin người dùng sau đăng nhập");
 
       const user = JSON.parse(userStr);

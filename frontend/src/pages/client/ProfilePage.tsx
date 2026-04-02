@@ -25,6 +25,7 @@ import dayjs from "dayjs";
 import { EditOutlined, HomeOutlined, UserOutlined, IdcardOutlined, BookOutlined, PhoneOutlined } from "@ant-design/icons";
 import { authApi, studentDashboardApi } from "../../api";
 import { useAuth } from "../../contexts/AuthContext";
+import { setUserString } from "../../utils/authStorage";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -149,7 +150,7 @@ const ProfilePage: React.FC = () => {
         fullName: p.fullName ?? prev?.fullName ?? "",
         role: p.role ?? prev?.role ?? "user",
       };
-      localStorage.setItem("user", JSON.stringify(merged));
+      setUserString(JSON.stringify(merged));
       return merged;
     });
   }, [setUser]);

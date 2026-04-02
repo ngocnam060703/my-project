@@ -1,5 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, Dispatch, SetStateAction } from "react";
 import { authApi } from "../api";
+import {
+  getToken,
+  getUserString,
+  setToken,
+  setUserString,
+  clearSessionAuth,
+  clearLegacyLocalAuth,
+} from "../utils/authStorage";
 
 interface User {
   id?: string;
@@ -33,18 +41,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    const savedUser = localStorage.getItem("user");
+    const token = getToken();
+    const savedUser = getUserString();
     if (token && savedUser) {
       setUser(JSON.parse(savedUser));
-      authApi.getProfile().then((res) => {
-        setUser(res.data);
-        localStorage.setItem("user", JSON.stringify(res.data));
-      }).catch(() => {
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
-        setUser(null);
-      }).finally(() => setLoading(false));
+      authApi
+        .getProfile()
+        .then((res) => {
+          setUser(res.data);
+          setUserString(JSON.stringify(res.data));
+        })
+        .catch(() => {
+          clearSessionAuth();
+          setUser(null);
+        })
+        .finally(() => setLoading(false));
     } else {
       setLoading(false);
     }
@@ -52,9 +63,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const login = async (email: string, password: string) => {
     const normalizedEmail = email.trim().toLowerCase();
-    // Xóa token cũ trước khi đăng nhập để request không gửi Bearer hết hạn (tránh lỗi lạ từ API khác song song).
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
+    clearSessionAuth();
     setUser(null);
     const res = await authApi.login({ email: normalizedEmail, password });
     const raw = res?.data;
@@ -81,14 +90,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       role: String(u.role ?? "user"),
     };
 
-    localStorage.setItem("token", token);
-    localStorage.setItem("user", JSON.stringify(merged));
+    setToken(token);
+    setUserString(JSON.stringify(merged));
+    clearLegacyLocalAuth();
     setUser(merged);
   };
 
   const logout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
+    clearSessionAuth();
     setUser(null);
   };
 
