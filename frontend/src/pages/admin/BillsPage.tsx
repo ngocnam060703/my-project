@@ -13,6 +13,13 @@ const statusMap: Record<string, { color: string; text: string }> = {
 
 const formatMoney = (v: number | undefined) => (v ?? 0).toLocaleString("vi-VN") + "đ";
 
+const paymentMethodLabel = (m?: string) => {
+  if (m === "online") return "Thanh toán online";
+  if (m === "counter") return "Thu tại quầy";
+  if (m === "manual") return "Xác nhận / chuyển khoản";
+  return "—";
+};
+
 type PersonalLine = NonNullable<Bill["personalServiceBreakdown"]>[number];
 
 const formatPersonalServiceLine = (it: PersonalLine) => {
@@ -448,6 +455,14 @@ const BillsPage: React.FC = () => {
             <hr style={{ margin: "12px 0" }} />
             <p><strong>Hạn thanh toán:</strong> {new Date(detailModal.dueDate).toLocaleDateString("vi-VN")}</p>
             {detailModal.paidAt && <p><strong>Ngày thanh toán:</strong> {new Date(detailModal.paidAt).toLocaleDateString("vi-VN")}</p>}
+            {detailModal.status === "paid" && (
+              <>
+                <p><strong>Phương thức thanh toán:</strong> {paymentMethodLabel(detailModal.paymentMethod)}</p>
+                {detailModal.paymentReference ? (
+                  <p><strong>Mã tham chiếu:</strong> {detailModal.paymentReference}</p>
+                ) : null}
+              </>
+            )}
             <p><strong>Trạng thái:</strong> <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag></p>
           </div>
         )}

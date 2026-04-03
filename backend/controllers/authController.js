@@ -133,6 +133,7 @@ exports.login = async (req, res) => {
       role: String(user.role ?? "user"),
       phone: user.phone != null ? String(user.phone) : "",
       studentId: user.studentId != null ? String(user.studentId) : "",
+      isSuperAdmin: user.role === "admin" ? !!user.isSuperAdmin : false,
     };
     return res.json({ user: safeUser, token });
   } catch (error) {
@@ -171,9 +172,23 @@ exports.updateProfile = async (req, res) => {
     assignIfDefined("major", req.body.major);
     assignIfDefined("gender", req.body.gender);
     assignIfDefined("citizenId", req.body.citizenId);
+    assignIfDefined("faculty", req.body.faculty);
+    assignIfDefined("homeroomTeacher", req.body.homeroomTeacher);
+    assignIfDefined("addressNative", req.body.addressNative);
+    assignIfDefined("addressPermanent", req.body.addressPermanent);
+    assignIfDefined("addressTemporary", req.body.addressTemporary);
+    assignIfDefined("addressAbsent", req.body.addressAbsent);
+    assignIfDefined("familyFatherName", req.body.familyFatherName);
+    assignIfDefined("familyFatherPhone", req.body.familyFatherPhone);
+    assignIfDefined("familyMotherName", req.body.familyMotherName);
+    assignIfDefined("familyMotherPhone", req.body.familyMotherPhone);
+    assignIfDefined("familyEmergencyPhone", req.body.familyEmergencyPhone);
 
     if (req.body.dateOfBirth !== undefined) {
       updates.dateOfBirth = req.body.dateOfBirth ? new Date(req.body.dateOfBirth) : null;
+    }
+    if (req.body.enrollmentDate !== undefined) {
+      updates.enrollmentDate = req.body.enrollmentDate ? new Date(req.body.enrollmentDate) : null;
     }
 
     if (current.role === "user" && req.body.studentId !== undefined) {

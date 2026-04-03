@@ -6,6 +6,7 @@ const router = express.Router();
 
 router.get("/my", auth, billController.getMyBills);
 router.put("/:id/paid", auth, billController.markPaid);
+router.put("/:id/pay-online", auth, billController.payOnline);
 
 router.use(auth, requireRole("admin", "manager"));
 router.get("/", billController.getAll);

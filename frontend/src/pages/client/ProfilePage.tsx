@@ -126,6 +126,18 @@ interface ProfilePayload {
   address?: string;
   citizenId?: string;
   profileComplete?: boolean;
+  faculty?: string;
+  enrollmentDate?: string | null;
+  homeroomTeacher?: string;
+  addressNative?: string;
+  addressPermanent?: string;
+  addressTemporary?: string;
+  addressAbsent?: string;
+  familyFatherName?: string;
+  familyFatherPhone?: string;
+  familyMotherName?: string;
+  familyMotherPhone?: string;
+  familyEmergencyPhone?: string;
 }
 
 const ProfilePage: React.FC = () => {
@@ -190,6 +202,18 @@ const ProfilePage: React.FC = () => {
         phone: p.phone,
         address: p.address,
         citizenId: p.citizenId,
+        faculty: p.faculty,
+        enrollmentDate: p.enrollmentDate ? dayjs(p.enrollmentDate) : undefined,
+        homeroomTeacher: p.homeroomTeacher,
+        addressNative: p.addressNative,
+        addressPermanent: p.addressPermanent,
+        addressTemporary: p.addressTemporary,
+        addressAbsent: p.addressAbsent,
+        familyFatherName: p.familyFatherName,
+        familyFatherPhone: p.familyFatherPhone,
+        familyMotherName: p.familyMotherName,
+        familyMotherPhone: p.familyMotherPhone,
+        familyEmergencyPhone: p.familyEmergencyPhone,
       });
     } catch {
       message.error("Không tải được hồ sơ");
@@ -218,6 +242,18 @@ const ProfilePage: React.FC = () => {
         address: v.address as string,
         citizenId: v.citizenId as string,
         dateOfBirth,
+        faculty: v.faculty as string | undefined,
+        homeroomTeacher: v.homeroomTeacher as string | undefined,
+        enrollmentDate: v.enrollmentDate ? (v.enrollmentDate as dayjs.Dayjs).format("YYYY-MM-DD") : null,
+        addressNative: v.addressNative as string | undefined,
+        addressPermanent: v.addressPermanent as string | undefined,
+        addressTemporary: v.addressTemporary as string | undefined,
+        addressAbsent: v.addressAbsent as string | undefined,
+        familyFatherName: v.familyFatherName as string | undefined,
+        familyFatherPhone: v.familyFatherPhone as string | undefined,
+        familyMotherName: v.familyMotherName as string | undefined,
+        familyMotherPhone: v.familyMotherPhone as string | undefined,
+        familyEmergencyPhone: v.familyEmergencyPhone as string | undefined,
       });
       const updated = res.data as ProfilePayload;
       setProfile(updated);
@@ -279,6 +315,18 @@ const ProfilePage: React.FC = () => {
       phone: profile.phone,
       address: profile.address,
       citizenId: profile.citizenId,
+      faculty: profile.faculty,
+      enrollmentDate: profile.enrollmentDate ? dayjs(profile.enrollmentDate) : undefined,
+      homeroomTeacher: profile.homeroomTeacher,
+      addressNative: profile.addressNative,
+      addressPermanent: profile.addressPermanent,
+      addressTemporary: profile.addressTemporary,
+      addressAbsent: profile.addressAbsent,
+      familyFatherName: profile.familyFatherName,
+      familyFatherPhone: profile.familyFatherPhone,
+      familyMotherName: profile.familyMotherName,
+      familyMotherPhone: profile.familyMotherPhone,
+      familyEmergencyPhone: profile.familyEmergencyPhone,
     });
     setEditingProfile(true);
   };
@@ -453,6 +501,65 @@ const ProfilePage: React.FC = () => {
           <Input size="large" placeholder="012345678901234567" allowClear />
         </Form.Item>
 
+        <FormSectionTitle>Học tập &amp; hồ sơ mở rộng</FormSectionTitle>
+        <Row gutter={[20, 0]}>
+          <Col xs={24} lg={12}>
+            <Form.Item name="faculty" label="Khoa">
+              <Input size="large" placeholder="VD: Công nghệ thông tin" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="homeroomTeacher" label="Giáo viên chủ nhiệm">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="enrollmentDate" label="Ngày nhập học">
+              <DatePicker format="DD/MM/YYYY" style={{ width: "100%" }} size="large" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <Form.Item name="addressNative" label="Quê quán">
+          <Input.TextArea rows={2} placeholder="Địa chỉ quê quán" showCount maxLength={500} />
+        </Form.Item>
+        <Form.Item name="addressPermanent" label="Thường trú">
+          <Input.TextArea rows={2} showCount maxLength={500} />
+        </Form.Item>
+        <Form.Item name="addressTemporary" label="Tạm trú">
+          <Input.TextArea rows={2} showCount maxLength={500} />
+        </Form.Item>
+        <Form.Item name="addressAbsent" label="Tạm vắng (ghi chú)">
+          <Input.TextArea rows={2} showCount maxLength={500} />
+        </Form.Item>
+        <FormSectionTitle>Gia đình &amp; liên hệ khẩn</FormSectionTitle>
+        <Row gutter={[20, 0]}>
+          <Col xs={24} lg={12}>
+            <Form.Item name="familyFatherName" label="Họ tên bố">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="familyFatherPhone" label="SĐT bố">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="familyMotherName" label="Họ tên mẹ">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="familyMotherPhone" label="SĐT mẹ">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={24}>
+            <Form.Item name="familyEmergencyPhone" label="SĐT liên hệ khẩn (gia đình)">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+        </Row>
+
         <Divider style={{ margin: "8px 0 20px" }} />
         <Form.Item style={{ marginBottom: 0 }}>
           <Flex gap="middle" wrap="wrap">
@@ -540,6 +647,9 @@ const ProfilePage: React.FC = () => {
                 <Descriptions {...tabDescProps}>
                   <Descriptions.Item label="Lớp">{profile.className || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Chuyên ngành">{profile.major || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khoa">{profile.faculty || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Ngày nhập học">{formatDateVi(profile.enrollmentDate)}</Descriptions.Item>
+                  <Descriptions.Item label="GVCN">{profile.homeroomTeacher || "—"}</Descriptions.Item>
                 </Descriptions>
               </ProfileTabPanel>
             ),
@@ -552,6 +662,28 @@ const ProfilePage: React.FC = () => {
                 <Descriptions {...tabDescProps}>
                   <Descriptions.Item label="Số điện thoại">{profile.phone?.trim() || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Email">{profile.email || "—"}</Descriptions.Item>
+                </Descriptions>
+              </ProfileTabPanel>
+            ),
+          },
+          {
+            key: "extended",
+            label: tabLabel(<IdcardOutlined />, "Hồ sơ mở rộng"),
+            children: (
+              <ProfileTabPanel>
+                <Descriptions {...tabDescProps}>
+                  <Descriptions.Item label="Khoa">{profile.faculty || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Ngày nhập học">{formatDateVi(profile.enrollmentDate)}</Descriptions.Item>
+                  <Descriptions.Item label="GVCN">{profile.homeroomTeacher || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Quê quán">{profile.addressNative || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Thường trú">{profile.addressPermanent || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Tạm trú">{profile.addressTemporary || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Tạm vắng">{profile.addressAbsent || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Bố — họ tên">{profile.familyFatherName || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Bố — SĐT">{profile.familyFatherPhone || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Mẹ — họ tên">{profile.familyMotherName || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Mẹ — SĐT">{profile.familyMotherPhone || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="SĐT liên hệ khẩn">{profile.familyEmergencyPhone || "—"}</Descriptions.Item>
                 </Descriptions>
               </ProfileTabPanel>
             ),

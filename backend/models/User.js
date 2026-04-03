@@ -18,7 +18,29 @@ const userSchema = new mongoose.Schema(
     citizenId: { type: String, default: "" },
     dateOfBirth: { type: Date, default: null },
     address: { type: String, default: "" },
+    /** Khoa */
+    faculty: { type: String, default: "" },
+    /** Ngày nhập học */
+    enrollmentDate: { type: Date, default: null },
+    /** Giáo viên chủ nhiệm */
+    homeroomTeacher: { type: String, default: "" },
+    /** Quê quán */
+    addressNative: { type: String, default: "" },
+    /** Thường trú */
+    addressPermanent: { type: String, default: "" },
+    /** Tạm trú */
+    addressTemporary: { type: String, default: "" },
+    /** Tạm vắng (ghi chú địa chỉ khi vắng) */
+    addressAbsent: { type: String, default: "" },
+    familyFatherName: { type: String, default: "" },
+    familyFatherPhone: { type: String, default: "" },
+    familyMotherName: { type: String, default: "" },
+    familyMotherPhone: { type: String, default: "" },
+    /** SĐT liên hệ khẩn (gia đình) */
+    familyEmergencyPhone: { type: String, default: "" },
     role: { type: String, enum: ["admin", "manager", "user"], default: "user" },
+    /** Chỉ tài khoản admin cấp cao — được phép tạo/cấp quyền admin */
+    isSuperAdmin: { type: Boolean, default: false },
     avatar: { type: String, default: "" },
     isActive: { type: Boolean, default: true },
     managedArea: { type: mongoose.Schema.Types.ObjectId, ref: "Area", default: null },

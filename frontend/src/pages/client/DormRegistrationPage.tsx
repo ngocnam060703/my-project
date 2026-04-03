@@ -7,9 +7,7 @@ import {
   DatePicker,
   Form,
   Input,
-  Modal,
   Row,
-  Select,
   Space,
   Spin,
   Tag,
@@ -17,19 +15,10 @@ import {
   message,
 } from "antd";
 import dayjs from "dayjs";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { authApi, registrationPeriodsApi, registrationsApi, roomsApi } from "../../api";
+import { useNavigate } from "react-router-dom";
+import { authApi, registrationPeriodsApi, registrationsApi } from "../../api";
 
 const { Title, Text } = Typography;
-
-type RoomOption = {
-  _id: string;
-  roomNumber: string;
-  roomType?: string;
-  capacity: number;
-  currentOccupancy: number;
-  area?: { _id?: string; name?: string };
-};
 
 const REQUIRED_FIELDS = [
   { key: "studentId", label: "MSSV" },
@@ -43,21 +32,11 @@ const REQUIRED_FIELDS = [
 const DormRegistrationPage: React.FC = () => {
   const [form] = Form.useForm();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [user, setUser] = useState<Record<string, unknown> | null>(null);
-  const [rooms, setRooms] = useState<RoomOption[]>([]);
   const [period, setPeriod] = useState<{ name?: string; startDate?: string; endDate?: string } | null>(null);
   const [countdown, setCountdown] = useState("00:00:00");
-
-  const getAreaGenderLabel = (areaName?: string) => {
-    if (!areaName) return "";
-    const normalized = areaName.toLowerCase();
-    if (normalized.includes("nữ") || normalized.includes("nu")) return "Nữ";
-    if (normalized.includes("nam")) return "Nam";
-    return "";
-  };
 
   const missingFields = useMemo(() => {
     if (!user) return REQUIRED_FIELDS.map((f) => f.label);
@@ -71,14 +50,9 @@ const DormRegistrationPage: React.FC = () => {
     const load = async () => {
       setLoading(true);
       try {
-        const [profileRes, periodRes, roomRes] = await Promise.all([
-          authApi.getProfile(),
-          registrationPeriodsApi.getActive(),
-          roomsApi.getAll(),
-        ]);
+        const [profileRes, periodRes] = await Promise.all([authApi.getProfile(), registrationPeriodsApi.getActive()]);
         setUser(profileRes.data || null);
         setPeriod(periodRes.data || null);
-        setRooms(roomRes.data?.rooms || []);
         form.setFieldsValue({
           fullName: profileRes.data?.fullName || "",
           studentId: profileRes.data?.studentId || "",
@@ -86,7 +60,6 @@ const DormRegistrationPage: React.FC = () => {
           phone: profileRes.data?.phone || "",
           address: profileRes.data?.address || "",
           major: profileRes.data?.major || "",
-          room: searchParams.get("roomId") || undefined,
         });
       } catch {
         message.error("Không tải được dữ liệu đăng ký nội trú");
@@ -95,7 +68,7 @@ const DormRegistrationPage: React.FC = () => {
       }
     };
     load();
-  }, [form, searchParams]);
+  }, [form]);
 
   useEffect(() => {
     if (!period?.endDate) return;
@@ -115,32 +88,6 @@ const DormRegistrationPage: React.FC = () => {
     return () => clearInterval(timer);
   }, [period?.endDate]);
 
-  const selectedAreaId = Form.useWatch("areaFilter", form);
-  const selectedCapacity = Form.useWatch("capacityFilter", form);
-
-  const areaOptions = useMemo(() => {
-    const map = new Map<string, string>();
-    rooms.forEach((r) => {
-      const id = r.area?._id;
-      const name = r.area?.name;
-      if (id && name && !map.has(id)) {
-        const gender = getAreaGenderLabel(name);
-        map.set(id, gender ? `${name} (${gender})` : name);
-      }
-    });
-    return Array.from(map.entries()).map(([value, label]) => ({ value, label }));
-  }, [rooms]);
-
-  const filteredRooms = useMemo(() => {
-    return rooms.filter((r) => {
-      const byArea = !selectedAreaId || r.area?._id === selectedAreaId;
-      const byCapacity = !selectedCapacity || String(r.capacity) === String(selectedCapacity);
-      return byArea && byCapacity;
-    });
-  }, [rooms, selectedAreaId, selectedCapacity]);
-
-  const selectedRoom = rooms.find((r) => r._id === form.getFieldValue("room"));
-  const overCapacity = !!selectedRoom && selectedRoom.currentOccupancy >= selectedRoom.capacity;
   const periodOpen = !!period;
   const canSubmit = periodOpen && missingFields.length === 0;
 
@@ -149,36 +96,24 @@ const DormRegistrationPage: React.FC = () => {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      Modal.confirm({
-        title: "Xác nhận gửi đơn đăng ký nội trú",
-        content: overCapacity
-          ? "Xác nhận chọn phòng này, cho dù phòng này vượt quá số lượng đăng ký."
-          : "Xác nhận gửi đơn đăng ký nội trú cho phòng đã chọn?",
-        okText: "Xác nhận gửi",
-        cancelText: "Hủy",
-        onOk: async () => {
-          setSubmitting(true);
-          try {
-            await registrationsApi.create({
-              room: values.room,
-              semester: values.semester,
-              schoolYear: values.schoolYear,
-              startDate: values.startDate?.format?.("YYYY-MM-DD"),
-            });
-            message.success("Đã gửi đơn đăng ký. Trạng thái ban đầu: Chờ duyệt.");
-            navigate("/student/my-registrations");
-          } catch (err: unknown) {
-            message.error(
-              (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-                "Gửi đơn thất bại",
-            );
-          } finally {
-            setSubmitting(false);
-          }
-        },
-      });
+      setSubmitting(true);
+      try {
+        await registrationsApi.create({
+          semester: values.semester,
+          schoolYear: values.schoolYear,
+          startDate: values.startDate?.format?.("YYYY-MM-DD"),
+        });
+        message.success("Đã gửi đơn. Hệ thống đã gán phòng dự kiến; sau khi admin duyệt, bạn sẽ nhận hợp đồng.");
+        navigate("/student/my-registrations");
+      } catch (err: unknown) {
+        message.error(
+          (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Gửi đơn thất bại",
+        );
+      } finally {
+        setSubmitting(false);
+      }
     } catch {
-      // Form validation message handled by antd.
+      // validation
     }
   };
 
@@ -188,6 +123,13 @@ const DormRegistrationPage: React.FC = () => {
         <Title level={3} style={{ marginBottom: 0 }}>
           Đăng ký nội trú
         </Title>
+
+        <Alert
+          type="info"
+          showIcon
+          message="Phân phòng tự động"
+          description="Bạn không chọn phòng. Sau khi gửi đơn, hệ thống gán phòng dự kiến theo giới tính, khu phù hợp và chỗ trống. Admin duyệt xong sẽ tạo hợp đồng."
+        />
 
         {periodOpen ? (
           <Alert
@@ -262,58 +204,17 @@ const DormRegistrationPage: React.FC = () => {
             </Row>
 
             <Row gutter={16}>
-              <Col xs={24} md={12}>
-                <Form.Item name="areaFilter" label="Chọn khu" rules={[{ required: true, message: "Vui lòng chọn khu" }]}>
-                  <Select
-                    placeholder="Chọn khu "
-                    options={areaOptions}
-                    onChange={() => form.setFieldsValue({ room: undefined })}
-                  />
-                </Form.Item>
-              </Col>
-              <Col xs={24} md={12}>
-                <Form.Item
-                  name="capacityFilter"
-                  label="Loại phòng"
-                  rules={[{ required: true, message: "Vui lòng chọn loại phòng" }]}
-                >
-                  <Select
-                    placeholder="Chọn loại phòng"
-                    onChange={() => form.setFieldsValue({ room: undefined })}
-                    options={[
-                      { value: "4", label: "Phòng 4 người" },
-                      { value: "6", label: "Phòng 6 người" },
-                    ]}
-                  />
-                </Form.Item>
-              </Col>
-              <Col xs={24} md={12}>
-                <Form.Item name="room" label="Chọn phòng" rules={[{ required: true, message: "Vui lòng chọn phòng" }]}>
-                  <Select
-                    placeholder="Chọn phòng muốn đăng ký"
-                    disabled={!selectedAreaId || !selectedCapacity}
-                    options={filteredRooms.map((r) => ({
-                      value: r._id,
-                      label: `Phòng ${r.roomNumber}${r.area?.name ? ` - Khu ${r.area.name}${getAreaGenderLabel(r.area?.name) ? ` (${getAreaGenderLabel(r.area?.name)})` : ""}` : ""} - ${r.capacity} người (${r.currentOccupancy}/${r.capacity})`,
-                    }))}
-                  />
-                </Form.Item>
-              </Col>
-              <Col xs={24} md={6}>
+              <Col xs={24} md={8}>
                 <Form.Item name="semester" label="Học kỳ" rules={[{ required: true, message: "Nhập học kỳ" }]}>
-                  <Input placeholder="VD: 1" />
+                  <Input placeholder="VD: HK1" />
                 </Form.Item>
               </Col>
-              <Col xs={24} md={6}>
-                <Form.Item
-                  name="schoolYear"
-                  label="Năm học"
-                  rules={[{ required: true, message: "Nhập năm học" }]}
-                >
+              <Col xs={24} md={8}>
+                <Form.Item name="schoolYear" label="Năm học" rules={[{ required: true, message: "Nhập năm học" }]}>
                   <Input placeholder="VD: 2026-2027" />
                 </Form.Item>
               </Col>
-              <Col xs={24} md={12}>
+              <Col xs={24} md={8}>
                 <Form.Item
                   name="startDate"
                   label="Ngày bắt đầu ở"
@@ -323,16 +224,6 @@ const DormRegistrationPage: React.FC = () => {
                 </Form.Item>
               </Col>
             </Row>
-
-            {overCapacity && (
-              <Alert
-                style={{ marginBottom: 16 }}
-                type="warning"
-                showIcon
-                message="Phòng đang vượt sức chứa"
-                description="Bạn vẫn có thể gửi đơn. Admin sẽ xem xét và quyết định duyệt hoặc từ chối."
-              />
-            )}
 
             <Button type="primary" onClick={handleSubmit} loading={submitting} disabled={!canSubmit}>
               Gửi đơn đăng ký nội trú
@@ -350,4 +241,3 @@ const DormRegistrationPage: React.FC = () => {
 };
 
 export default DormRegistrationPage;
-

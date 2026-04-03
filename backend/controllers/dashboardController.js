@@ -2,6 +2,7 @@ const Room = require("../models/Room");
 const User = require("../models/User");
 const Registration = require("../models/Registration");
 const Bill = require("../models/Bill");
+const Violation = require("../models/Violation");
 
 exports.getStats = async (req, res) => {
   try {
@@ -12,6 +13,7 @@ exports.getStats = async (req, res) => {
     const pendingRegistrations = await Registration.countDocuments({ status: "pending" });
     const pendingBills = await Bill.countDocuments({ status: "pending" });
     const paidBillsThisMonth = await Bill.countDocuments({ status: "paid", paidAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) } });
+    const pendingViolations = await Violation.countDocuments({ status: "pending" });
 
     const roomByArea = await Room.aggregate([
       { $lookup: { from: "areas", localField: "area", foreignField: "_id", as: "areaInfo" } },
@@ -36,6 +38,7 @@ exports.getStats = async (req, res) => {
       pendingRegistrations,
       pendingBills,
       paidBillsThisMonth,
+      pendingViolations,
       roomByArea,
       revenueByMonth,
       occupancyRate,

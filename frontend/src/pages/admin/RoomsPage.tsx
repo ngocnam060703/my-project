@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Tag, Space, Row, Col, Statistic, List } from "antd";
+import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Tag, Space, Row, Col, Statistic, List, Checkbox } from "antd";
 import { PlusOutlined, ApartmentOutlined, EditOutlined, DeleteOutlined, FilterOutlined, EyeOutlined, DownloadOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
 import { roomsApi, areasApi, facilitiesApi } from "../../api";
@@ -101,11 +101,45 @@ const RoomsPage: React.FC = () => {
 
   const visibleRooms = data;
 
+  const defaultRoomKit = (labels: string[]) => {
+    const arr = labels.map((s) => s.toLowerCase());
+    const kit: string[] = [];
+    if (arr.some((x) => x.includes("giường") || x.includes("giuong"))) kit.push("bed");
+    if (arr.some((x) => x.includes("tủ") || x.includes("tu"))) kit.push("cabinet");
+    if (arr.some((x) => x.includes("quạt") || x.includes("quat"))) kit.push("fan");
+    if (arr.some((x) => x.includes("điều hòa") || x.includes("dieu hoa") || x.includes("lạnh"))) kit.push("ac");
+    return kit;
+  };
+
+  const kitToAmenities = (kit: string[]) => {
+    const out: string[] = [];
+    if (kit.includes("bed")) out.push("Giường");
+    if (kit.includes("cabinet")) out.push("Tủ");
+    if (kit.includes("fan")) out.push("Quạt");
+    if (kit.includes("ac")) out.push("Điều hòa");
+    return out;
+  };
+
+  const amenitiesExtras = (kit: string[], all: string[]) => {
+    const kitAmenities = kitToAmenities(kit);
+    const kitLowerList = kitAmenities.map((x) => x.toLowerCase());
+    return all.filter((a) => {
+      const t = String(a).trim().toLowerCase();
+      if (!t) return false;
+      return !kitLowerList.some((k) => t.includes(k) || (t.length > 2 && k.includes(t)));
+    });
+  };
+
   const handleSubmit = async (v: Record<string, unknown>) => {
     try {
+      const kit = (v.roomKit as string[]) || [];
+      const fromKit = kitToAmenities(kit);
       const amenitiesInput = (v.amenities as string | undefined) || "";
-      const amenities = removeWifiFromAmenities(amenitiesInput.split(","));
-      const payload = { ...v, amenities };
+      const fromText = removeWifiFromAmenities(amenitiesInput.split(",").map((s) => s.trim()).filter(Boolean));
+      const merged = removeWifiFromAmenities([...fromKit, ...fromText]);
+      const amenities = Array.from(new Set(merged.map((x) => String(x).trim()).filter(Boolean)));
+      const { roomKit: _rk, ...rest } = v;
+      const payload = { ...rest, amenities };
       if (editingId) {
         await roomsApi.update(editingId, payload);
         message.success("Cập nhật thành công");
@@ -124,16 +158,19 @@ const RoomsPage: React.FC = () => {
 
   const handleEdit = (r: Room) => {
     setEditingId(r._id);
+    const am = (r.amenities || []).map(String);
+    const rk = defaultRoomKit(am);
     form.setFieldsValue({
       roomNumber: r.roomNumber,
       area: typeof r.area === "object" ? r.area?._id : r.area,
+      roomKit: rk,
+      amenities: amenitiesExtras(rk, am).join(", "),
       capacity: r.capacity,
       price: r.price,
       floor: r.floor ?? 1,
       status: r.status,
       currentOccupancy: r.currentOccupancy,
       description: r.description,
-      amenities: removeWifiFromAmenities(r.amenities || []).join(", "),
     });
     setModalOpen(true);
   };
@@ -202,6 +239,15 @@ const RoomsPage: React.FC = () => {
       key: "price",
       width: 120,
       render: (v: number) => <span style={{ color: "#0d9488" }}>{formatPrice(v)}/tháng</span>,
+    },
+    {
+      title: "Giá/đầu người",
+      key: "pricePerPerson",
+      width: 120,
+      render: (_: unknown, r: Room) => {
+        const p = r.pricePerPerson ?? (r.capacity > 0 ? Math.round(r.price / r.capacity) : 0);
+        return <span style={{ color: "#0369a1" }}>{formatPrice(p)}/người</span>;
+      },
     },
     {
       title: "Trạng thái",
@@ -300,7 +346,7 @@ const RoomsPage: React.FC = () => {
               "Trạng thái": statusMap[r.status]?.text || r.status,
               "CSVC phòng": (roomFacilities[r._id] || []).map((x) => `${x.name}${x.quantity > 0 ? ` (${x.quantity})` : ""}`).join(", "),
             })), "danh-sach-phong", "Phòng")}>Xuất Excel</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); form.setFieldsValue({ capacity: 4, floor: 1, status: "available", currentOccupancy: 0 }); setModalOpen(true); }}>Thêm phòng</Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); form.setFieldsValue({ capacity: 4, floor: 1, status: "available", currentOccupancy: 0, roomKit: ["bed", "cabinet", "fan"] }); setModalOpen(true); }}>Thêm phòng</Button>
           </Space>
         </div>
 
@@ -316,7 +362,7 @@ const RoomsPage: React.FC = () => {
       </Card>
 
       <Modal title={editingId ? "Sửa phòng" : "Thêm phòng"} open={modalOpen} onCancel={() => { setModalOpen(false); setEditingId(null); }} footer={null} width={520}>
-        <Form form={form} onFinish={handleSubmit} layout="vertical" initialValues={{ capacity: 4, floor: 1, status: "available", currentOccupancy: 0 }}>
+        <Form form={form} onFinish={handleSubmit} layout="vertical" initialValues={{ capacity: 4, floor: 1, status: "available", currentOccupancy: 0, roomKit: ["bed", "cabinet", "fan"] }}>
           <Form.Item name="roomNumber" label="Số phòng" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="area" label="Khu" rules={[{ required: true }]}>
             <Select>{areas.map((a) => <Select.Option key={a._id} value={a._id}>{a.name}</Select.Option>)}</Select>
@@ -331,7 +377,17 @@ const RoomsPage: React.FC = () => {
             <Col span={12}><Form.Item name="currentOccupancy" label="Đã ở"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item></Col>
           </Row>
           <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2} /></Form.Item>
-          <Form.Item name="amenities" label="Tiện ích (ngăn cách bằng dấu phẩy)"><Input placeholder="VD: Điều hòa, Bàn học, Tủ đồ" /></Form.Item>
+          <Form.Item name="roomKit" label="CSVC khi tạo phòng">
+            <Checkbox.Group
+              options={[
+                { label: "Giường", value: "bed" },
+                { label: "Tủ", value: "cabinet" },
+                { label: "Quạt", value: "fan" },
+                { label: "Điều hòa", value: "ac" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="amenities" label="Tiện ích thêm (ngăn cách bằng dấu phẩy)"><Input placeholder="VD: Bàn học, Wi-Fi" /></Form.Item>
           <Form.Item><Button type="primary" htmlType="submit" block>{editingId ? "Cập nhật" : "Thêm phòng"}</Button></Form.Item>
         </Form>
       </Modal>
@@ -344,6 +400,11 @@ const RoomsPage: React.FC = () => {
             <p><strong>Tầng:</strong> {detailModal.floor ?? "-"}</p>
             <p><strong>Sức chứa:</strong> {detailModal.currentOccupancy ?? 0}/{detailModal.capacity}</p>
             <p><strong>Giá:</strong> <span style={{ color: "#0d9488" }}>{formatPrice(detailModal.price)}/tháng</span></p>
+            <p><strong>Giá/đầu người:</strong>{" "}
+              <span style={{ color: "#0369a1" }}>
+                {formatPrice(detailModal.pricePerPerson ?? (detailModal.capacity > 0 ? Math.round(detailModal.price / detailModal.capacity) : 0))}/người
+              </span>
+            </p>
             <p><strong>Trạng thái:</strong> <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag></p>
             {detailModal.description && <p><strong>Mô tả:</strong> {detailModal.description}</p>}
             {(roomFacilities[detailModal._id] || []).length ? (

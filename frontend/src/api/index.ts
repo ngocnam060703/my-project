@@ -24,8 +24,14 @@ export const roomsApi = {
 
 export const registrationsApi = {
   getMy: () => client.get("/registrations/my"),
-  create: (data: { room: string; semester: string; schoolYear: string; startDate: string; registrationType?: "dorm" | "transfer" }) =>
-    client.post("/registrations", data),
+  /** Nội trú: không cần chọn phòng — server tự phân theo giới tính & chỗ trống. Chuyển phòng: cần `room`. */
+  create: (data: {
+    room?: string;
+    semester: string;
+    schoolYear: string;
+    startDate: string;
+    registrationType?: "dorm" | "transfer";
+  }) => client.post("/registrations", data),
   createTransfer: (data: { room: string; startDate?: string; semester?: string; schoolYear?: string }) =>
     client.post("/registrations", { ...data, registrationType: "transfer" }),
   cancel: (id: string) => client.put(`/registrations/${id}/cancel`),
@@ -51,7 +57,10 @@ export const contractsApi = {
 
 export const billsApi = {
   getMy: () => client.get("/bills/my"),
-  markPaid: (id: string) => client.put(`/bills/${id}/paid`),
+  markPaid: (id: string, data?: { paymentMethod?: "manual" | "counter"; paymentReference?: string }) =>
+    client.put(`/bills/${id}/paid`, data ?? {}),
+  /** Demo thanh toán online (máy chủ mô phỏng giao dịch thành công). */
+  payOnline: (id: string) => client.put(`/bills/${id}/pay-online`),
   getAll: (params?: { status?: string; room?: string; month?: number; year?: number; billType?: "monthly" | "penalty"; page?: number; limit?: number }) =>
     client.get("/bills", { params }),
   create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; otherFee?: number; dueDate?: string }) =>

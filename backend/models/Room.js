@@ -21,5 +21,14 @@ roomSchema.index({ area: 1, roomNumber: 1 }, { unique: true });
 roomSchema.virtual("isFull").get(function () {
   return this.currentOccupancy >= this.capacity;
 });
+/** Giá theo đầu người (tổng giá / sức chứa) */
+roomSchema.virtual("pricePerPerson").get(function () {
+  const cap = Number(this.capacity) || 0;
+  if (cap <= 0) return 0;
+  return Math.round(Number(this.price) / cap);
+});
+
+roomSchema.set("toJSON", { virtuals: true });
+roomSchema.set("toObject", { virtuals: true });
 
 module.exports = mongoose.model("Room", roomSchema);

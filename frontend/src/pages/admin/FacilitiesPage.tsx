@@ -21,6 +21,7 @@ type FacilityReport = {
   status: "pending" | "approved" | "rejected" | "fixing" | "done";
   adminNote?: string;
   createdAt: string;
+  updatedAt?: string;
 };
 
 type FacilityLocation = {
@@ -184,6 +185,7 @@ const FacilitiesPage: React.FC = () => {
   }, []);
 
   const pendingCount = useMemo(() => reports.filter((r) => r.status === "pending").length, [reports]);
+  const repairHistory = useMemo(() => reports.filter((r) => r.status === "done").sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt))), [reports]);
   const allocatedByFacility = useMemo(() => {
     const m: Record<string, number> = {};
     locations.forEach((loc) => {
@@ -498,6 +500,29 @@ const FacilitiesPage: React.FC = () => {
                     },
                   ]}
                   pagination={{ pageSize: 10, showSizeChanger: false }}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: "repair-history",
+            label: "Lịch sử sửa chữa",
+            children: (
+              <Card title="Báo hỏng đã xử lý xong (lịch sử sửa chữa)">
+                <Table
+                  rowKey="_id"
+                  loading={loading}
+                  dataSource={repairHistory}
+                  columns={[
+                    { title: "Cập nhật", key: "upd", width: 160, render: (_: unknown, r: FacilityReport) => r.updatedAt?.slice(0, 10) || r.createdAt?.slice(0, 10) || "—" },
+                    { title: "Phòng", key: "room", width: 100, render: (_: unknown, r: FacilityReport) => r.room?.roomNumber || "-" },
+                    { title: "Khu", key: "area", width: 120, render: (_: unknown, r: FacilityReport) => r.room?.area?.name || "—" },
+                    { title: "CSVC", key: "facility", width: 180, render: (_: unknown, r: FacilityReport) => `${r.facility?.name || "-"} (${r.facility?.code || ""})` },
+                    { title: "Mô tả sự cố", dataIndex: "description", key: "description", ellipsis: true },
+                    { title: "Ghi chú xử lý", dataIndex: "adminNote", key: "adminNote", ellipsis: true, render: (v: string) => v || "—" },
+                  ]}
+                  pagination={{ pageSize: 10, showSizeChanger: false }}
+                  locale={{ emptyText: "Chưa có bản ghi sửa chữa hoàn tất" }}
                 />
               </Card>
             ),

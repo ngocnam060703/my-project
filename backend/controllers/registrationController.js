@@ -7,6 +7,7 @@ const { getIO } = require("../socket");
 const { isSchoolYearNotPast } = require("../utils/schoolYear");
 const RegistrationPeriod = require("../models/RegistrationPeriod");
 const { hasDormRegistrationProfile, REQUIRED_DORM_REGISTRATION_FIELDS } = require("../utils/profileComplete");
+const { assignRoomForStudent } = require("../utils/assignRoom");
 
 function inferSemesterSchoolYearFromDate(date = new Date()) {
   const d = new Date(date);
@@ -115,7 +116,15 @@ exports.create = async (req, res) => {
     })
       .populate({ path: "room", select: "roomNumber area", populate: { path: "area", select: "name" } })
       .populate("registration", "semester schoolYear");
-    const roomDoc = await Room.findById(room).populate("area", "name");
+    let roomDoc =
+      registrationType === "dorm"
+        ? await assignRoomForStudent(req.user)
+        : await Room.findById(room).populate("area", "name");
+    if (registrationType === "dorm" && !roomDoc) {
+      return res.status(400).json({
+        message: "Không còn phòng trống phù hợp (giới tính / khu). Vui lòng liên hệ ban quản lý KTX.",
+      });
+    }
     if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng" });
     if (registrationType === "transfer") {
       if (!activeContract) {
@@ -190,7 +199,7 @@ exports.create = async (req, res) => {
     const overCapacity = roomDoc.currentOccupancy >= roomDoc.capacity;
     const registration = await Registration.create({
       user: req.user._id,
-      room,
+      room: roomDoc._id,
       registrationType: "dorm",
       semester,
       schoolYear,

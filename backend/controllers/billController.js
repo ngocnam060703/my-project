@@ -418,15 +418,51 @@ exports.generateByMonth = async (req, res) => {
 
 exports.markPaid = async (req, res) => {
   try {
-    const bill = await Bill.findById(req.params.id);
+    const bill = await Bill.findById(req.params.id).populate("contract");
     if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
     const isAdmin = req.user.role === "admin" || req.user.role === "manager";
     if (!isAdmin && bill.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Không có quyền thanh toán hóa đơn này" });
     }
+    if (bill.contract && isContractExpired(bill.contract.endDate, new Date())) {
+      return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể thanh toán hóa đơn này" });
+    }
+    const method = req.body?.paymentMethod === "counter" ? "counter" : "manual";
     bill.status = "paid";
     bill.paidAt = new Date();
+    bill.paymentMethod = isAdmin ? method : "manual";
+    bill.paymentReference = isAdmin && req.body?.paymentReference ? String(req.body.paymentReference).trim() : "";
     await bill.save();
+    res.json(bill);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Thanh toán online (demo — mô phỏng cổng thanh toán thành công). */
+exports.payOnline = async (req, res) => {
+  try {
+    const bill = await Bill.findById(req.params.id).populate("contract");
+    if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    if (bill.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Chỉ thanh toán được hóa đơn của chính bạn" });
+    }
+    if (bill.status === "paid") {
+      return res.status(400).json({ message: "Hóa đơn đã được thanh toán" });
+    }
+    if (bill.status !== "pending" && bill.status !== "overdue") {
+      return res.status(400).json({ message: "Hóa đơn không ở trạng thái chờ thanh toán" });
+    }
+    if (bill.contract && isContractExpired(bill.contract.endDate, new Date())) {
+      return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể thanh toán" });
+    }
+    bill.status = "paid";
+    bill.paidAt = new Date();
+    bill.paymentMethod = "online";
+    bill.paymentReference = `ONL-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+    await bill.save();
+    const io = getIO();
+    io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
     res.json(bill);
   } catch (error) {
     res.status(500).json({ message: error.message });

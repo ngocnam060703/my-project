@@ -9,6 +9,19 @@ export interface User {
   citizenId?: string;
   dateOfBirth?: string;
   address?: string;
+  isSuperAdmin?: boolean;
+  faculty?: string;
+  enrollmentDate?: string;
+  homeroomTeacher?: string;
+  addressNative?: string;
+  addressPermanent?: string;
+  addressTemporary?: string;
+  addressAbsent?: string;
+  familyFatherName?: string;
+  familyFatherPhone?: string;
+  familyMotherName?: string;
+  familyMotherPhone?: string;
+  familyEmergencyPhone?: string;
 }
 
 export interface Area {
@@ -16,6 +29,10 @@ export interface Area {
   name: string;
   description?: string;
   manager?: User;
+  genderPolicy?: "male" | "female" | "mixed";
+  totalRooms?: number;
+  totalStudents?: number;
+  occupancyStatus?: "empty" | "available" | "full";
 }
 
 export interface Room {
@@ -25,6 +42,7 @@ export interface Room {
   capacity: number;
   currentOccupancy: number;
   price: number;
+  pricePerPerson?: number;
   floor?: number;
   status: string;
   description?: string;
@@ -76,6 +94,8 @@ export interface Bill {
   status: string;
   dueDate: string;
   paidAt?: string;
+  paymentMethod?: "manual" | "online" | "counter";
+  paymentReference?: string;
   note?: string;
   billType?: "monthly" | "penalty";
   violation?: string | { _id?: string; ruleName?: string; description?: string; fineAmount?: number; compensationAmount?: number; createdAt?: string };

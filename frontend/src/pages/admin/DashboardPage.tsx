@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Row, Col, Card, Statistic, Spin, Progress, Switch, Space, message, Button, Modal, Form, Input, DatePicker } from "antd";
-import { HomeOutlined, TeamOutlined, FileAddOutlined } from "@ant-design/icons";
+import { HomeOutlined, TeamOutlined, FileAddOutlined, WarningOutlined } from "@ant-design/icons";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
 import { useNavigate } from "react-router-dom";
 import { dashboardApi, registrationPeriodsApi } from "../../api";
@@ -11,6 +11,7 @@ interface DashboardStats {
   availableRooms?: number;
   totalStudents?: number;
   pendingRegistrations?: number;
+  pendingViolations?: number;
   roomByArea?: { _id: string; total: number; available: number }[];
   revenueByMonth?: { _id: { year: number; month: number }; total: number }[];
   occupancyRate?: number;
@@ -244,6 +245,11 @@ const DashboardPage: React.FC = () => {
             style={{ cursor: "pointer" }}
           >
             <Statistic title="Đơn chờ duyệt" value={s.pendingRegistrations ?? 0} prefix={<FileAddOutlined />} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card hoverable onClick={() => navigate("/admin/violations")} style={{ cursor: "pointer" }}>
+            <Statistic title="Vi phạm chờ xử lý" value={s.pendingViolations ?? 0} prefix={<WarningOutlined />} />
           </Card>
         </Col>
       </Row>

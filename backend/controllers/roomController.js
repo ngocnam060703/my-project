@@ -141,13 +141,17 @@ exports.create = async (req, res) => {
     } = req.body;
     const existing = await Room.findOne({ area, roomNumber });
     if (existing) return res.status(400).json({ message: "Phòng đã tồn tại trong khu này" });
+    let ams = sanitizeAmenities(amenities);
+    if (!ams.length) {
+      ams = ["Giường", "Tủ", "Quạt"];
+    }
     const room = await Room.create({
       roomNumber,
       area,
       capacity,
       price,
       floor,
-      amenities: sanitizeAmenities(amenities),
+      amenities: ams,
       description,
       status,
       currentOccupancy,

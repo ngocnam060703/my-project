@@ -62,7 +62,12 @@ const AreasPage: React.FC = () => {
   const handleEdit = (record: Area) => {
     setEditingId(record._id);
     const managerId = typeof record.manager === "object" ? record.manager?._id : record.manager;
-    form.setFieldsValue({ name: record.name, description: record.description, manager: managerId || undefined });
+    form.setFieldsValue({
+      name: record.name,
+      description: record.description,
+      manager: managerId || undefined,
+      genderPolicy: record.genderPolicy || "mixed",
+    });
     setModalOpen(true);
   };
 
@@ -85,8 +90,21 @@ const AreasPage: React.FC = () => {
     });
   };
 
+  const genderLabel: Record<string, string> = { male: "Nam", female: "Nữ", mixed: "Hỗn hợp" };
+  const occLabel: Record<string, string> = { empty: "Chưa có phòng", available: "Còn chỗ", full: "Đầy" };
+
   const columns = [
     { title: "Tên khu", dataIndex: "name", key: "name", render: (v: string) => <strong>{v || "-"}</strong> },
+    { title: "Phân khu (giới)", dataIndex: "genderPolicy", key: "genderPolicy", width: 120, render: (g: string) => genderLabel[g] || g || "—" },
+    { title: "Số phòng", dataIndex: "totalRooms", key: "totalRooms", width: 90, render: (n: number) => n ?? "—" },
+    { title: "SV đang ở", dataIndex: "totalStudents", key: "totalStudents", width: 100, render: (n: number) => n ?? "—" },
+    {
+      title: "Trạng thái",
+      dataIndex: "occupancyStatus",
+      key: "occupancyStatus",
+      width: 110,
+      render: (s: string) => occLabel[s] || s || "—",
+    },
     { title: "Mô tả", dataIndex: "description", key: "description", ellipsis: true },
     { title: "Quản lý", dataIndex: ["manager", "fullName"], key: "manager", render: (v: string, r: Area) => (typeof r.manager === "object" ? r.manager?.fullName : v) || <span style={{ color: "#999" }}>-</span> },
     {
@@ -157,6 +175,15 @@ const AreasPage: React.FC = () => {
       <Modal title={editingId ? "Sửa khu" : "Thêm khu"} open={modalOpen} onCancel={() => { setModalOpen(false); setEditingId(null); form.resetFields(); }} footer={null} width={480}>
         <Form form={form} onFinish={handleSubmit} layout="vertical">
           <Form.Item name="name" label="Tên khu" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="genderPolicy" label="Phân khu theo giới tính" initialValue="mixed">
+            <Select
+              options={[
+                { value: "mixed", label: "Hỗn hợp (nam & nữ)" },
+                { value: "male", label: "Khu nam" },
+                { value: "female", label: "Khu nữ" },
+              ]}
+            />
+          </Form.Item>
           <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2} /></Form.Item>
           <Form.Item name="manager" label="Quản lý">
             <Select allowClear placeholder="Chọn quản lý">
@@ -172,6 +199,10 @@ const AreasPage: React.FC = () => {
         {detailModal && (
           <div style={{ lineHeight: 2 }}>
             <p><strong>Tên khu:</strong> {detailModal.name}</p>
+            <p><strong>Phân khu (giới):</strong> {genderLabel[detailModal.genderPolicy || "mixed"] || detailModal.genderPolicy}</p>
+            <p><strong>Tổng phòng:</strong> {detailModal.totalRooms ?? "—"}</p>
+            <p><strong>Sinh viên đang ở:</strong> {detailModal.totalStudents ?? "—"}</p>
+            <p><strong>Trạng thái:</strong> {occLabel[detailModal.occupancyStatus || ""] || detailModal.occupancyStatus || "—"}</p>
             <p><strong>Mô tả:</strong> {detailModal.description || "-"}</p>
             <p><strong>Quản lý:</strong> {typeof detailModal.manager === "object" ? detailModal.manager?.fullName : "-"}</p>
           </div>

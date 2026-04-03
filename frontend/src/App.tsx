@@ -26,6 +26,7 @@ import RoomTransferPage from "./pages/client/RoomTransferPage";
 import RegulationsPage from "./pages/client/RegulationsPage";
 import DashboardPage from "./pages/admin/DashboardPage";
 import UsersPage from "./pages/admin/UsersPage";
+import StudentsPage from "./pages/admin/StudentsPage";
 import AreasPage from "./pages/admin/AreasPage";
 import RoomsPageAdmin from "./pages/admin/RoomsPage";
 import RegistrationsPage from "./pages/admin/RegistrationsPage";
@@ -82,6 +83,7 @@ function App() {
                 <Route path="/admin" element={<ProtectedRoute roles={["admin", "manager"]}><AdminLayout /></ProtectedRoute>}>
                   <Route index element={<DashboardPage />} />
                   <Route path="users" element={<UsersPage />} />
+                  <Route path="students" element={<StudentsPage />} />
                   <Route path="areas" element={<AreasPage />} />
                   <Route path="rooms" element={<RoomsPageAdmin />} />
                   <Route path="registrations" element={<RegistrationsPage />} />

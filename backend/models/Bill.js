@@ -44,6 +44,9 @@ const billSchema = new mongoose.Schema(
     total: { type: Number, required: true },
     status: { type: String, enum: ["pending", "paid", "overdue"], default: "pending" },
     paidAt: { type: Date, default: null },
+    /** manual: xác nhận tay / offline | online: cổng thanh toán (demo) | counter: thu tại quầy */
+    paymentMethod: { type: String, enum: ["manual", "online", "counter"], default: undefined },
+    paymentReference: { type: String, default: "" },
     dueDate: { type: Date, required: true },
     note: { type: String, default: "" },
   },

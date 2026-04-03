@@ -15,6 +15,7 @@ const seed = async () => {
     password: "123456",
     fullName: "Quản trị viên",
     role: "admin",
+    isSuperAdmin: true,
   });
 
   const manager = await User.create({
@@ -44,11 +45,12 @@ const seed = async () => {
     email: "incomplete@ktx.vn",
     password: "123456",
     fullName: "Trần Thị Chưa Cập Nhật",
+    gender: "Nam",
     role: "user",
   });
 
-  const areaA = await Area.create({ name: "Khu A", description: "Khu nam", manager: manager._id });
-  const areaB = await Area.create({ name: "Khu B", description: "Khu nữ" });
+  const areaA = await Area.create({ name: "Khu A", description: "Khu nam", manager: manager._id, genderPolicy: "male" });
+  const areaB = await Area.create({ name: "Khu B", description: "Khu nữ", genderPolicy: "female" });
 
   await Room.create([
     // Khu A (tầng 1-2)

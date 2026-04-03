@@ -35,6 +35,7 @@ const AdminLayout: React.FC = () => {
   const menuItems = [
     { key: "/admin", icon: <DashboardOutlined />, label: "Dashboard" },
     { key: "/admin/users", icon: <TeamOutlined />, label: "Quản lý người dùng" },
+    { key: "/admin/students", icon: <UserOutlined />, label: "Hồ sơ sinh viên" },
     { key: "/admin/areas", icon: <BankOutlined />, label: "Quản lý khu" },
     { key: "/admin/rooms", icon: <HomeOutlined />, label: "Quản lý phòng" },
     { key: "/admin/registrations", icon: <FileAddOutlined />, label: "Xét duyệt đơn" },

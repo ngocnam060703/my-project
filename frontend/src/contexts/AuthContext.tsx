@@ -24,6 +24,7 @@ interface User {
   dateOfBirth?: string | null;
   address?: string;
   profileComplete?: boolean;
+  isSuperAdmin?: boolean;
 }
 
 interface AuthContextType {

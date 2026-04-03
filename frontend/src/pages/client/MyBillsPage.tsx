@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Table, Tag, Spin, Empty, message, Button, Card, Row, Col, Statistic, Modal } from "antd";
-import { DollarOutlined, FileTextOutlined, EyeOutlined } from "@ant-design/icons";
+import { Table, Tag, Spin, Empty, message, Button, Card, Row, Col, Statistic, Modal, Space } from "antd";
+import { DollarOutlined, FileTextOutlined, EyeOutlined, CreditCardOutlined } from "@ant-design/icons";
 import { billsApi } from "../../api";
 import type { Bill } from "../../types";
 
@@ -29,10 +29,18 @@ const formatBillDate = (r: Bill) => {
 const normalizeBillingNote = (note?: string) =>
   String(note || "").replace(/dịch vụ chung/gi, "wifi");
 
+const paymentMethodLabel = (m?: string) => {
+  if (m === "online") return "Thanh toán online";
+  if (m === "counter") return "Thu tại quầy";
+  if (m === "manual") return "Xác nhận / chuyển khoản";
+  return "—";
+};
+
 const MyBillsPage: React.FC = () => {
   const [data, setData] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
   const [payingId, setPayingId] = useState<string | null>(null);
+  const [payingOnlineId, setPayingOnlineId] = useState<string | null>(null);
   const [detailModal, setDetailModal] = useState<Bill | null>(null);
 
   const load = () => {
@@ -45,12 +53,25 @@ const MyBillsPage: React.FC = () => {
     setPayingId(id);
     try {
       await billsApi.markPaid(id);
-      message.success("Đã thanh toán thành công");
+      message.success("Đã xác nhận thanh toán thành công");
       load();
     } catch (err: unknown) {
       message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Thanh toán thất bại");
     } finally {
       setPayingId(null);
+    }
+  };
+
+  const handlePayOnline = async (id: string) => {
+    setPayingOnlineId(id);
+    try {
+      await billsApi.payOnline(id);
+      message.success("Thanh toán online thành công (demo)");
+      load();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Thanh toán online thất bại");
+    } finally {
+      setPayingOnlineId(null);
     }
   };
 
@@ -80,16 +101,25 @@ const MyBillsPage: React.FC = () => {
         <>
           <Tag color={statusMap[s]?.color}>{statusMap[s]?.text || s}</Tag>
           {(s === "pending" || s === "overdue") && (
-            <Button
-              type="primary"
-              size="small"
-              icon={<DollarOutlined />}
-              loading={payingId === r._id}
-              onClick={() => handlePay(r._id)}
-              style={{ marginLeft: 8 }}
-            >
-              Thanh toán
-            </Button>
+            <Space size="small" wrap style={{ marginLeft: 8 }}>
+              <Button
+                type="primary"
+                size="small"
+                icon={<DollarOutlined />}
+                loading={payingId === r._id}
+                onClick={() => handlePay(r._id)}
+              >
+                Xác nhận TT
+              </Button>
+              <Button
+                size="small"
+                icon={<CreditCardOutlined />}
+                loading={payingOnlineId === r._id}
+                onClick={() => handlePayOnline(r._id)}
+              >
+                Online
+              </Button>
+            </Space>
           )}
         </>
       ),
@@ -127,9 +157,14 @@ const MyBillsPage: React.FC = () => {
         <>
           <Tag color={statusMap[s]?.color}>{statusMap[s]?.text || s}</Tag>
           {(s === "pending" || s === "overdue") && (
-            <Button type="primary" size="small" icon={<DollarOutlined />} loading={payingId === r._id} onClick={() => handlePay(r._id)} style={{ marginLeft: 8 }}>
-              Thanh toán
-            </Button>
+            <Space size="small" wrap style={{ marginLeft: 8 }}>
+              <Button type="primary" size="small" icon={<DollarOutlined />} loading={payingId === r._id} onClick={() => handlePay(r._id)}>
+                Xác nhận TT
+              </Button>
+              <Button size="small" icon={<CreditCardOutlined />} loading={payingOnlineId === r._id} onClick={() => handlePayOnline(r._id)}>
+                Online
+              </Button>
+            </Space>
           )}
         </>
       ),
@@ -239,9 +274,22 @@ const MyBillsPage: React.FC = () => {
             <p><strong>Tổng:</strong> <span style={{ color: detailModal.billType === "penalty" ? "#cf1322" : "#0d9488", fontWeight: 600 }}>{formatMoney(detailModal.total)}</span></p>
             <p><strong>Hạn thanh toán:</strong> {formatDDMMYYYY(detailModal.dueDate)}</p>
             <p><strong>Ngày thanh toán:</strong> {detailModal.paidAt ? formatDDMMYYYY(detailModal.paidAt) : "-"}</p>
+            {detailModal.status === "paid" && (
+              <>
+                <p><strong>Phương thức:</strong> {paymentMethodLabel(detailModal.paymentMethod)}</p>
+                {detailModal.paymentReference ? <p><strong>Mã giao dịch / tham chiếu:</strong> {detailModal.paymentReference}</p> : null}
+              </>
+            )}
             <p><strong>Trạng thái:</strong> <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag></p>
             {(detailModal.status === "pending" || detailModal.status === "overdue") && (
-              <Button type="primary" icon={<DollarOutlined />} onClick={() => { handlePay(detailModal._id); setDetailModal(null); }} style={{ marginTop: 12 }}>Thanh toán</Button>
+              <Space wrap style={{ marginTop: 12 }}>
+                <Button type="primary" icon={<DollarOutlined />} onClick={() => { void handlePay(detailModal._id); setDetailModal(null); }}>
+                  Xác nhận thanh toán
+                </Button>
+                <Button icon={<CreditCardOutlined />} onClick={() => { void handlePayOnline(detailModal._id); setDetailModal(null); }} loading={payingOnlineId === detailModal._id}>
+                  Thanh toán online (demo)
+                </Button>
+              </Space>
             )}
           </div>
         )}
