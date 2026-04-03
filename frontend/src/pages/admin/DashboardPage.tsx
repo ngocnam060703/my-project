@@ -31,6 +31,8 @@ const DashboardPage: React.FC = () => {
   const [periods, setPeriods] = useState<RegistrationPeriod[]>([]);
   const [periodsLoading, setPeriodsLoading] = useState(true);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [contractExtensionEnabled, setContractExtensionEnabled] = useState<boolean | null>(null);
+  const [contractExtensionToggling, setContractExtensionToggling] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createForm] = Form.useForm();
   const [openModalOpen, setOpenModalOpen] = useState(false);
@@ -51,6 +53,17 @@ const DashboardPage: React.FC = () => {
       );
     } finally {
       setPeriodsLoading(false);
+    }
+  };
+
+  const loadContractExtensionSetting = async () => {
+    try {
+      const res = await dashboardApi.getContractExtensionSetting();
+      const v = res.data?.enable_contract_extension;
+      setContractExtensionEnabled(typeof v === "boolean" ? v : true);
+    } catch {
+      message.error("Không tải được cài đặt gia hạn hợp đồng");
+      setContractExtensionEnabled(true);
     }
   };
 
@@ -75,6 +88,7 @@ const DashboardPage: React.FC = () => {
     };
     void loadStats();
     void loadPeriods();
+    void loadContractExtensionSetting();
     return () => {
       cancelled = true;
     };
@@ -129,6 +143,27 @@ const DashboardPage: React.FC = () => {
 
     if (!activePeriod) return;
     await handleToggleActive(activePeriod, false);
+  };
+
+  const handleContractExtensionToggle = async (checked: boolean) => {
+    const prev = contractExtensionEnabled ?? true;
+    // Optimistic UI: người dùng thấy toggle đổi ngay.
+    setContractExtensionEnabled(checked);
+    setContractExtensionToggling(true);
+    try {
+      const res = await dashboardApi.setContractExtensionSetting({ enable_contract_extension: checked });
+      const next = res.data?.enable_contract_extension;
+      if (typeof next === "boolean") setContractExtensionEnabled(next);
+      else setContractExtensionEnabled(checked);
+      message.success(checked ? "Đã bật gia hạn hợp đồng" : "Đã tắt gia hạn hợp đồng");
+    } catch (err: unknown) {
+      setContractExtensionEnabled(prev);
+      message.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không cập nhật được",
+      );
+    } finally {
+      setContractExtensionToggling(false);
+    }
   };
 
   const handleConfirmOpen = async (values: { endDate: ReturnType<typeof dayjs> }) => {
@@ -253,6 +288,30 @@ const DashboardPage: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      <Row gutter={[24, 24]} style={{ marginTop: 16 }}>
+        <Col xs={24} md={12}>
+          <Card title="Bật/tắt gia hạn hợp đồng" loading={contractExtensionEnabled === null}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>Gia hạn cho sinh viên</div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>
+                  {contractExtensionEnabled === false ? "Tắt — không cho gia hạn" : "Bật — cho phép gia hạn"}
+                </div>
+              </div>
+              <Switch
+                checked={contractExtensionEnabled ?? true}
+                checkedChildren="Bật"
+                unCheckedChildren="Tắt"
+                loading={contractExtensionToggling}
+                onChange={handleContractExtensionToggle}
+              />
+            </div>
+            <div style={{ color: "#6b7280", fontSize: 12 }}>Nếu bật: sinh viên được gia hạn. Nếu tắt: không cho gia hạn.</div>
+          </Card>
+        </Col>
+      </Row>
+
       <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
         <Col xs={24} lg={12}>
           <Card title="Thống kê phòng theo khu">

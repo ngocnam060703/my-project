@@ -11,10 +11,20 @@ const statusMap: Record<string, { color: string; text: string }> = {
 };
 
 const formatMoney = (v: number | undefined) => (v ?? 0).toLocaleString("vi-VN") + "đ";
+const formatDDMMYYYY = (value?: string | Date | null) => {
+  if (!value) return "-";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "-";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+};
+
 const formatBillDate = (r: Bill) => {
   const created = (r as Bill & { createdAt?: string }).createdAt;
-  if (created) return new Date(created).toLocaleDateString("vi-VN");
-  return new Date(r.year, Math.max(0, (r.month || 1) - 1), 1).toLocaleDateString("vi-VN");
+  if (created) return formatDDMMYYYY(created);
+  return formatDDMMYYYY(new Date(r.year, Math.max(0, (r.month || 1) - 1), 1));
 };
 const normalizeBillingNote = (note?: string) =>
   String(note || "").replace(/dịch vụ chung/gi, "wifi");
@@ -52,7 +62,7 @@ const MyBillsPage: React.FC = () => {
   if (loading) return <Spin size="large" style={{ display: "block", margin: "40px auto" }} />;
 
   const monthlyColumns = [
-    { title: "Ngày tháng năm", key: "billDate", width: 120, render: (_: unknown, r: Bill) => <strong>{formatBillDate(r)}</strong> },
+    { title: "Ngày tạo", key: "billDate", width: 120, render: (_: unknown, r: Bill) => <strong>{formatBillDate(r)}</strong> },
     { title: "Phòng", dataIndex: ["room", "roomNumber"], key: "room", width: 80 },
     { title: "Tiền phòng", dataIndex: "roomFee", key: "roomFee", width: 110, render: (v: number) => formatMoney(v) },
     { title: "Điện", dataIndex: "electricityFee", key: "electricityFee", width: 90, render: (v: number) => formatMoney(v) },
@@ -60,7 +70,7 @@ const MyBillsPage: React.FC = () => {
     { title: "Wifi", dataIndex: "sharedCommonFee", key: "sharedCommonFee", width: 90, render: (v: number) => (v ? formatMoney(v) : "-") },
     { title: "Dịch vụ cá nhân", dataIndex: "personalServiceFee", key: "personalServiceFee", width: 120, render: (v: number) => (v ? formatMoney(v) : "-") },
     { title: "Tổng", dataIndex: "total", key: "total", width: 110, render: (v: number) => <strong style={{ color: "#0d9488" }}>{formatMoney(v)}</strong> },
-    { title: "Hạn", dataIndex: "dueDate", key: "dueDate", width: 100, render: (d: string) => new Date(d).toLocaleDateString("vi-VN") },
+    { title: "Hạn", dataIndex: "dueDate", key: "dueDate", width: 100, render: (d: string) => formatDDMMYYYY(d) },
     {
       title: "Trạng thái",
       dataIndex: "status",
@@ -93,7 +103,7 @@ const MyBillsPage: React.FC = () => {
   ];
 
   const penaltyColumns = [
-    { title: "Ngày tháng năm", key: "billDate", width: 120, render: (_: unknown, r: Bill) => <strong>{formatBillDate(r)}</strong> },
+    { title: "Ngày tạo", key: "billDate", width: 120, render: (_: unknown, r: Bill) => <strong>{formatBillDate(r)}</strong> },
     { title: "Phòng", dataIndex: ["room", "roomNumber"], key: "room", width: 80 },
     {
       title: "Mục phạt / bồi thường",
@@ -107,7 +117,7 @@ const MyBillsPage: React.FC = () => {
       ),
     },
     { title: "Tổng", dataIndex: "total", key: "total", width: 110, render: (v: number) => <strong style={{ color: "#cf1322" }}>{formatMoney(v)}</strong> },
-    { title: "Hạn", dataIndex: "dueDate", key: "dueDate", width: 100, render: (d: string) => new Date(d).toLocaleDateString("vi-VN") },
+    { title: "Hạn", dataIndex: "dueDate", key: "dueDate", width: 100, render: (d: string) => formatDDMMYYYY(d) },
     {
       title: "Trạng thái",
       dataIndex: "status",
@@ -184,7 +194,7 @@ const MyBillsPage: React.FC = () => {
         {detailModal && (
           <div style={{ lineHeight: 2 }}>
             <p><strong>Loại:</strong> {detailModal.billType === "penalty" ? <Tag color="red">Phạt vi phạm</Tag> : <Tag color="blue">Hóa đơn tháng</Tag>}</p>
-            <p><strong>Ngày tháng năm:</strong> {formatBillDate(detailModal)}</p>
+            <p><strong>Ngày tạo:</strong> {formatBillDate(detailModal)}</p>
             <p><strong>Phòng:</strong> {typeof detailModal.room === "object" ? detailModal.room?.roomNumber : "-"}</p>
             {detailModal.billType === "penalty" ? (
               <>
@@ -227,7 +237,8 @@ const MyBillsPage: React.FC = () => {
               </>
             )}
             <p><strong>Tổng:</strong> <span style={{ color: detailModal.billType === "penalty" ? "#cf1322" : "#0d9488", fontWeight: 600 }}>{formatMoney(detailModal.total)}</span></p>
-            <p><strong>Hạn thanh toán:</strong> {new Date(detailModal.dueDate).toLocaleDateString("vi-VN")}</p>
+            <p><strong>Hạn thanh toán:</strong> {formatDDMMYYYY(detailModal.dueDate)}</p>
+            <p><strong>Ngày thanh toán:</strong> {detailModal.paidAt ? formatDDMMYYYY(detailModal.paidAt) : "-"}</p>
             <p><strong>Trạng thái:</strong> <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag></p>
             {(detailModal.status === "pending" || detailModal.status === "overdue") && (
               <Button type="primary" icon={<DollarOutlined />} onClick={() => { handlePay(detailModal._id); setDetailModal(null); }} style={{ marginTop: 12 }}>Thanh toán</Button>

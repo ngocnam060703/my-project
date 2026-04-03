@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Table, Tag, Spin, Empty, message, Button, Card, Row, Col, Statistic, Modal } from "antd";
 import { ReloadOutlined, FileTextOutlined, EyeOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
-import { authApi, contractsApi } from "../../api";
+import { authApi, contractsApi, dashboardApi } from "../../api";
 import type { Contract } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -18,6 +18,7 @@ const MyContractsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [detailModal, setDetailModal] = useState<Contract | null>(null);
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [contractExtensionEnabled, setContractExtensionEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     Promise.all([contractsApi.getMy(), authApi.getProfile()])
@@ -27,6 +28,20 @@ const MyContractsPage: React.FC = () => {
       })
       .catch(() => message.error("Không tải được"))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const res = await dashboardApi.getContractExtensionSetting();
+        const v = res.data?.enable_contract_extension;
+        setContractExtensionEnabled(typeof v === "boolean" ? v : true);
+      } catch {
+        // Không tải được setting -> tắt theo mặc định để không cho phép gia hạn trái policy.
+        setContractExtensionEnabled(false);
+      }
+    };
+    void run();
   }, []);
 
   const activeCount = data.filter((c) => c.status === "active").length;
@@ -65,7 +80,7 @@ const MyContractsPage: React.FC = () => {
               Ký xác nhận
             </Button>
           )}
-          {r.status === "active" && (
+          {r.status === "active" && contractExtensionEnabled === true && (
             <Button type="link" size="small" icon={<ReloadOutlined />} onClick={() => navigate(`/student/contract-renewal/${r._id}`)}>Gia hạn</Button>
           )}
         </>
@@ -142,7 +157,7 @@ const MyContractsPage: React.FC = () => {
                 Ký xác nhận hợp đồng
               </Button>
             )}
-            {detailModal?.status === "active" && (
+            {detailModal?.status === "active" && contractExtensionEnabled === true && (
               <Button
                 type="primary"
                 icon={<ReloadOutlined />}

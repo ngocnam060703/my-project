@@ -8,6 +8,19 @@ const RoomMonthlyCost = require("../models/RoomMonthlyCost");
 const Room = require("../models/Room");
 const { getIO } = require("../socket");
 
+function toStartOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function isContractExpired(endDate, currentDate) {
+  if (!endDate) return true;
+  const end = toStartOfDay(endDate);
+  const now = toStartOfDay(currentDate);
+  return end < now;
+}
+
 async function buildPersonalFeeForUser({ userId, month, year }) {
   const personalServices = await Service.find({ type: "personal", isActive: true });
   if (!personalServices.length) return { total: 0, breakdown: [] };
@@ -156,6 +169,12 @@ exports.create = async (req, res) => {
         return res.status(400).json({ message: "Phòng chưa có sinh viên có hợp đồng hiệu lực" });
       }
 
+      const now = new Date();
+      const hasExpired = contracts.some((c) => isContractExpired(c.endDate, now));
+      if (hasExpired) {
+        return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể tạo hóa đơn" });
+      }
+
       const occupants = Math.max(1, contracts.length);
       const roomCost = await RoomMonthlyCost.findOne({ room: roomId, month: m, year: y });
       const roomFeeTotal = Number(room.price || 0);
@@ -239,6 +258,12 @@ exports.create = async (req, res) => {
     const total = Number(req.body?.roomFee || 0) + Number(electricityFee || 0) + Number(waterFee || 0) + Number(otherFee || 0);
     const contractDoc = await Contract.findById(contract).populate("user room");
     if (!contractDoc) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+
+    const now = new Date();
+    if (isContractExpired(contractDoc.endDate, now)) {
+      return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể tạo hóa đơn" });
+    }
+
     const existing = await Bill.findOne({ contract, month: m, year: y });
     if (existing) return res.status(400).json({ message: "Hóa đơn tháng này đã tồn tại" });
     const bill = await Bill.create({
@@ -286,7 +311,13 @@ exports.generateByMonth = async (req, res) => {
       return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
     }
 
-    const contracts = await Contract.find({ status: { $in: ["active", "pending_payment"] } })
+    const now = new Date();
+    const today = toStartOfDay(now);
+
+    const contracts = await Contract.find({
+      status: { $in: ["active", "pending_payment"] },
+      endDate: { $gte: today },
+    })
       .populate("room", "price roomNumber area")
       .populate("user", "fullName email");
     if (!contracts.length) return res.json({ created: 0, skipped: 0, message: "Không có hợp đồng đang hiệu lực" });

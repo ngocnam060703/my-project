@@ -110,6 +110,7 @@ const ViolationsPage: React.FC = () => {
   const [detail, setDetail] = useState<Violation | null>(null);
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
   const [resolveTarget, setResolveTarget] = useState<Violation | null>(null);
+  const [resolveLoading, setResolveLoading] = useState(false);
   const [editTarget, setEditTarget] = useState<Violation | null>(null);
   const [form] = Form.useForm();
   const [resolveForm] = Form.useForm();
@@ -237,20 +238,28 @@ const ViolationsPage: React.FC = () => {
 
   const submitResolve = async (vals: { actionType: string; penaltyAmount?: number; note?: string }) => {
     if (!resolveTarget) return;
+    const target = resolveTarget;
+    setResolveLoading(true);
     try {
-      await disciplinaryApi.resolve({
-        violationId: resolveTarget._id,
+      const r = await disciplinaryApi.resolve({
+        violationId: target._id,
         actionType: vals.actionType,
         penaltyAmount: vals.actionType === "fine" ? vals.penaltyAmount : undefined,
         note: vals.note,
       });
-      message.success("Đã ghi nhận xử lý");
+
+      const updated = r.data as Violation;
+      // Cập nhật ngay trên UI (không reload trang), đảm bảo dòng chuyển sang “Đã xử lý”.
+      setViolations((prev) => prev.map((it) => (it._id === target._id ? updated : it)));
+      setDetail((prev) => (prev && prev._id === target._id ? updated : prev));
+      message.success("Đã xử lý");
       setResolveTarget(null);
       resolveForm.resetFields();
-      void loadViolations();
       void loadSummary();
     } catch (e: unknown) {
       message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi xử lý");
+    } finally {
+      setResolveLoading(false);
     }
   };
 
@@ -1080,7 +1089,7 @@ const ViolationsPage: React.FC = () => {
               <Form.Item name="note" label="Ghi chú quyết định">
                 <Input.TextArea rows={3} placeholder="Tùy chọn" />
               </Form.Item>
-              <Button type="primary" htmlType="submit" block size="large">
+              <Button type="primary" htmlType="submit" block size="large" loading={resolveLoading}>
                 Xác nhận xử lý
               </Button>
             </Form>

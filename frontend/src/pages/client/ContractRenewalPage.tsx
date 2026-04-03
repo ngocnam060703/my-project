@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Card, Form, Input, DatePicker, Button, message, Spin } from "antd";
 import { useNavigate, useParams } from "react-router-dom";
 import dayjs from "dayjs";
-import { contractsApi, registrationsApi } from "../../api";
+import { contractsApi, registrationsApi, dashboardApi } from "../../api";
 import { isSchoolYearNotPast, schoolYearValidationMessage } from "../../utils/schoolYear";
 
 const ContractRenewalPage: React.FC = () => {
@@ -15,23 +15,42 @@ const ContractRenewalPage: React.FC = () => {
 
   useEffect(() => {
     if (!id) return;
-    contractsApi.getById(id).then((res) => {
-      const c = res.data;
-      if (c.status !== "active") {
-        message.warning("Chỉ có thể gia hạn hợp đồng đang hiệu lực");
+    setLoading(true);
+    const run = async () => {
+      try {
+        const [settingRes, contractRes] = await Promise.all([dashboardApi.getContractExtensionSetting(), contractsApi.getById(id)]);
+
+        const enabled = settingRes.data?.enable_contract_extension ?? false;
+        if (!enabled) {
+          message.warning("Gia hạn hợp đồng hiện đang bị tắt");
+          navigate("/student/my-contracts");
+          return;
+        }
+
+        const c = contractRes.data;
+        if (c.status !== "active") {
+          message.warning("Chỉ có thể gia hạn hợp đồng đang hiệu lực");
+          navigate("/student/my-contracts");
+          return;
+        }
+
+        setContract(c);
+        const nextYear = new Date(c.endDate);
+        nextYear.setFullYear(nextYear.getFullYear() + 1);
+        form.setFieldsValue({
+          room: c.room._id,
+          schoolYear: `${nextYear.getFullYear() - 1}-${nextYear.getFullYear()}`,
+          semester: "1",
+          startDate: dayjs(c.endDate).add(1, "day"),
+        });
+      } catch {
         navigate("/student/my-contracts");
-        return;
+      } finally {
+        setLoading(false);
       }
-      setContract(c);
-      const nextYear = new Date(c.endDate);
-      nextYear.setFullYear(nextYear.getFullYear() + 1);
-      form.setFieldsValue({
-        room: c.room._id,
-        schoolYear: `${nextYear.getFullYear() - 1}-${nextYear.getFullYear()}`,
-        semester: "1",
-        startDate: dayjs(c.endDate).add(1, "day"),
-      });
-    }).catch(() => navigate("/student/my-contracts")).finally(() => setLoading(false));
+    };
+
+    void run();
   }, [id, form, navigate]);
 
   const onFinish = async (v: { room: string; semester: string; schoolYear: string; startDate: ReturnType<typeof dayjs> }) => {

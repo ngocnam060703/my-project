@@ -70,6 +70,9 @@ export const usersApi = {
 
 export const dashboardApi = {
   getStats: () => client.get("/dashboard/stats"),
+  getContractExtensionSetting: () => client.get("/dashboard/contract-extension-setting"),
+  setContractExtensionSetting: (data: { enable_contract_extension: boolean }) =>
+    client.put("/dashboard/contract-extension-setting", data),
 };
 
 export const ratingsApi = {
