@@ -10,11 +10,14 @@ async function findUserByEmailFlexible(User, normalizedLowerEmail) {
   const email = String(normalizedLowerEmail || "").trim().toLowerCase();
   if (!email) return null;
 
-  let user = await User.findOne({ email });
+  const alive = { isDeleted: { $ne: true } };
+
+  let user = await User.findOne({ email, ...alive });
   if (user) return user;
 
   try {
     user = await User.findOne({
+      ...alive,
       $expr: {
         $eq: [{ $toLower: { $ifNull: ["$email", ""] } }, email],
       },
@@ -27,7 +30,7 @@ async function findUserByEmailFlexible(User, normalizedLowerEmail) {
   const q = findUserByEmailQuery(email);
   if (!q) return null;
   try {
-    return await User.findOne(q);
+    return await User.findOne({ ...q, ...alive });
   } catch (e) {
     console.warn("[findUserByEmail] regex:", e?.message || e);
     return null;

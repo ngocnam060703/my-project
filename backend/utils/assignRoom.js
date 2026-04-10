@@ -24,7 +24,7 @@ function areaMatchesUser(areaDoc, userGenderNorm) {
  */
 async function assignRoomForStudent(user) {
   const g = normalizeGender(user.gender);
-  const areas = await Area.find({}).lean();
+  const areas = await Area.find({ isDeleted: { $ne: true } }).lean();
   const allowed = areas.filter((a) => areaMatchesUser(a, g));
   const areaIds = (allowed.length ? allowed : areas).map((a) => a._id);
   if (!areaIds.length) return null;

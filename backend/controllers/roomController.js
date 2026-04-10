@@ -141,6 +141,8 @@ exports.create = async (req, res) => {
     } = req.body;
     const existing = await Room.findOne({ area, roomNumber });
     if (existing) return res.status(400).json({ message: "Phòng đã tồn tại trong khu này" });
+    const areaDoc = await Area.findOne({ _id: area, isDeleted: { $ne: true } });
+    if (!areaDoc) return res.status(400).json({ message: "Khu không tồn tại hoặc đã ngừng sử dụng" });
     let ams = sanitizeAmenities(amenities);
     if (!ams.length) {
       ams = ["Giường", "Tủ", "Quạt"];

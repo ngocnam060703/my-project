@@ -1,59 +1,165 @@
-import React, { useEffect, useState } from "react";
-import { Card, Table, Button, Modal, Form, Input, Select, message, Space, Row, Col, Statistic } from "antd";
-import { PlusOutlined, BankOutlined, EditOutlined, DeleteOutlined, FilterOutlined, EyeOutlined, DownloadOutlined } from "@ant-design/icons";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import axios from "axios";
+import {
+  Card,
+  Table,
+  Button,
+  Modal,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  message,
+  Space,
+  Row,
+  Col,
+  Statistic,
+  Tag,
+  Descriptions,
+  Spin,
+} from "antd";
+import type { TableProps } from "antd";
+import {
+  PlusOutlined,
+  BankOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  FilterOutlined,
+  EyeOutlined,
+  DownloadOutlined,
+} from "@ant-design/icons";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { exportToExcel } from "../../utils/exportExcel";
-import { areasApi, usersApi } from "../../api";
-import type { Area } from "../../types";
+import { zonesApi, usersApi } from "../../api";
+import type { Area, Room, ZoneDetailResponse } from "../../types";
 
 const AreasPage: React.FC = () => {
   const [data, setData] = useState<Area[]>([]);
   const [managers, setManagers] = useState<{ _id: string; fullName: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [detailModal, setDetailModal] = useState<Area | null>(null);
+  const [detail, setDetail] = useState<ZoneDetailResponse | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [stats, setStats] = useState<{ total: number; withManager: number; withoutManager: number }>({ total: 0, withManager: 0, withoutManager: 0 });
+  const [statusFilter, setStatusFilter] = useState<"" | "available" | "full">("");
+  const [sortBy, setSortBy] = useState<"name" | "totalRooms">("name");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [dashboard, setDashboard] = useState({ totalZones: 0, totalRooms: 0, totalStudents: 0 });
 
-  const load = async () => {
+  const pageSize = 10;
+  const loadErrorAt = useRef(0);
+
+  const formatLoadError = (err: unknown): string => {
+    if (axios.isAxiosError(err)) {
+      const m = err.response?.data?.message;
+      if (typeof m === "string" && m.trim()) return m;
+      const st = err.response?.status;
+      if (st === 404) return "Không tìm thấy API (404). Khởi động lại backend hoặc kiểm tra proxy.";
+      if (st) return `Lỗi máy chủ (${st})`;
+    }
+    return "Không tải được dữ liệu";
+  };
+
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [areasRes, usersRes] = await Promise.all([
-        areasApi.getAll({ search: search.trim() || undefined }),
+      const [zonesOut, usersOut] = await Promise.allSettled([
+        zonesApi.getAll({
+          search: search.trim() || undefined,
+          status: statusFilter || undefined,
+          sortBy,
+          sortOrder,
+          page,
+          limit: pageSize,
+        }),
         usersApi.getAll({ role: "manager", limit: 500 }),
       ]);
-      const areasData = areasRes.data?.areas ?? areasRes.data ?? [];
-      const list = Array.isArray(areasData) ? areasData : [];
-      setData(list);
-      setStats(areasRes.data?.stats ?? { total: list.length, withManager: 0, withoutManager: list.length });
-      setManagers((usersRes.data?.users || []) as { _id: string; fullName: string }[]);
-    } catch {
-      message.error("Không tải được dữ liệu");
+
+      if (zonesOut.status === "fulfilled") {
+        const zonesRes = zonesOut.value;
+        setData(zonesRes.data?.zones ?? []);
+        setTotal(zonesRes.data?.total ?? 0);
+        setDashboard(zonesRes.data?.dashboard ?? { totalZones: 0, totalRooms: 0, totalStudents: 0 });
+      } else {
+        setData([]);
+        setTotal(0);
+        setDashboard({ totalZones: 0, totalRooms: 0, totalStudents: 0 });
+        const now = Date.now();
+        if (now - loadErrorAt.current > 900) {
+          loadErrorAt.current = now;
+          message.error(formatLoadError(zonesOut.reason));
+        }
+      }
+
+      if (usersOut.status === "fulfilled") {
+        setManagers((usersOut.value.data?.users || []) as { _id: string; fullName: string }[]);
+      } else {
+        setManagers([]);
+      }
+    } catch (err: unknown) {
+      const now = Date.now();
+      if (now - loadErrorAt.current > 900) {
+        loadErrorAt.current = now;
+        message.error(formatLoadError(err));
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, search, statusFilter, sortBy, sortOrder]);
 
   useEffect(() => {
-    const t = setTimeout(() => load(), search ? 300 : 0);
-    return () => clearTimeout(t);
-  }, [search]);
+    const t = window.setTimeout(() => setSearch(searchInput.trim()), searchInput ? 350 : 0);
+    return () => window.clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter, sortBy, sortOrder]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const openDetail = async (id: string) => {
+    setDetailOpen(true);
+    setDetail(null);
+    setDetailLoading(true);
+    try {
+      const res = await zonesApi.getById(id);
+      setDetail(res.data as ZoneDetailResponse);
+    } catch {
+      message.error("Không tải chi tiết khu");
+      setDetailOpen(false);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
 
   const handleSubmit = async (v: Record<string, unknown>) => {
     try {
-      const payload = { ...v, manager: v.manager || null };
+      const payload = {
+        ...v,
+        manager: v.manager || null,
+        plannedTotalRooms: Number(v.plannedTotalRooms),
+        plannedCapacity: Number(v.plannedCapacity),
+      };
       if (editingId) {
-        await areasApi.update(editingId, payload);
+        await zonesApi.update(editingId, payload);
         message.success("Cập nhật thành công");
       } else {
-        await areasApi.create(payload);
-        message.success("Thêm thành công");
+        await zonesApi.create(payload);
+        message.success("Thêm khu thành công");
       }
       setModalOpen(false);
       setEditingId(null);
       form.resetFields();
-      load();
+      void load();
     } catch (err: unknown) {
       message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
     }
@@ -65,6 +171,8 @@ const AreasPage: React.FC = () => {
     form.setFieldsValue({
       name: record.name,
       description: record.description,
+      plannedTotalRooms: record.plannedTotalRooms ?? record.actualTotalRooms ?? 1,
+      plannedCapacity: record.plannedCapacity ?? record.effectiveCapacity ?? 1,
       manager: managerId || undefined,
       genderPolicy: record.genderPolicy || "mixed",
     });
@@ -73,16 +181,20 @@ const AreasPage: React.FC = () => {
 
   const handleDelete = (id: string, name: string) => {
     Modal.confirm({
-      title: "Xác nhận xóa",
-      content: `Bạn có chắc muốn xóa khu "${name}"? Không thể xóa khu đã có phòng.`,
+      title: "Xác nhận xóa khu",
+      content: `Xóa mềm khu "${name}"? Không thể xóa nếu khu còn sinh viên đang ở.`,
       okText: "Xóa",
       okType: "danger",
       cancelText: "Hủy",
       onOk: async () => {
         try {
-          await areasApi.delete(id);
-          message.success("Đã xóa");
-          load();
+          await zonesApi.delete(id);
+          message.success("Đã xóa khu");
+          void load();
+          if (detail?.zone._id === id) {
+            setDetail(null);
+            setDetailOpen(false);
+          }
         } catch (err: unknown) {
           message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
         }
@@ -91,122 +203,384 @@ const AreasPage: React.FC = () => {
   };
 
   const genderLabel: Record<string, string> = { male: "Nam", female: "Nữ", mixed: "Hỗn hợp" };
-  const occLabel: Record<string, string> = { empty: "Chưa có phòng", available: "Còn chỗ", full: "Đầy" };
+
+  const tableOnChange: TableProps<Area>["onChange"] = (_pg, _f, sorter) => {
+    if (Array.isArray(sorter)) return;
+    if (!sorter.order) {
+      setSortBy("name");
+      setSortOrder("asc");
+      setPage(1);
+      return;
+    }
+    const field = sorter.field === "totalRooms" ? "totalRooms" : "name";
+    setSortBy(field);
+    setSortOrder(sorter.order === "ascend" ? "asc" : "desc");
+    setPage(1);
+  };
+
+  const chartData = data.map((z) => ({
+    name: z.name?.length > 10 ? `${z.name.slice(0, 9)}…` : z.name,
+    full: z.fillPercent ?? 0,
+  }));
 
   const columns = [
-    { title: "Tên khu", dataIndex: "name", key: "name", render: (v: string) => <strong>{v || "-"}</strong> },
-    { title: "Phân khu (giới)", dataIndex: "genderPolicy", key: "genderPolicy", width: 120, render: (g: string) => genderLabel[g] || g || "—" },
-    { title: "Số phòng", dataIndex: "totalRooms", key: "totalRooms", width: 90, render: (n: number) => n ?? "—" },
-    { title: "SV đang ở", dataIndex: "totalStudents", key: "totalStudents", width: 100, render: (n: number) => n ?? "—" },
+    {
+      title: "Tên khu",
+      dataIndex: "name",
+      key: "name",
+      sorter: true,
+      sortOrder: sortBy === "name" ? (sortOrder === "asc" ? ("ascend" as const) : ("descend" as const)) : undefined,
+      render: (v: string) => <strong>{v || "—"}</strong>,
+    },
+    {
+      title: "Tổng phòng",
+      dataIndex: "totalRooms",
+      key: "totalRooms",
+      width: 110,
+      sorter: true,
+      sortOrder: sortBy === "totalRooms" ? (sortOrder === "asc" ? ("ascend" as const) : ("descend" as const)) : undefined,
+      render: (_: number, r: Area) => r.actualTotalRooms ?? r.totalRooms ?? 0,
+    },
+    {
+      title: "Sức chứa",
+      key: "cap",
+      width: 100,
+      render: (_: unknown, r: Area) => r.effectiveCapacity ?? r.plannedCapacity ?? "—",
+    },
+    {
+      title: "Đang ở",
+      dataIndex: "currentStudents",
+      key: "currentStudents",
+      width: 100,
+      render: (n: number) => n ?? 0,
+    },
     {
       title: "Trạng thái",
-      dataIndex: "occupancyStatus",
-      key: "occupancyStatus",
-      width: 110,
-      render: (s: string) => occLabel[s] || s || "—",
+      dataIndex: "zoneStatus",
+      key: "zoneStatus",
+      width: 120,
+      render: (s: string) =>
+        s === "full" ? <Tag color="error">Đầy</Tag> : <Tag color="success">Còn chỗ</Tag>,
     },
-    { title: "Mô tả", dataIndex: "description", key: "description", ellipsis: true },
-    { title: "Quản lý", dataIndex: ["manager", "fullName"], key: "manager", render: (v: string, r: Area) => (typeof r.manager === "object" ? r.manager?.fullName : v) || <span style={{ color: "#999" }}>-</span> },
+    {
+      title: "Giới tính",
+      dataIndex: "genderPolicy",
+      key: "genderPolicy",
+      width: 100,
+      render: (g: string) => genderLabel[g] || g || "—",
+    },
+    {
+      title: "Mô tả",
+      dataIndex: "description",
+      key: "description",
+      ellipsis: true,
+    },
+    {
+      title: "Quản lý",
+      key: "manager",
+      width: 140,
+      ellipsis: true,
+      render: (_: unknown, r: Area) =>
+        typeof r.manager === "object" ? r.manager?.fullName : <span style={{ color: "#999" }}>—</span>,
+    },
     {
       title: "Thao tác",
       key: "action",
-      width: 180,
+      width: 200,
+      fixed: "right" as const,
       render: (_: unknown, record: Area) => (
-        <Space>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(record)}>Chi tiết</Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>Sửa</Button>
-          <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => handleDelete(record._id, record.name || "")}>Xóa</Button>
+        <Space size={0} wrap>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => void openDetail(record._id)}>
+            Xem
+          </Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+            Sửa
+          </Button>
+          <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => handleDelete(record._id, record.name || "")}>
+            Xóa
+          </Button>
         </Space>
       ),
     },
   ];
 
+  const z = detail?.zone;
+
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}><BankOutlined /> Quản lý khu</h2>
-        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Thêm, sửa khu và phân công quản lý</p>
+        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>
+          <BankOutlined /> Quản lý khu KTX
+        </h2>
+        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
+          Theo dõi sức chứa, tỷ lệ lấp đầy và danh sách phòng theo từng khu — đồng bộ thời gian thực từ phòng & sinh viên.
+        </p>
       </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} md={8}>
+        <Col xs={24} sm={8}>
           <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
-            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Tổng khu</span>} value={stats.total} suffix="khu" valueStyle={{ color: "#fff", fontSize: 20 }} />
+            <Statistic
+              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Tổng khu</span>}
+              value={dashboard.totalZones}
+              suffix="khu"
+              valueStyle={{ color: "#fff", fontSize: 20 }}
+            />
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={8}>
+        <Col xs={24} sm={8}>
           <Card>
-            <Statistic title="Đã có quản lý" value={stats.withManager} suffix="khu" />
+            <Statistic title="Tổng phòng (thực tế)" value={dashboard.totalRooms} suffix="phòng" />
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={8}>
+        <Col xs={24} sm={8}>
           <Card>
-            <Statistic title="Chưa có quản lý" value={stats.withoutManager} suffix="khu" />
+            <Statistic title="Sinh viên đang ở" value={dashboard.totalStudents} suffix="người" />
           </Card>
         </Col>
       </Row>
 
+      {chartData.length > 0 && (
+        <Card title="Tỷ lệ lấp đầy theo khu (trang hiện tại)" style={{ marginBottom: 24, borderRadius: 12 }}>
+          <div style={{ width: "100%", height: 280 }}>
+            <ResponsiveContainer>
+              <BarChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <YAxis domain={[0, 100]} unit="%" tick={{ fontSize: 12 }} />
+                <Tooltip formatter={(v) => [`${v}%`, "Lấp đầy"]} />
+                <Bar dataKey="full" fill="#0d9488" name="Lấp đầy %" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
       <Card style={{ borderRadius: 12 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20, alignItems: "center" }}>
           <FilterOutlined style={{ color: "#6b7280" }} />
-          <Input placeholder="Tìm theo tên khu" style={{ width: 200 }} value={search} onChange={(e) => setSearch(e.target.value)} allowClear />
-          <Button onClick={() => setSearch("")}>Xóa lọc</Button>
+          <Input.Search
+            placeholder="Tìm theo tên khu"
+            style={{ width: 220 }}
+            allowClear
+            value={searchInput}
+            onSearch={(v) => setSearchInput(v)}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+          <Select
+            placeholder="Trạng thái"
+            allowClear
+            style={{ width: 150 }}
+            value={statusFilter || undefined}
+            onChange={(v) => setStatusFilter((v as "" | "available" | "full") || "")}
+          >
+            <Select.Option value="available">Còn chỗ</Select.Option>
+            <Select.Option value="full">Đầy</Select.Option>
+          </Select>
+          <Button
+            onClick={() => {
+              setSearchInput("");
+              setSearch("");
+              setStatusFilter("");
+              setSortBy("name");
+              setSortOrder("asc");
+              setPage(1);
+            }}
+          >
+            Xóa lọc
+          </Button>
           <div style={{ flex: 1 }} />
           <Space>
-            <Button icon={<DownloadOutlined />} onClick={() => exportToExcel(data.map((a) => ({
-              "Tên khu": a.name,
-              "Mô tả": a.description,
-              "Quản lý": typeof a.manager === "object" ? a.manager?.fullName : "-",
-            })), "danh-sach-khu", "Khu")}>Xuất Excel</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); setModalOpen(true); }}>Thêm khu</Button>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() =>
+                exportToExcel(
+                  data.map((a) => ({
+                    "Tên khu": a.name,
+                    "Phòng (thực tế)": a.actualTotalRooms ?? a.totalRooms,
+                    "Sức chứa": a.effectiveCapacity ?? a.plannedCapacity,
+                    "Đang ở": a.currentStudents,
+                    "Trạng thái": a.zoneStatus === "full" ? "Đầy" : "Còn chỗ",
+                    "Mô tả": a.description,
+                  })),
+                  "danh-sach-khu-ktx",
+                  "Khu KTX"
+                )
+              }
+            >
+              Xuất Excel
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setEditingId(null);
+                form.resetFields();
+                form.setFieldsValue({ genderPolicy: "mixed", plannedTotalRooms: 1, plannedCapacity: 1 });
+                setModalOpen(true);
+              }}
+            >
+              Thêm khu
+            </Button>
           </Space>
         </div>
 
-        <Table
+        <Table<Area>
           columns={columns}
           dataSource={data}
           rowKey="_id"
           loading={loading}
-          pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `Tổng ${t} khu` }}
+          pagination={{
+            total,
+            current: page,
+            pageSize,
+            showSizeChanger: false,
+            showTotal: (t) => `Tổng ${t} khu`,
+            onChange: setPage,
+          }}
+          onChange={tableOnChange}
           size="middle"
+          scroll={{ x: 980 }}
         />
       </Card>
 
-      <Modal title={editingId ? "Sửa khu" : "Thêm khu"} open={modalOpen} onCancel={() => { setModalOpen(false); setEditingId(null); form.resetFields(); }} footer={null} width={480}>
-        <Form form={form} onFinish={handleSubmit} layout="vertical">
-          <Form.Item name="name" label="Tên khu" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="genderPolicy" label="Phân khu theo giới tính" initialValue="mixed">
+      <Modal
+        title={editingId ? "Sửa khu" : "Thêm khu"}
+        open={modalOpen}
+        onCancel={() => {
+          setModalOpen(false);
+          setEditingId(null);
+          form.resetFields();
+        }}
+        footer={null}
+        width={520}
+      >
+        <Form form={form} onFinish={handleSubmit} layout="vertical" initialValues={{ genderPolicy: "mixed" }}>
+          <Form.Item name="name" label="Tên khu" rules={[{ required: true, message: "Nhập tên khu" }]}>
+            <Input placeholder="Khu A" />
+          </Form.Item>
+          <Form.Item name="description" label="Mô tả">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="plannedTotalRooms"
+                label="Tổng số phòng (quy hoạch)"
+                rules={[{ required: true, type: "number", min: 1, message: "Phải > 0" }]}
+              >
+                <InputNumber min={1} style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="plannedCapacity"
+                label="Sức chứa tối đa (SV)"
+                rules={[{ required: true, type: "number", min: 1, message: "Phải > 0" }]}
+              >
+                <InputNumber min={1} style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="genderPolicy" label="Phân khu theo giới tính">
             <Select
               options={[
-                { value: "mixed", label: "Hỗn hợp (nam & nữ)" },
+                { value: "mixed", label: "Hỗn hợp" },
                 { value: "male", label: "Khu nam" },
                 { value: "female", label: "Khu nữ" },
               ]}
             />
           </Form.Item>
-          <Form.Item name="description" label="Mô tả"><Input.TextArea rows={2} /></Form.Item>
           <Form.Item name="manager" label="Quản lý">
-            <Select allowClear placeholder="Chọn quản lý">
-              <Select.Option value="">Không</Select.Option>
-              {managers.map((m) => <Select.Option key={m._id} value={m._id}>{m.fullName}</Select.Option>)}
-            </Select>
+            <Select allowClear placeholder="Chọn quản lý" options={managers.map((m) => ({ value: m._id, label: m.fullName }))} />
           </Form.Item>
-          <Form.Item><Button type="primary" htmlType="submit" block>{editingId ? "Cập nhật" : "Thêm"}</Button></Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" block>
+              {editingId ? "Cập nhật" : "Thêm khu"}
+            </Button>
+          </Form.Item>
         </Form>
       </Modal>
 
-      <Modal title={`Chi tiết khu ${detailModal?.name || ""}`} open={!!detailModal} onCancel={() => setDetailModal(null)} footer={[<Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>, detailModal && <Button key="edit" type="primary" icon={<EditOutlined />} onClick={() => { setDetailModal(null); handleEdit(detailModal); setModalOpen(true); }}>Sửa</Button>]}>
-        {detailModal && (
-          <div style={{ lineHeight: 2 }}>
-            <p><strong>Tên khu:</strong> {detailModal.name}</p>
-            <p><strong>Phân khu (giới):</strong> {genderLabel[detailModal.genderPolicy || "mixed"] || detailModal.genderPolicy}</p>
-            <p><strong>Tổng phòng:</strong> {detailModal.totalRooms ?? "—"}</p>
-            <p><strong>Sinh viên đang ở:</strong> {detailModal.totalStudents ?? "—"}</p>
-            <p><strong>Trạng thái:</strong> {occLabel[detailModal.occupancyStatus || ""] || detailModal.occupancyStatus || "—"}</p>
-            <p><strong>Mô tả:</strong> {detailModal.description || "-"}</p>
-            <p><strong>Quản lý:</strong> {typeof detailModal.manager === "object" ? detailModal.manager?.fullName : "-"}</p>
-          </div>
-        )}
+      <Modal
+        title={z ? `Chi tiết — ${z.name}` : "Chi tiết khu"}
+        open={detailOpen}
+        onCancel={() => {
+          setDetailOpen(false);
+          setDetail(null);
+          setDetailLoading(false);
+        }}
+        width={800}
+        footer={[
+          <Button
+            key="cl"
+            onClick={() => {
+              setDetailOpen(false);
+              setDetail(null);
+            }}
+          >
+            Đóng
+          </Button>,
+          ...(z
+            ? [
+                <Button
+                  key="ed"
+                  type="primary"
+                  icon={<EditOutlined />}
+                  onClick={() => {
+                    setDetailOpen(false);
+                    handleEdit(z);
+                    setModalOpen(true);
+                  }}
+                >
+                  Sửa
+                </Button>,
+              ]
+            : []),
+        ]}
+      >
+        <Spin spinning={detailLoading}>
+          {detail && z && (
+            <Space direction="vertical" size="large" style={{ width: "100%" }}>
+              <Descriptions bordered size="small" column={1}>
+                <Descriptions.Item label="Mô tả">{z.description || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Phòng (thực tế / quy hoạch)">
+                  {(z.actualTotalRooms ?? z.totalRooms ?? 0) as number} / {z.plannedTotalRooms ?? "—"}
+                </Descriptions.Item>
+                <Descriptions.Item label="Sức chứa (hiệu lực)">{detail.summary.effectiveCapacity}</Descriptions.Item>
+                <Descriptions.Item label="Sinh viên đang ở">{detail.summary.currentStudents}</Descriptions.Item>
+                <Descriptions.Item label="Tỷ lệ lấp đầy">{detail.summary.fillPercent}%</Descriptions.Item>
+                <Descriptions.Item label="Trạng thái">
+                  {detail.summary.zoneStatus === "full" ? <Tag color="error">Đầy</Tag> : <Tag color="success">Còn chỗ</Tag>}
+                </Descriptions.Item>
+                <Descriptions.Item label="Giới tính">{genderLabel[z.genderPolicy || "mixed"]}</Descriptions.Item>
+                <Descriptions.Item label="Quản lý">
+                  {typeof z.manager === "object" ? z.manager?.fullName : "—"}
+                </Descriptions.Item>
+                <Descriptions.Item label="Ngày tạo">
+                  {z.createdAt ? new Date(z.createdAt).toLocaleString("vi-VN") : "—"}
+                </Descriptions.Item>
+              </Descriptions>
+
+              <div>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Danh sách phòng</div>
+                <Table<Room>
+                  size="small"
+                  rowKey="_id"
+                  pagination={false}
+                  dataSource={detail.rooms}
+                  columns={[
+                    { title: "Số phòng", dataIndex: "roomNumber", key: "rn" },
+                    { title: "Tầng", dataIndex: "floor", key: "fl" },
+                    { title: "Sức chứa", dataIndex: "capacity", key: "cap" },
+                    { title: "Đang ở", dataIndex: "currentOccupancy", key: "co" },
+                    { title: "Trạng thái", dataIndex: "status", key: "st" },
+                  ]}
+                />
+              </div>
+            </Space>
+          )}
+        </Spin>
       </Modal>
     </div>
   );

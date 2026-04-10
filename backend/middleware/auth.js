@@ -9,8 +9,11 @@ const auth = async (req, res, next) => {
     }
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret");
     const user = await User.findById(String(decoded.userId));
-    if (!user || !user.isActive) {
+    if (!user || user.isDeleted) {
       return res.status(401).json({ message: "Phiên đăng nhập không hợp lệ" });
+    }
+    if (!user.isActive) {
+      return res.status(401).json({ message: "Tài khoản đã bị khóa" });
     }
     req.user = user;
     req.token = token;

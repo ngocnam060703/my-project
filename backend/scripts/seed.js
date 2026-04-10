@@ -49,8 +49,21 @@ const seed = async () => {
     role: "user",
   });
 
-  const areaA = await Area.create({ name: "Khu A", description: "Khu nam", manager: manager._id, genderPolicy: "male" });
-  const areaB = await Area.create({ name: "Khu B", description: "Khu nữ", genderPolicy: "female" });
+  const areaA = await Area.create({
+    name: "Khu A",
+    description: "Khu nam",
+    manager: manager._id,
+    genderPolicy: "male",
+    plannedTotalRooms: 20,
+    plannedCapacity: 80,
+  });
+  const areaB = await Area.create({
+    name: "Khu B",
+    description: "Khu nữ",
+    genderPolicy: "female",
+    plannedTotalRooms: 20,
+    plannedCapacity: 80,
+  });
 
   await Room.create([
     // Khu A (tầng 1-2)

@@ -3,8 +3,14 @@ export interface User {
   email: string;
   fullName: string;
   role: string;
+  avatar?: string;
+  isActive?: boolean;
+  isDeleted?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
   phone?: string;
   studentId?: string;
+  major?: string;
   gender?: string;
   citizenId?: string;
   dateOfBirth?: string;
@@ -24,15 +30,51 @@ export interface User {
   familyEmergencyPhone?: string;
 }
 
+/** GET /users/:id — payload đầy đủ cho admin */
+export interface AdminUserDetailResponse {
+  user: User;
+  currentRoom: Room | null;
+  currentContract: Contract | null;
+  contracts: Contract[];
+}
+
+export interface StudentProfileResponse {
+  student: User;
+  currentRoom: Room | null;
+  currentContract: Contract | null;
+  contracts: Contract[];
+  residenceStatus: "dang_o" | "da_roi";
+}
+
 export interface Area {
   _id: string;
   name: string;
   description?: string;
   manager?: User;
   genderPolicy?: "male" | "female" | "mixed";
+  /** Số phòng thực tế trong DB */
   totalRooms?: number;
+  actualTotalRooms?: number;
+  plannedTotalRooms?: number | null;
+  plannedCapacity?: number | null;
+  effectiveCapacity?: number;
+  currentStudents?: number;
   totalStudents?: number;
+  zoneStatus?: "available" | "full";
   occupancyStatus?: "empty" | "available" | "full";
+  fillPercent?: number;
+  createdAt?: string;
+}
+
+export interface ZoneDetailResponse {
+  zone: Area;
+  rooms: Room[];
+  summary: {
+    currentStudents: number;
+    effectiveCapacity: number;
+    fillPercent: number;
+    zoneStatus: "available" | "full";
+  };
 }
 
 export interface Room {

@@ -3,7 +3,8 @@ const bcrypt = require("bcryptjs");
 
 const userSchema = new mongoose.Schema(
   {
-    email: { type: String, required: true, unique: true },
+    /** Unique chỉ với bản ghi chưa xóa mềm — xem index phía dưới */
+    email: { type: String, required: true },
     password: { type: String, required: true },
     fullName: { type: String, required: true },
     phone: { type: String, default: "" },
@@ -43,9 +44,20 @@ const userSchema = new mongoose.Schema(
     isSuperAdmin: { type: Boolean, default: false },
     avatar: { type: String, default: "" },
     isActive: { type: Boolean, default: true },
+    /** Xóa mềm — không hiển thị trong danh sách, không đăng nhập */
+    isDeleted: { type: Boolean, default: false, index: true },
     managedArea: { type: mongoose.Schema.Types.ObjectId, ref: "Area", default: null },
   },
   { timestamps: true }
+);
+
+userSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isDeleted: { $ne: true } },
+    name: "email_unique_active",
+  }
 );
 
 userSchema.pre("save", async function () {

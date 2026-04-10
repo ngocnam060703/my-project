@@ -1,5 +1,8 @@
+import type { AxiosResponse } from "axios";
+import { isAxiosError } from "axios";
 import client from "./client";
 import { authApi } from "./auth";
+import type { Area, Room, ZoneDetailResponse } from "../types";
 
 export { client, authApi };
 
@@ -9,6 +12,176 @@ export const areasApi = {
   create: (data: Record<string, unknown>) => client.post("/areas", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/areas/${id}`, data),
   delete: (id: string) => client.delete(`/areas/${id}`),
+};
+
+type ZoneListParams = {
+  search?: string;
+  status?: "available" | "full";
+  sortBy?: "name" | "totalRooms";
+  sortOrder?: "asc" | "desc";
+  page?: number;
+  limit?: number;
+};
+
+export type ZonesListResponseData = {
+  zones: Area[];
+  total: number;
+  page: number;
+  limit: number;
+  dashboard: { totalZones: number; totalRooms: number; totalStudents: number };
+};
+
+type AreaListRow = Area & { totalStudents?: number; occupancyStatus?: string };
+
+function mapAreaRowToZone(a: AreaListRow): Area {
+  const totalRooms = Number(a.totalRooms) || 0;
+  const totalStudents = Number(a.totalStudents ?? a.currentStudents) || 0;
+  const effCap = Number(a.effectiveCapacity ?? a.plannedCapacity) || 0;
+  const occ = String(a.occupancyStatus || "");
+  const zoneStatus: "available" | "full" =
+    occ === "full" || (effCap > 0 && totalStudents >= effCap) ? "full" : "available";
+  const fillPercent =
+    effCap > 0 ? Math.min(100, Math.round((totalStudents / effCap) * 10000) / 100) : 0;
+  return {
+    ...a,
+    currentStudents: totalStudents,
+    actualTotalRooms: totalRooms,
+    zoneStatus,
+    fillPercent,
+  };
+}
+
+/** Khi backend chưa mount /api/zones (404), dùng /areas công khai để vẫn hiển thị danh sách. */
+async function fetchZonesListViaAreas(params: ZoneListParams): Promise<AxiosResponse<ZonesListResponseData>> {
+  const search = params.search?.trim();
+  const areasListRes = await client.get<{ areas?: AreaListRow[] }>("/areas", {
+    params: { search: search || undefined },
+  });
+  const allAreasRes = search ? await client.get<{ areas?: AreaListRow[] }>("/areas") : areasListRes;
+
+  let enriched = (areasListRes.data?.areas || []).map(mapAreaRowToZone);
+
+  const st = params.status;
+  if (st === "available" || st === "full") {
+    enriched = enriched.filter((z) => z.zoneStatus === st);
+  }
+
+  const sortBy = params.sortBy || "name";
+  const sortOrder = params.sortOrder === "desc" ? -1 : 1;
+  enriched.sort((a, b) => {
+    if (sortBy === "totalRooms") {
+      const d = (a.totalRooms || 0) - (b.totalRooms || 0);
+      return d * sortOrder;
+    }
+    const an = String(a.name || "").toLowerCase();
+    const bn = String(b.name || "").toLowerCase();
+    if (an < bn) return -1 * sortOrder;
+    if (an > bn) return 1 * sortOrder;
+    return 0;
+  });
+
+  const page = Math.max(1, params.page || 1);
+  const limit = Math.min(100, Math.max(1, params.limit || 10));
+  const total = enriched.length;
+  const slice = enriched.slice((page - 1) * limit, (page - 1) * limit + limit);
+
+  const allRows = allAreasRes.data?.areas || [];
+  let sumRooms = 0;
+  let sumStudents = 0;
+  for (const row of allRows) {
+    sumRooms += Number(row.totalRooms) || 0;
+    sumStudents += Number(row.totalStudents ?? row.currentStudents) || 0;
+  }
+
+  const data: ZonesListResponseData = {
+    zones: slice,
+    total,
+    page,
+    limit,
+    dashboard: {
+      totalZones: allRows.length,
+      totalRooms: sumRooms,
+      totalStudents: sumStudents,
+    },
+  };
+
+  return { ...areasListRes, data } as AxiosResponse<ZonesListResponseData>;
+}
+
+function buildZoneDetailPayload(area: Area, rooms: Room[]): ZoneDetailResponse {
+  const actualRooms = rooms.length;
+  const currentStudents = rooms.reduce((s, r) => s + (Number(r.currentOccupancy) || 0), 0);
+  const sumRoomCapacity = rooms.reduce((s, r) => s + (Number(r.capacity) || 0), 0);
+  const plannedCap =
+    area.plannedCapacity != null && Number(area.plannedCapacity) > 0
+      ? Number(area.plannedCapacity)
+      : sumRoomCapacity;
+  const zoneStatus: "available" | "full" =
+    !plannedCap || plannedCap <= 0 ? "available" : currentStudents >= plannedCap ? "full" : "available";
+  const fillPercent =
+    plannedCap > 0 ? Math.min(100, Math.round((currentStudents / plannedCap) * 10000) / 100) : 0;
+  const zone: Area = {
+    ...area,
+    actualTotalRooms: actualRooms,
+    totalRooms: actualRooms,
+    currentStudents,
+    effectiveCapacity: plannedCap,
+    zoneStatus,
+    fillPercent,
+  };
+  return {
+    zone,
+    rooms,
+    summary: {
+      currentStudents,
+      effectiveCapacity: plannedCap,
+      fillPercent,
+      zoneStatus,
+    },
+  };
+}
+
+async function fetchZoneDetailViaAreaAndRooms(id: string): Promise<AxiosResponse<ZoneDetailResponse>> {
+  const [areaRes, roomsRes] = await Promise.all([
+    client.get<Area>(`/areas/${id}`),
+    client.get<{ rooms?: Room[] }>("/rooms", { params: { area: id, limit: 500 } }),
+  ]);
+  const rooms = (roomsRes.data?.rooms || []) as Room[];
+  const payload = buildZoneDetailPayload(areaRes.data as Area, rooms);
+  return {
+    data: payload,
+    status: 200,
+    statusText: "OK",
+    headers: {},
+    config: roomsRes.config,
+  } as AxiosResponse<ZoneDetailResponse>;
+}
+
+function isZonesEndpointMissing(e: unknown): boolean {
+  return isAxiosError(e) && e.response?.status === 404;
+}
+
+/** Quản lý khu KTX (REST /zones); fallback GET /areas nếu /zones 404 (backend cũ chưa restart). */
+export const zonesApi = {
+  getAll: async (params?: ZoneListParams): Promise<AxiosResponse<ZonesListResponseData>> => {
+    try {
+      return await client.get<ZonesListResponseData>("/zones", { params });
+    } catch (e) {
+      if (!isZonesEndpointMissing(e)) throw e;
+      return fetchZonesListViaAreas(params ?? {});
+    }
+  },
+  getById: async (id: string): Promise<AxiosResponse<ZoneDetailResponse>> => {
+    try {
+      return await client.get<ZoneDetailResponse>(`/zones/${id}`);
+    } catch (e) {
+      if (!isZonesEndpointMissing(e)) throw e;
+      return fetchZoneDetailViaAreaAndRooms(id);
+    }
+  },
+  create: (data: Record<string, unknown>) => client.post("/zones", data),
+  update: (id: string, data: Record<string, unknown>) => client.patch(`/zones/${id}`, data),
+  delete: (id: string) => client.delete(`/zones/${id}`),
 };
 
 export const roomsApi = {
@@ -69,12 +242,34 @@ export const billsApi = {
 };
 
 export const usersApi = {
-  getAll: (params?: { role?: string; search?: string; page?: number; limit?: number }) =>
-    client.get("/users", { params }),
+  getAll: (params?: {
+    role?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+    status?: "active" | "locked" | "";
+    sortBy?: "id" | "fullName" | "createdAt";
+    sortOrder?: "asc" | "desc";
+  }) => client.get("/users", { params }),
   getById: (id: string) => client.get(`/users/${id}`),
   create: (data: Record<string, unknown>) => client.post("/users", data),
-  update: (id: string, data: Record<string, unknown>) => client.put(`/users/${id}`, data),
+  update: (id: string, data: Record<string, unknown>) => client.patch(`/users/${id}`, data),
   delete: (id: string) => client.delete(`/users/${id}`),
+  lock: (id: string) => client.patch(`/users/${id}/lock`),
+  unlock: (id: string) => client.patch(`/users/${id}/unlock`),
+  resetPassword: (id: string, newPassword: string) =>
+    client.patch(`/users/${id}/reset-password`, { newPassword }),
+};
+
+export const studentsApi = {
+  getAll: (params?: { search?: string; page?: number; limit?: number }) =>
+    client.get("/students", { params }),
+  getMe: () => client.get("/students/me"),
+  getById: (id: string) => client.get(`/students/${id}`),
+  create: (data: Record<string, unknown>) => client.post("/students", data),
+  updateById: (id: string, data: Record<string, unknown>) => client.patch(`/students/${id}`, data),
+  updateMe: (data: Record<string, unknown>) => client.patch("/students/me", data),
+  deleteById: (id: string) => client.delete(`/students/${id}`),
 };
 
 export const dashboardApi = {

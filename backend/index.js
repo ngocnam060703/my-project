@@ -10,7 +10,9 @@ const { initSocket } = require("./socket");
 
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
+const studentRoutes = require("./routes/studentRoutes");
 const areaRoutes = require("./routes/areaRoutes");
+const zoneRoutes = require("./routes/zoneRoutes");
 const roomRoutes = require("./routes/roomRoutes");
 const registrationRoutes = require("./routes/registrationRoutes");
 const contractRoutes = require("./routes/contractRoutes");
@@ -59,7 +61,9 @@ app.get("/", (req, res) => res.json({ message: "KTX Management API" }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/students", studentRoutes);
 app.use("/api/areas", areaRoutes);
+app.use("/api/zones", zoneRoutes);
 app.use("/api/rooms", roomRoutes);
 app.use("/api/registrations", registrationRoutes);
 app.use("/api/contracts", contractRoutes);

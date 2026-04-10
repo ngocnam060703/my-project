@@ -10,8 +10,6 @@ import {
   Alert,
   Spin,
   Space,
-  Select,
-  DatePicker,
   Row,
   Col,
   Tabs,
@@ -23,7 +21,8 @@ import {
 } from "antd";
 import dayjs from "dayjs";
 import { EditOutlined, HomeOutlined, UserOutlined, IdcardOutlined, BookOutlined, PhoneOutlined } from "@ant-design/icons";
-import { authApi, studentDashboardApi } from "../../api";
+import { authApi, studentsApi } from "../../api";
+import type { StudentProfileResponse } from "../../types";
 import { useAuth } from "../../contexts/AuthContext";
 import { setUserString } from "../../utils/authStorage";
 
@@ -75,17 +74,6 @@ function maskCitizenId(id?: string | null): string {
   return `${"•".repeat(dots)}${s.slice(-visible)}`;
 }
 
-/**
- * Gợi ý chuyên ngành từ mã lớp (ví dụ 11DHTH1 → Tin học / CNTT).
- */
-function suggestMajorFromClassName(className: string): string {
-  const c = className.trim().toUpperCase();
-  if (!c) return "";
-  if (c.includes("DHTH") || /TH\d+$/.test(c)) return "Công nghệ thông tin";
-  if (c.includes("DHCK") || c.includes("CK")) return "Cơ khí chế tạo máy";
-  if (c.includes("DHKT") || /\bKT\d*$/.test(c)) return "Kế toán";
-  return "";
-}
 
 interface DashboardRoom {
   roomNumber: string;
@@ -138,6 +126,7 @@ interface ProfilePayload {
   familyMotherName?: string;
   familyMotherPhone?: string;
   familyEmergencyPhone?: string;
+  avatar?: string;
 }
 
 const ProfilePage: React.FC = () => {
@@ -172,16 +161,20 @@ const ProfilePage: React.FC = () => {
     try {
       const pres = await authApi.getProfile();
       const p = pres.data as ProfilePayload;
+      let activeProfile: ProfilePayload = p;
       setProfile(p);
       syncAuthUser(p);
 
       if (p.role === "user") {
         try {
-          const dash = await studentDashboardApi.get();
-          setRoom(dash.data?.room ?? null);
+          const detail = (await studentsApi.getMe()).data as StudentProfileResponse;
+          activeProfile = detail.student as ProfilePayload;
+          setProfile(activeProfile);
+          syncAuthUser(activeProfile);
+          setRoom((detail.currentRoom ?? null) as DashboardRoom | null);
           setDashMeta({
-            studentStatus: dash.data?.studentStatus,
-            memberStatusLabel: dash.data?.memberStatusLabel,
+            studentStatus: detail.residenceStatus,
+            memberStatusLabel: detail.residenceStatus === "dang_o" ? "Đang ở" : "Đã rời",
           });
         } catch {
           setRoom(null);
@@ -193,27 +186,14 @@ const ProfilePage: React.FC = () => {
       }
 
       form.setFieldsValue({
-        fullName: p.fullName,
-        studentId: p.studentId,
-        className: p.className,
-        major: p.major,
-        dateOfBirth: p.dateOfBirth ? dayjs(p.dateOfBirth) : undefined,
-        gender: p.gender || undefined,
-        phone: p.phone,
-        address: p.address,
-        citizenId: p.citizenId,
-        faculty: p.faculty,
-        enrollmentDate: p.enrollmentDate ? dayjs(p.enrollmentDate) : undefined,
-        homeroomTeacher: p.homeroomTeacher,
-        addressNative: p.addressNative,
-        addressPermanent: p.addressPermanent,
-        addressTemporary: p.addressTemporary,
-        addressAbsent: p.addressAbsent,
-        familyFatherName: p.familyFatherName,
-        familyFatherPhone: p.familyFatherPhone,
-        familyMotherName: p.familyMotherName,
-        familyMotherPhone: p.familyMotherPhone,
-        familyEmergencyPhone: p.familyEmergencyPhone,
+        phone: activeProfile.phone,
+        address: activeProfile.address,
+        avatar: activeProfile.avatar,
+        addressNative: activeProfile.addressNative,
+        addressPermanent: activeProfile.addressPermanent,
+        addressTemporary: activeProfile.addressTemporary,
+        addressAbsent: activeProfile.addressAbsent,
+        familyEmergencyPhone: activeProfile.familyEmergencyPhone,
       });
     } catch {
       message.error("Không tải được hồ sơ");
@@ -229,37 +209,27 @@ const ProfilePage: React.FC = () => {
   const onFinishStudent = async (v: Record<string, unknown>) => {
     setSaving(true);
     try {
-      const dateOfBirth = v.dateOfBirth
-        ? (v.dateOfBirth as dayjs.Dayjs).format("YYYY-MM-DD")
-        : null;
-      const res = await authApi.updateProfile({
-        fullName: v.fullName as string,
-        studentId: v.studentId as string,
-        className: v.className as string,
-        major: v.major as string,
-        gender: v.gender as string,
+      const res = await studentsApi.updateMe({
         phone: v.phone as string,
         address: v.address as string,
-        citizenId: v.citizenId as string,
-        dateOfBirth,
-        faculty: v.faculty as string | undefined,
-        homeroomTeacher: v.homeroomTeacher as string | undefined,
-        enrollmentDate: v.enrollmentDate ? (v.enrollmentDate as dayjs.Dayjs).format("YYYY-MM-DD") : null,
+        avatar: v.avatar as string,
         addressNative: v.addressNative as string | undefined,
         addressPermanent: v.addressPermanent as string | undefined,
         addressTemporary: v.addressTemporary as string | undefined,
         addressAbsent: v.addressAbsent as string | undefined,
-        familyFatherName: v.familyFatherName as string | undefined,
-        familyFatherPhone: v.familyFatherPhone as string | undefined,
-        familyMotherName: v.familyMotherName as string | undefined,
-        familyMotherPhone: v.familyMotherPhone as string | undefined,
         familyEmergencyPhone: v.familyEmergencyPhone as string | undefined,
       });
-      const updated = res.data as ProfilePayload;
+      const detail = res.data as StudentProfileResponse;
+      const updated = detail.student as ProfilePayload;
       setProfile(updated);
+      setRoom((detail.currentRoom ?? null) as DashboardRoom | null);
+      setDashMeta({
+        studentStatus: detail.residenceStatus,
+        memberStatusLabel: detail.residenceStatus === "dang_o" ? "Đang ở" : "Đã rời",
+      });
       syncAuthUser(updated);
       setEditingProfile(false);
-      message.success(updated.profileComplete ? "Đã cập nhật hồ sơ" : "Cập nhật thành công");
+      message.success("Đã cập nhật hồ sơ");
     } catch (e: unknown) {
       const msg =
         (e as { response?: { data?: { message?: string } } })?.response?.data?.message ||
@@ -285,17 +255,6 @@ const ProfilePage: React.FC = () => {
     }
   };
 
-  const applyMajorHint = () => {
-    const c = form.getFieldValue("className") as string;
-    const hint = suggestMajorFromClassName(c || "");
-    if (hint) {
-      form.setFieldsValue({ major: hint });
-      message.info(`Đã gợi ý chuyên ngành: ${hint}`);
-    } else {
-      message.warning("Không suy luận được từ mã lớp — vui lòng nhập tay.");
-    }
-  };
-
   if (loading || !profile) {
     return <Spin size="large" style={{ display: "block", margin: "80px auto" }} />;
   }
@@ -306,26 +265,13 @@ const ProfilePage: React.FC = () => {
   const openStudentEdit = () => {
     if (!profile) return;
     form.setFieldsValue({
-      fullName: profile.fullName,
-      studentId: profile.studentId,
-      className: profile.className,
-      major: profile.major,
-      dateOfBirth: profile.dateOfBirth ? dayjs(profile.dateOfBirth) : undefined,
-      gender: profile.gender || undefined,
       phone: profile.phone,
       address: profile.address,
-      citizenId: profile.citizenId,
-      faculty: profile.faculty,
-      enrollmentDate: profile.enrollmentDate ? dayjs(profile.enrollmentDate) : undefined,
-      homeroomTeacher: profile.homeroomTeacher,
+      avatar: profile.avatar,
       addressNative: profile.addressNative,
       addressPermanent: profile.addressPermanent,
       addressTemporary: profile.addressTemporary,
       addressAbsent: profile.addressAbsent,
-      familyFatherName: profile.familyFatherName,
-      familyFatherPhone: profile.familyFatherPhone,
-      familyMotherName: profile.familyMotherName,
-      familyMotherPhone: profile.familyMotherPhone,
       familyEmergencyPhone: profile.familyEmergencyPhone,
     });
     setEditingProfile(true);
@@ -358,7 +304,12 @@ const ProfilePage: React.FC = () => {
             boxShadow: `0 8px 24px ${brand.border}`,
           }}
         >
-          <Avatar size={100} style={{ background: "#fff", color: brand.primary }} icon={<UserOutlined style={{ fontSize: 42 }} />} />
+          <Avatar
+            size={100}
+            src={profile.avatar || undefined}
+            style={{ background: "#fff", color: brand.primary }}
+            icon={<UserOutlined style={{ fontSize: 42 }} />}
+          />
         </div>
         <Title level={4} style={{ marginTop: 20, marginBottom: 6, fontWeight: 800, color: "var(--text-primary, #111827)" }}>
           {profile.fullName || "—"}
@@ -427,62 +378,48 @@ const ProfilePage: React.FC = () => {
       }
     >
       <Form form={form} layout="vertical" onFinish={onFinishStudent} requiredMark="optional">
-        <FormSectionTitle>Định danh</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Họ và tên" name="fullName" rules={[{ required: true, message: "Nhập họ tên" }]} extra="Tên hiển thị trên hồ sơ và giấy tờ nội trú.">
-              <Input size="large" placeholder="Nguyễn Văn An" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Mã số sinh viên" name="studentId" rules={[{ required: true, message: "Nhập MSSV" }]} extra="Mã duy nhất trong hệ thống.">
-              <Input size="large" placeholder="SV001" allowClear />
-            </Form.Item>
-          </Col>
-        </Row>
-
-        <FormSectionTitle>Học tập</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Lớp" name="className" rules={[{ required: true, message: "Nhập lớp" }]} extra="VD: 11DHTH1 — khóa, hệ, mã ngành.">
-              <Input size="large" placeholder="11DHTH1" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Chuyên ngành" required>
-              <Space.Compact style={{ width: "100%" }}>
-                <Form.Item name="major" noStyle rules={[{ required: true, message: "Nhập hoặc gợi ý" }]}>
-                  <Input size="large" placeholder="Công nghệ thông tin" style={{ width: "calc(100% - 124px)" }} allowClear />
-                </Form.Item>
-                <Button type="default" size="large" onClick={applyMajorHint} style={{ width: 124 }}>
-                  Gợi ý từ lớp
-                </Button>
-              </Space.Compact>
-              <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 6 }}>
-                Có thể suy luận từ mã trong tên lớp (VD: TH → Tin học).
-              </Text>
-            </Form.Item>
-          </Col>
-        </Row>
-
-        <FormSectionTitle>Thông tin cá nhân</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Ngày sinh" name="dateOfBirth" rules={[{ required: true, message: "Chọn ngày sinh" }]} extra="Hiển thị DD/MM/YYYY.">
-              <DatePicker format="DD/MM/YYYY" style={{ width: "100%" }} size="large" placeholder="Chọn ngày" />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Giới tính" name="gender" rules={[{ required: true, message: "Chọn giới tính" }]}>
-              <Select size="large" placeholder="Chọn" options={[{ value: "Nam", label: "Nam" }, { value: "Nữ", label: "Nữ" }]} />
-            </Form.Item>
-          </Col>
-        </Row>
-
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16, borderRadius: 10 }}
+          message="Quyền chỉnh sửa của sinh viên"
+          description="Bạn có thể cập nhật SĐT, địa chỉ liên hệ và avatar. Thông tin học tập/định danh do Admin quản lý."
+        />
+        <FormSectionTitle>Avatar</FormSectionTitle>
+        <Form.Item
+          name="avatar"
+          label="Ảnh đại diện (URL)"
+          rules={[
+            {
+              validator: (_, value) => {
+                const s = value != null ? String(value).trim() : "";
+                if (!s) return Promise.resolve();
+                try {
+                  const u = new URL(s);
+                  if (u.protocol !== "http:" && u.protocol !== "https:") {
+                    return Promise.reject(new Error("Avatar phải là URL http(s) hợp lệ"));
+                  }
+                  return Promise.resolve();
+                } catch {
+                  return Promise.reject(new Error("Avatar phải là URL hợp lệ"));
+                }
+              },
+            },
+          ]}
+        >
+          <Input size="large" placeholder="https://..." allowClear />
+        </Form.Item>
         <FormSectionTitle>Liên hệ</FormSectionTitle>
         <Row gutter={[20, 0]}>
           <Col xs={24} lg={12}>
-            <Form.Item label="Số điện thoại" name="phone" rules={[{ required: true, message: "Nhập SĐT" }]} extra="Dùng khi cần liên hệ khẩn.">
+            <Form.Item
+              label="Số điện thoại"
+              name="phone"
+              rules={[
+                { required: true, message: "Nhập SĐT" },
+                { pattern: /^(0|\+84)\d{9,10}$/, message: "SĐT không hợp lệ" },
+              ]}
+            >
               <Input size="large" placeholder="0387079343" allowClear />
             </Form.Item>
           </Col>
@@ -492,35 +429,12 @@ const ProfilePage: React.FC = () => {
             </Form.Item>
           </Col>
         </Row>
-
-        <FormSectionTitle>Địa chỉ &amp; giấy tờ</FormSectionTitle>
-        <Form.Item label="Địa chỉ thường trú / quê quán" name="address" rules={[{ required: true, message: "Nhập địa chỉ" }]} extra="Ghi rõ tỉnh/thành để thuận tiện xác minh.">
-          <Input.TextArea rows={3} placeholder="Số nhà, phường/xã, tỉnh/thành…" showCount maxLength={500} />
+        <FormSectionTitle>Địa chỉ</FormSectionTitle>
+        <Form.Item name="address" label="Địa chỉ liên hệ">
+          <Input.TextArea rows={2} showCount maxLength={500} />
         </Form.Item>
-        <Form.Item label="Số CCCD / Căn cước" name="citizenId" rules={[{ required: true, message: "Nhập số CCCD" }]} extra="Sau khi hồ sơ đủ, hệ thống chỉ hiển thị một phần số khi xem nhanh.">
-          <Input size="large" placeholder="012345678901234567" allowClear />
-        </Form.Item>
-
-        <FormSectionTitle>Học tập &amp; hồ sơ mở rộng</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item name="faculty" label="Khoa">
-              <Input size="large" placeholder="VD: Công nghệ thông tin" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="homeroomTeacher" label="Giáo viên chủ nhiệm">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="enrollmentDate" label="Ngày nhập học">
-              <DatePicker format="DD/MM/YYYY" style={{ width: "100%" }} size="large" />
-            </Form.Item>
-          </Col>
-        </Row>
         <Form.Item name="addressNative" label="Quê quán">
-          <Input.TextArea rows={2} placeholder="Địa chỉ quê quán" showCount maxLength={500} />
+          <Input.TextArea rows={2} showCount maxLength={500} />
         </Form.Item>
         <Form.Item name="addressPermanent" label="Thường trú">
           <Input.TextArea rows={2} showCount maxLength={500} />
@@ -528,38 +442,13 @@ const ProfilePage: React.FC = () => {
         <Form.Item name="addressTemporary" label="Tạm trú">
           <Input.TextArea rows={2} showCount maxLength={500} />
         </Form.Item>
-        <Form.Item name="addressAbsent" label="Tạm vắng (ghi chú)">
+        <Form.Item name="addressAbsent" label="Tạm vắng">
           <Input.TextArea rows={2} showCount maxLength={500} />
         </Form.Item>
-        <FormSectionTitle>Gia đình &amp; liên hệ khẩn</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item name="familyFatherName" label="Họ tên bố">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="familyFatherPhone" label="SĐT bố">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="familyMotherName" label="Họ tên mẹ">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="familyMotherPhone" label="SĐT mẹ">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={24}>
-            <Form.Item name="familyEmergencyPhone" label="SĐT liên hệ khẩn (gia đình)">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-        </Row>
-
+        <FormSectionTitle>Liên hệ khẩn</FormSectionTitle>
+        <Form.Item name="familyEmergencyPhone" label="SĐT gia đình khi khẩn cấp">
+          <Input size="large" allowClear />
+        </Form.Item>
         <Divider style={{ margin: "8px 0 20px" }} />
         <Form.Item style={{ marginBottom: 0 }}>
           <Flex gap="middle" wrap="wrap">
