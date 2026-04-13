@@ -4,18 +4,23 @@ const { auth, requireRole } = require("../middleware/auth");
 const { updateViolationRules } = require("../validators/violationValidators");
 
 const router = express.Router();
+const admin = requireRole("admin", "manager");
 
+/** Quy tắc — mọi user đã đăng nhập */
 router.get("/rules", auth, violationController.getRules);
 
-router.get("/my", auth, requireRole("user"), violationController.getMyViolations);
+/** Sinh viên — đặt trước GET /:id */
 router.get("/my/stats", auth, requireRole("user"), violationController.getMyDisciplineStats);
+router.get("/my", auth, requireRole("user"), violationController.getMyViolations);
 
-router.use(auth, requireRole("admin", "manager"));
-router.get("/", violationController.getAllViolations);
-router.get("/students-summary", violationController.getStudentSummary);
-router.get("/:id", violationController.getViolationById);
-router.put("/:id", updateViolationRules, violationController.updateViolation);
-router.delete("/:id", violationController.deleteViolation);
-router.post("/", violationController.createViolation);
+/** Admin — các path tĩnh trước /:id */
+router.get("/students-summary", auth, admin, violationController.getStudentSummary);
+router.get("/", auth, admin, violationController.getAllViolations);
+router.post("/", auth, admin, violationController.createViolation);
+
+/** Chi tiết: admin/manager toàn quyền; sinh viên chỉ bản ghi của mình */
+router.get("/:id", auth, violationController.getViolationById);
+router.put("/:id", auth, admin, updateViolationRules, violationController.updateViolation);
+router.delete("/:id", auth, admin, violationController.deleteViolation);
 
 module.exports = router;

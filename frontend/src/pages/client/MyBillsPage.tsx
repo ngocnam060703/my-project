@@ -1,301 +1,483 @@
-import React, { useState, useEffect } from "react";
-import { Table, Tag, Spin, Empty, message, Button, Card, Row, Col, Statistic, Modal, Space } from "antd";
-import { DollarOutlined, FileTextOutlined, EyeOutlined, CreditCardOutlined } from "@ant-design/icons";
+/**
+ * Module "Hóa đơn của tôi" — Bootstrap 5: danh sách, chi tiết, thanh toán (demo / online mô phỏng).
+ * API: GET /api/my-bills | GET /api/bills/my, GET /api/bills/:id, PATCH /api/bills/:id/pay, PUT pay-online
+ */
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import "bootstrap/dist/css/bootstrap.min.css";
+import { isAxiosError } from "axios";
 import { billsApi } from "../../api";
+import { useAuth } from "../../contexts/AuthContext";
+import { useSocket } from "../../contexts/SocketContext";
 import type { Bill } from "../../types";
 
-const statusMap: Record<string, { color: string; text: string }> = {
-  pending: { color: "gold", text: "Chưa thanh toán" },
-  paid: { color: "green", text: "Đã thanh toán" },
-  overdue: { color: "red", text: "Quá hạn" },
-};
+function fmtMoney(v: number | undefined): string {
+  return `${Math.round(v ?? 0).toLocaleString("vi-VN")}đ`;
+}
 
-const formatMoney = (v: number | undefined) => (v ?? 0).toLocaleString("vi-VN") + "đ";
-const formatDDMMYYYY = (value?: string | Date | null) => {
-  if (!value) return "-";
+function fmtDate(value?: string | Date | null): string {
+  if (!value) return "—";
   const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return "-";
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
-};
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("vi-VN");
+}
 
-const formatBillDate = (r: Bill) => {
-  const created = (r as Bill & { createdAt?: string }).createdAt;
-  if (created) return formatDDMMYYYY(created);
-  return formatDDMMYYYY(new Date(r.year, Math.max(0, (r.month || 1) - 1), 1));
-};
-const normalizeBillingNote = (note?: string) =>
-  String(note || "").replace(/dịch vụ chung/gi, "wifi");
+function billPeriodLabel(b: Bill): string {
+  return `${b.month}/${b.year}`;
+}
 
-const paymentMethodLabel = (m?: string) => {
-  if (m === "online") return "Thanh toán online";
-  if (m === "counter") return "Thu tại quầy";
-  if (m === "manual") return "Xác nhận / chuyển khoản";
-  return "—";
-};
+function statusUi(s: string): { cls: string; label: string } {
+  if (s === "paid") return { cls: "text-bg-success", label: "Đã thanh toán" };
+  if (s === "overdue") return { cls: "text-bg-danger", label: "Quá hạn" };
+  if (s === "unpaid" || s === "pending") return { cls: "text-bg-warning text-dark", label: "Chưa thanh toán" };
+  return { cls: "text-bg-secondary", label: s };
+}
+
+function canPay(s: string): boolean {
+  return s === "unpaid" || s === "pending" || s === "overdue";
+}
+
+function errText(e: unknown): string {
+  if (isAxiosError(e)) {
+    const st = e.response?.status;
+    if (st === 401) return "Phiên đăng nhập hết hạn — vui lòng đăng nhập lại.";
+    if (st === 404) return "API không tồn tại (404). Hãy khởi động lại backend bản mới nhất.";
+    const m = (e.response?.data as { message?: string } | undefined)?.message;
+    if (m) return m;
+  }
+  return "Có lỗi xảy ra";
+}
 
 const MyBillsPage: React.FC = () => {
-  const [data, setData] = useState<Bill[]>([]);
+  const { user } = useAuth();
+  const { socket } = useSocket();
+  const [rows, setRows] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Bill | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [payingOnlineId, setPayingOnlineId] = useState<string | null>(null);
-  const [detailModal, setDetailModal] = useState<Bill | null>(null);
 
-  const load = () => {
-    billsApi.getMy().then((res) => setData(res.data || [])).catch(() => message.error("Không tải được")).finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      /** Ưu tiên /my-bills; backend cũ → GET /bills/my */
+      let list: Bill[] = [];
+      try {
+        const { data } = await billsApi.getMyBills();
+        list = Array.isArray(data) ? data : [];
+      } catch {
+        const { data } = await billsApi.getMy();
+        list = Array.isArray(data) ? data : [];
+      }
+      setRows(list);
+    } catch (e) {
+      setErr(errText(e));
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!socket || !user) return;
+    const uid = String((user as { _id?: string })._id || (user as { id?: string }).id || "");
+    const onMine = (data: { userId?: string }) => {
+      if (data.userId === uid) void load();
+    };
+    socket.on("bill:new", onMine);
+    socket.on("bill:paid", onMine);
+    return () => {
+      socket.off("bill:new", onMine);
+      socket.off("bill:paid", onMine);
+    };
+  }, [socket, user, load]);
+
+  const openDetail = async (id: string) => {
+    setDetailId(id);
+    setDetail(null);
+    setDetailLoading(true);
+    try {
+      const { data } = await billsApi.getById(id);
+      setDetail(data);
+    } catch (e) {
+      setErr(errText(e));
+      setDetailId(null);
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
-  useEffect(() => { load(); }, []);
+  const closeDetail = () => {
+    setDetailId(null);
+    setDetail(null);
+    setDetailLoading(false);
+  };
 
-  const handlePay = async (id: string) => {
+  const payDemo = async (id: string) => {
     setPayingId(id);
+    setErr(null);
     try {
-      await billsApi.markPaid(id);
-      message.success("Đã xác nhận thanh toán thành công");
-      load();
-    } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Thanh toán thất bại");
+      await billsApi.patchPay(id);
+      await load();
+      if (detailId === id) await openDetail(id);
+    } catch (e) {
+      setErr(errText(e));
     } finally {
       setPayingId(null);
     }
   };
 
-  const handlePayOnline = async (id: string) => {
+  const payOnlineDemo = async (id: string) => {
     setPayingOnlineId(id);
+    setErr(null);
     try {
       await billsApi.payOnline(id);
-      message.success("Thanh toán online thành công (demo)");
-      load();
-    } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Thanh toán online thất bại");
+      await load();
+      if (detailId === id) await openDetail(id);
+    } catch (e) {
+      setErr(errText(e));
     } finally {
       setPayingOnlineId(null);
     }
   };
 
-  const monthlyBills = data.filter((b) => b.billType !== "penalty");
-  const penaltyBills = data.filter((b) => b.billType === "penalty");
-  const unpaidBills = data.filter((b) => b.status === "pending" || b.status === "overdue");
-  const unpaidTotal = unpaidBills.reduce((s, b) => s + (b.total ?? 0), 0);
+  const monthly = useMemo(() => rows.filter((b) => b.billType !== "penalty"), [rows]);
+  const penalty = useMemo(() => rows.filter((b) => b.billType === "penalty"), [rows]);
+  const overdueList = useMemo(() => rows.filter((b) => b.status === "overdue"), [rows]);
+  const unpaidTotal = useMemo(
+    () => rows.filter((b) => canPay(b.status)).reduce((s, b) => s + (b.total || 0), 0),
+    [rows]
+  );
 
-  if (loading) return <Spin size="large" style={{ display: "block", margin: "40px auto" }} />;
-
-  const monthlyColumns = [
-    { title: "Ngày tạo", key: "billDate", width: 120, render: (_: unknown, r: Bill) => <strong>{formatBillDate(r)}</strong> },
-    { title: "Phòng", dataIndex: ["room", "roomNumber"], key: "room", width: 80 },
-    { title: "Tiền phòng", dataIndex: "roomFee", key: "roomFee", width: 110, render: (v: number) => formatMoney(v) },
-    { title: "Điện", dataIndex: "electricityFee", key: "electricityFee", width: 90, render: (v: number) => formatMoney(v) },
-    { title: "Nước", dataIndex: "waterFee", key: "waterFee", width: 90, render: (v: number) => formatMoney(v) },
-    { title: "Wifi", dataIndex: "sharedCommonFee", key: "sharedCommonFee", width: 90, render: (v: number) => (v ? formatMoney(v) : "-") },
-    { title: "Dịch vụ cá nhân", dataIndex: "personalServiceFee", key: "personalServiceFee", width: 120, render: (v: number) => (v ? formatMoney(v) : "-") },
-    { title: "Tổng", dataIndex: "total", key: "total", width: 110, render: (v: number) => <strong style={{ color: "#0d9488" }}>{formatMoney(v)}</strong> },
-    { title: "Hạn", dataIndex: "dueDate", key: "dueDate", width: 100, render: (d: string) => formatDDMMYYYY(d) },
-    {
-      title: "Trạng thái",
-      dataIndex: "status",
-      key: "status",
-      width: 220,
-      render: (s: string, r: Bill) => (
-        <>
-          <Tag color={statusMap[s]?.color}>{statusMap[s]?.text || s}</Tag>
-          {(s === "pending" || s === "overdue") && (
-            <Space size="small" wrap style={{ marginLeft: 8 }}>
-              <Button
-                type="primary"
-                size="small"
-                icon={<DollarOutlined />}
-                loading={payingId === r._id}
-                onClick={() => handlePay(r._id)}
-              >
-                Xác nhận TT
-              </Button>
-              <Button
-                size="small"
-                icon={<CreditCardOutlined />}
-                loading={payingOnlineId === r._id}
-                onClick={() => handlePayOnline(r._id)}
-              >
-                Online
-              </Button>
-            </Space>
-          )}
-        </>
-      ),
-    },
-    {
-      title: "Thao tác",
-      key: "action",
-      width: 90,
-      render: (_: unknown, r: Bill) => <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>,
-    },
-  ];
-
-  const penaltyColumns = [
-    { title: "Ngày tạo", key: "billDate", width: 120, render: (_: unknown, r: Bill) => <strong>{formatBillDate(r)}</strong> },
-    { title: "Phòng", dataIndex: ["room", "roomNumber"], key: "room", width: 80 },
-    {
-      title: "Mục phạt / bồi thường",
-      key: "pen",
-      render: (_: unknown, r: Bill) => (
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
-          {(r.penaltyBreakdown || []).map((line, i) => (
-            <li key={i}>{line.label}: {formatMoney(line.amount)}</li>
-          ))}
-        </ul>
-      ),
-    },
-    { title: "Tổng", dataIndex: "total", key: "total", width: 110, render: (v: number) => <strong style={{ color: "#cf1322" }}>{formatMoney(v)}</strong> },
-    { title: "Hạn", dataIndex: "dueDate", key: "dueDate", width: 100, render: (d: string) => formatDDMMYYYY(d) },
-    {
-      title: "Trạng thái",
-      dataIndex: "status",
-      key: "status",
-      width: 200,
-      render: (s: string, r: Bill) => (
-        <>
-          <Tag color={statusMap[s]?.color}>{statusMap[s]?.text || s}</Tag>
-          {(s === "pending" || s === "overdue") && (
-            <Space size="small" wrap style={{ marginLeft: 8 }}>
-              <Button type="primary" size="small" icon={<DollarOutlined />} loading={payingId === r._id} onClick={() => handlePay(r._id)}>
-                Xác nhận TT
-              </Button>
-              <Button size="small" icon={<CreditCardOutlined />} loading={payingOnlineId === r._id} onClick={() => handlePayOnline(r._id)}>
-                Online
-              </Button>
-            </Space>
-          )}
-        </>
-      ),
-    },
-    {
-      title: "Thao tác",
-      key: "action",
-      width: 90,
-      render: (_: unknown, r: Bill) => <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>,
-    },
-  ];
+  if (loading) {
+    return (
+      <div className="p-5 text-center">
+        <div className="spinner-border text-primary" role="status" />
+      </div>
+    );
+  }
 
   return (
-    <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}><FileTextOutlined /> Hóa đơn của tôi</h2>
-        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Hóa đơn tháng (phòng, điện nước, dịch vụ) và hóa đơn phạt vi phạm (nếu có) hiển thị riêng.</p>
+    <div className="container pb-5" style={{ maxWidth: 1100 }}>
+      <h4 className="mb-1">Hóa đơn của tôi</h4>
+      <p className="text-muted small mb-3">Theo dõi hạn thanh toán, trạng thái và thanh toán (xác nhận demo / online mô phỏng).</p>
+
+      {err && <div className="alert alert-danger py-2">{err}</div>}
+
+      {overdueList.length > 0 && (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <span className="fw-bold">Cảnh báo:</span>
+          <span>
+            Bạn có {overdueList.length} hóa đơn quá hạn. Vui lòng thanh toán sớm để tránh ảnh hưởng hồ sơ nội trú.
+          </span>
+        </div>
+      )}
+
+      <div className="row g-3 mb-4">
+        <div className="col-md-6">
+          <div className="card border-warning h-100">
+            <div className="card-body">
+              <div className="text-muted small">Tổng tiền chưa thanh toán</div>
+              <div className="fs-3 fw-bold text-warning">{fmtMoney(unpaidTotal)}</div>
+            </div>
+          </div>
+        </div>
+        <div className="col-md-6">
+          <div className="card h-100">
+            <div className="card-body">
+              <div className="text-muted small">Số hóa đơn chưa trả / quá hạn</div>
+              <div className="fs-4 fw-semibold">{rows.filter((b) => canPay(b.status)).length}</div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12}>
-          <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
-            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Chưa thanh toán</span>} value={unpaidBills.length} suffix="đơn" valueStyle={{ color: "#fff", fontSize: 20 }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12}>
-          <Card>
-            <Statistic title="Tổng tiền nợ" value={unpaidTotal} formatter={(v) => formatMoney(Number(v))} />
-          </Card>
-        </Col>
-      </Row>
+      {penalty.length > 0 && (
+        <div className="card shadow-sm mb-4">
+          <div className="card-header bg-white fw-semibold text-danger">Hóa đơn phạt / vi phạm</div>
+          <div className="table-responsive">
+            <table className="table table-sm table-hover mb-0 align-middle">
+              <thead className="table-light">
+                <tr>
+                  <th>Kỳ / loại</th>
+                  <th className="text-end">Số tiền</th>
+                  <th>Hạn thanh toán</th>
+                  <th>Trạng thái</th>
+                  <th className="text-end">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {penalty.map((b) => (
+                  <BillRow
+                    key={b._id}
+                    b={b}
+                    onView={() => void openDetail(b._id)}
+                    onPay={() => void payDemo(b._id)}
+                    onPayOnline={() => void payOnlineDemo(b._id)}
+                    paying={payingId === b._id}
+                    payingOnline={payingOnlineId === b._id}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
-      <Card title="Hóa đơn phạt vi phạm" style={{ borderRadius: 12, marginBottom: 16 }}>
-        {penaltyBills.length === 0 ? (
-          <Empty description="Không có hóa đơn phạt" />
-        ) : (
-          <Table
-            columns={penaltyColumns}
-            dataSource={penaltyBills}
-            rowKey="_id"
-            pagination={{ pageSize: 5, showSizeChanger: false }}
-            size="middle"
-          />
-        )}
-      </Card>
+      <div className="card shadow-sm">
+        <div className="card-header bg-white fw-semibold">Hóa đơn tháng</div>
+        <div className="table-responsive">
+          <table className="table table-sm table-hover mb-0 align-middle">
+            <thead className="table-light">
+              <tr>
+                <th>Tháng</th>
+                <th className="text-end">Số tiền</th>
+                <th>Hạn thanh toán</th>
+                <th>Trạng thái</th>
+                <th className="text-end">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthly.map((b) => (
+                <BillRow
+                  key={b._id}
+                  b={b}
+                  onView={() => void openDetail(b._id)}
+                  onPay={() => void payDemo(b._id)}
+                  onPayOnline={() => void payOnlineDemo(b._id)}
+                  paying={payingId === b._id}
+                  payingOnline={payingOnlineId === b._id}
+                />
+              ))}
+              {monthly.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="text-center text-muted py-4">
+                    Chưa có hóa đơn tháng.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-      <Card title="Hóa đơn tháng (phòng & dịch vụ)" style={{ borderRadius: 12 }}>
-        {monthlyBills.length === 0 ? (
-          <Empty description="Chưa có hóa đơn tháng" />
-        ) : (
-          <Table
-            columns={monthlyColumns}
-            dataSource={monthlyBills}
-            rowKey="_id"
-            pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hóa đơn` }}
-            size="middle"
-          />
-        )}
-      </Card>
-
-      <Modal title={`Chi tiết hóa đơn ${detailModal ? `${detailModal.month}/${detailModal.year}` : ""}`} open={!!detailModal} onCancel={() => setDetailModal(null)} footer={[<Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>]}>
-        {detailModal && (
-          <div style={{ lineHeight: 2 }}>
-            <p><strong>Loại:</strong> {detailModal.billType === "penalty" ? <Tag color="red">Phạt vi phạm</Tag> : <Tag color="blue">Hóa đơn tháng</Tag>}</p>
-            <p><strong>Ngày tạo:</strong> {formatBillDate(detailModal)}</p>
-            <p><strong>Phòng:</strong> {typeof detailModal.room === "object" ? detailModal.room?.roomNumber : "-"}</p>
-            {detailModal.billType === "penalty" ? (
-              <>
-                <p><strong>Mục phạt:</strong></p>
-                <ul style={{ margin: "0 0 12px 18px" }}>
-                  {(detailModal.penaltyBreakdown || []).map((line, i) => (
-                    <li key={i}>{line.label}: {formatMoney(line.amount)}</li>
-                  ))}
-                </ul>
-                {typeof detailModal.violation === "object" && detailModal.violation?.ruleName && (
-                  <p><strong>Vi phạm:</strong> {detailModal.violation.ruleName}</p>
-                )}
-                {typeof detailModal.violation === "object" && detailModal.violation?.description && (
-                  <p><strong>Mô tả:</strong> {detailModal.violation.description}</p>
-                )}
-              </>
-            ) : (
-              <>
-                <p><strong>Số người trong phòng:</strong> {detailModal.occupants || 1}</p>
-                <p><strong>Tiền phòng:</strong> {formatMoney(detailModal.roomFee)}</p>
-                <p><strong>Điện:</strong> {formatMoney(detailModal.electricityFee)}</p>
-                <p><strong>Nước:</strong> {formatMoney(detailModal.waterFee)}</p>
-                {detailModal.sharedCommonFee ? <p><strong>Wifi:</strong> {formatMoney(detailModal.sharedCommonFee)}</p> : null}
-                {detailModal.otherFee != null && detailModal.otherFee > 0 && <p><strong>Khác:</strong> {formatMoney(detailModal.otherFee)}</p>}
-                {detailModal.personalServiceFee ? <p><strong>Dịch vụ cá nhân:</strong> {formatMoney(detailModal.personalServiceFee)}</p> : null}
-                {(detailModal.personalServiceBreakdown?.length || 0) > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <strong>Chi tiết dịch vụ cá nhân:</strong>
-                    <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
-                      {detailModal.personalServiceBreakdown?.map((it, idx) => (
-                        <li key={`${it.service || it.name || "svc"}-${idx}`}>
-                          {it.name || "Dịch vụ"}: {formatMoney(it.amount || 0)}
-                          {it.unit === "once" ? ` (${it.quantity || 0} lần)` : " (/ tháng)"}
-                        </li>
-                      ))}
-                    </ul>
+      {(detailId || detailLoading) && (
+        <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.45)" }}>
+          <div className="modal-dialog modal-dialog-scrollable modal-lg">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Chi tiết hóa đơn</h5>
+                <button type="button" className="btn-close" aria-label="Đóng" onClick={closeDetail} />
+              </div>
+              <div className="modal-body">
+                {detailLoading && (
+                  <div className="text-center py-4">
+                    <div className="spinner-border spinner-border-sm text-primary" />
                   </div>
                 )}
-                {detailModal.note ? <p style={{ color: "#6b7280" }}><strong>Cách tính:</strong> {normalizeBillingNote(detailModal.note)}</p> : null}
-              </>
-            )}
-            <p><strong>Tổng:</strong> <span style={{ color: detailModal.billType === "penalty" ? "#cf1322" : "#0d9488", fontWeight: 600 }}>{formatMoney(detailModal.total)}</span></p>
-            <p><strong>Hạn thanh toán:</strong> {formatDDMMYYYY(detailModal.dueDate)}</p>
-            <p><strong>Ngày thanh toán:</strong> {detailModal.paidAt ? formatDDMMYYYY(detailModal.paidAt) : "-"}</p>
-            {detailModal.status === "paid" && (
-              <>
-                <p><strong>Phương thức:</strong> {paymentMethodLabel(detailModal.paymentMethod)}</p>
-                {detailModal.paymentReference ? <p><strong>Mã giao dịch / tham chiếu:</strong> {detailModal.paymentReference}</p> : null}
-              </>
-            )}
-            <p><strong>Trạng thái:</strong> <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag></p>
-            {(detailModal.status === "pending" || detailModal.status === "overdue") && (
-              <Space wrap style={{ marginTop: 12 }}>
-                <Button type="primary" icon={<DollarOutlined />} onClick={() => { void handlePay(detailModal._id); setDetailModal(null); }}>
-                  Xác nhận thanh toán
-                </Button>
-                <Button icon={<CreditCardOutlined />} onClick={() => { void handlePayOnline(detailModal._id); setDetailModal(null); }} loading={payingOnlineId === detailModal._id}>
-                  Thanh toán online (demo)
-                </Button>
-              </Space>
-            )}
+                {!detailLoading && detail && <BillDetailBody b={detail} />}
+              </div>
+              <div className="modal-footer flex-wrap gap-2">
+                {detail && canPay(detail.status) && (
+                  <>
+                    <button type="button" className="btn btn-primary" disabled={!!payingId} onClick={() => void payDemo(detail._id)}>
+                      {payingId === detail._id ? "Đang xử lý…" : "Thanh toán (xác nhận)"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-outline-primary"
+                      disabled={!!payingOnlineId}
+                      onClick={() => void payOnlineDemo(detail._id)}
+                    >
+                      {payingOnlineId === detail._id ? "Đang xử lý…" : "Thanh toán online (demo)"}
+                    </button>
+                  </>
+                )}
+                <button type="button" className="btn btn-secondary" onClick={closeDetail}>
+                  Đóng
+                </button>
+              </div>
+            </div>
           </div>
-        )}
-      </Modal>
+        </div>
+      )}
     </div>
   );
 };
+
+function BillRow({
+  b,
+  onView,
+  onPay,
+  onPayOnline,
+  paying,
+  payingOnline,
+}: {
+  b: Bill;
+  onView: () => void;
+  onPay: () => void;
+  onPayOnline: () => void;
+  paying: boolean;
+  payingOnline: boolean;
+}) {
+  const st = statusUi(b.status);
+  return (
+    <tr className={b.status === "overdue" ? "table-danger" : undefined}>
+      <td>
+        <strong>{billPeriodLabel(b)}</strong>
+        {b.billType === "penalty" && <div className="small text-muted">Phạt vi phạm</div>}
+      </td>
+      <td className="text-end fw-semibold text-primary">{fmtMoney(b.total)}</td>
+      <td>{fmtDate(b.dueDate)}</td>
+      <td>
+        <span className={`badge ${st.cls}`}>{st.label}</span>
+      </td>
+      <td className="text-end text-nowrap">
+        <button type="button" className="btn btn-outline-secondary btn-sm me-1" onClick={onView}>
+          Xem
+        </button>
+        {canPay(b.status) && (
+          <>
+            <button type="button" className="btn btn-success btn-sm me-1" disabled={paying} onClick={onPay}>
+              {paying ? "…" : "Pay"}
+            </button>
+            <button type="button" className="btn btn-outline-success btn-sm" disabled={payingOnline} onClick={onPayOnline}>
+              {payingOnline ? "…" : "Online"}
+            </button>
+          </>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function BillDetailBody({ b }: { b: Bill }) {
+  const st = statusUi(b.status);
+  const u = b.user;
+  const student = typeof u === "object" && u ? u : null;
+  const c = b.contract;
+  const contract = typeof c === "object" && c ? c : null;
+  const room = typeof b.room === "object" ? b.room : null;
+
+  const servicesTotal =
+    (b.electricityFee || 0) + (b.waterFee || 0) + (b.sharedCommonFee || 0) + (b.personalServiceFee || 0) + (b.otherFee || 0);
+
+  return (
+    <div className="small">
+      <h6 className="text-muted text-uppercase">Thông tin sinh viên</h6>
+      <ul className="list-unstyled mb-3">
+        <li>
+          <strong>Họ tên:</strong> {student?.fullName || "—"}
+        </li>
+        <li>
+          <strong>Mã SV:</strong> {student?.studentId || "—"}
+        </li>
+        <li>
+          <strong>Email:</strong> {student?.email || "—"}
+        </li>
+      </ul>
+
+      <h6 className="text-muted text-uppercase">Hợp đồng</h6>
+      <ul className="list-unstyled mb-3">
+        <li>
+          <strong>Số HĐ:</strong> {contract?.contractNumber || "—"}
+        </li>
+        <li>
+          <strong>Trạng thái HĐ:</strong> {contract?.status || "—"}
+        </li>
+        <li>
+          <strong>Phòng:</strong> {room?.roomNumber || "—"}
+        </li>
+      </ul>
+
+      <h6 className="text-muted text-uppercase">Khoản phí</h6>
+      {b.billType === "penalty" ? (
+        <ul>
+          {(b.penaltyBreakdown || []).map((line, i) => (
+            <li key={i}>
+              {line.label}: {fmtMoney(line.amount)}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <ul className="list-unstyled">
+          <li>
+            <strong>Tiền phòng:</strong> {fmtMoney(b.roomFee)}
+          </li>
+          <li>
+            <strong>Điện:</strong> {fmtMoney(b.electricityFee)}
+          </li>
+          <li>
+            <strong>Nước:</strong> {fmtMoney(b.waterFee)}
+          </li>
+          {(b.sharedCommonFee || 0) > 0 && (
+            <li>
+              <strong>Dịch vụ chung (wifi…):</strong> {fmtMoney(b.sharedCommonFee)}
+            </li>
+          )}
+          {(b.otherFee || 0) > 0 && (
+            <li>
+              <strong>Khác:</strong> {fmtMoney(b.otherFee)}
+            </li>
+          )}
+          {(b.personalServiceFee || 0) > 0 && (
+            <li>
+              <strong>Dịch vụ cá nhân:</strong> {fmtMoney(b.personalServiceFee)}
+            </li>
+          )}
+          <li className="mt-2">
+            <strong>Tổng dịch vụ (ước lược):</strong> {fmtMoney(servicesTotal)}
+          </li>
+        </ul>
+      )}
+
+      <div className="border-top pt-3 mt-2">
+        <div className="d-flex justify-content-between align-items-center">
+          <span className="fw-semibold">Tổng thanh toán</span>
+          <span className="fs-4 fw-bold text-primary">{fmtMoney(b.amount ?? b.total)}</span>
+        </div>
+        <p className="mb-1 mt-2">
+          <strong>Hạn thanh toán:</strong> {fmtDate(b.dueDate)}
+        </p>
+        <p className="mb-1">
+          <strong>Trạng thái:</strong> <span className={`badge ${st.cls}`}>{st.label}</span>
+        </p>
+        {b.status === "paid" && (
+          <>
+            <p className="mb-1">
+              <strong>Ngày thanh toán:</strong> {fmtDate(b.paidAt)}
+            </p>
+            {b.paymentMethod && (
+              <p className="mb-0">
+                <strong>Phương thức:</strong> {b.paymentMethod === "online" ? "Online (demo)" : b.paymentMethod === "counter" ? "Quầy" : "Xác nhận"}
+                {b.paymentReference ? ` — ${b.paymentReference}` : ""}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
+      {(b.paymentHistory?.length || 0) > 0 && (
+        <div className="mt-3">
+          <h6 className="text-muted text-uppercase">Lịch sử thanh toán / ghi nhận</h6>
+          <ul className="list-unstyled small mb-0">
+            {b.paymentHistory!.slice(-8).map((h, i) => (
+              <li key={i} className="border-bottom py-1">
+                {fmtDate(h.at)} — {h.action}: {fmtMoney(h.amount)}{h.note ? ` (${h.note})` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default MyBillsPage;

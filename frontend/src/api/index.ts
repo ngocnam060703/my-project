@@ -2,7 +2,7 @@ import type { AxiosResponse } from "axios";
 import { isAxiosError } from "axios";
 import client from "./client";
 import { authApi } from "./auth";
-import type { Area, Room, ZoneDetailResponse } from "../types";
+import type { Area, Room, ZoneDetailResponse, DormApplication, MyContractOverview } from "../types";
 
 export { client, authApi };
 
@@ -214,8 +214,38 @@ export const registrationsApi = {
   reject: (id: string, reason?: string) => client.put(`/registrations/${id}/reject`, { reason }),
 };
 
+/** Xét duyệt đơn đăng ký KTX (phân phòng khi duyệt) — REST /applications + alias /my-applications */
+export const applicationsApi = {
+  getMine: () => client.get<DormApplication[]>("/applications/my"),
+  /** Alias cùng dữ liệu với getMine — GET /api/my-applications */
+  getMyApplications: () => client.get<DormApplication[]>("/my-applications"),
+  create: (data: {
+    semester: string;
+    schoolYear: string;
+    startDate: string;
+    preferenceArea?: string;
+  }) => client.post<DormApplication>("/applications", data),
+  getAll: (params?: {
+    status?: string;
+    search?: string;
+    sortOrder?: "asc" | "desc";
+    page?: number;
+    limit?: number;
+  }) => client.get<{ applications: DormApplication[]; total: number; page: number; limit: number }>("/applications", { params }),
+  getById: (id: string) => client.get<DormApplication>(`/applications/${id}`),
+  /** Sinh viên: hủy đơn chỉ khi pending */
+  cancel: (id: string) => client.delete(`/applications/${encodeURIComponent(id)}`),
+  getSuggestedRoom: (id: string) => client.get<{ room: Room; rules: string[] }>(`/applications/${id}/suggested-room`),
+  approve: (id: string) => client.patch(`/applications/${id}/approve`),
+  reject: (id: string, note: string) => client.patch(`/applications/${id}/reject`, { note }),
+  statsByDay: (params?: { days?: number }) =>
+    client.get<{ days: number; series: { date: string; count: number }[] }>("/applications/stats/by-day", { params }),
+};
+
 export const contractsApi = {
   getMy: () => client.get("/contracts/my"),
+  /** GET /api/my-contract — sinh viên: hợp đồng + lịch sử gia hạn */
+  getMyContractOverview: () => client.get<MyContractOverview>("/my-contract"),
   getById: (id: string) => client.get(`/contracts/${id}`),
   getAll: (params?: { status?: string; user?: string; room?: string; page?: number; limit?: number }) =>
     client.get("/contracts", { params }),
@@ -226,19 +256,45 @@ export const contractsApi = {
   terminate: (id: string) => client.put(`/contracts/${id}/terminate`),
   sign: (id: string) => client.put(`/contracts/${id}/sign`),
   confirmPayment: (id: string) => client.put(`/contracts/${id}/confirm-payment`),
+  /** Sinh viên: gửi yêu cầu gia hạn (chỉ hợp đồng active) */
+  requestExtend: (contractId: string, months: number) =>
+    client.post(`/contracts/${encodeURIComponent(contractId)}/request-extend`, { months }),
+  /** Admin: danh sách yêu cầu gia hạn */
+  listExtendRequests: (params?: { status?: "pending" | "approved" | "rejected" | "all" }) =>
+    client.get("/contracts/extend-requests", { params }),
+  approveExtendRequest: (requestId: string) => client.patch(`/contracts/extend-requests/${encodeURIComponent(requestId)}/approve`),
+  rejectExtendRequest: (requestId: string, note: string) =>
+    client.patch(`/contracts/extend-requests/${encodeURIComponent(requestId)}/reject`, { note }),
 };
 
 export const billsApi = {
   getMy: () => client.get("/bills/my"),
+  /** Alias REST: GET /api/my-bills (cùng dữ liệu getMy) */
+  getMyBills: () => client.get("/my-bills"),
+  getById: (id: string) => client.get(`/bills/${id}`),
   markPaid: (id: string, data?: { paymentMethod?: "manual" | "counter"; paymentReference?: string }) =>
     client.put(`/bills/${id}/paid`, data ?? {}),
+  /** PATCH chuẩn REST (cùng handler với markPaid). */
+  patchPay: (id: string, data?: { paymentMethod?: "manual" | "counter"; paymentReference?: string }) =>
+    client.patch(`/bills/${id}/pay`, data ?? {}),
   /** Demo thanh toán online (máy chủ mô phỏng giao dịch thành công). */
   payOnline: (id: string) => client.put(`/bills/${id}/pay-online`),
-  getAll: (params?: { status?: string; room?: string; month?: number; year?: number; billType?: "monthly" | "penalty"; page?: number; limit?: number }) =>
-    client.get("/bills", { params }),
+  getAll: (params?: {
+    status?: string;
+    search?: string;
+    room?: string;
+    month?: number;
+    year?: number;
+    billType?: "monthly" | "penalty";
+    page?: number;
+    limit?: number;
+  }) => client.get("/bills", { params }),
   create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; otherFee?: number; dueDate?: string }) =>
     client.post("/bills", data),
   generate: (data: { month: number; year: number; dueDate?: string }) => client.post("/bills/generate", data),
+  update: (id: string, data: Record<string, unknown>) => client.patch(`/bills/${id}`, data),
+  revenueSummary: (params?: { year?: number }) => client.get("/bills/revenue/summary", { params }),
+  refreshOverdue: () => client.post("/bills/overdue/refresh"),
 };
 
 export const usersApi = {
@@ -311,6 +367,43 @@ export const damageReportsApi = {
     client.post("/damage-reports", data),
 };
 
+/** Thử lần lượt các đường dẫn backend (deploy / proxy khác nhau có thể chỉ mount một số route). */
+async function getMyMaintenanceReports(): Promise<AxiosResponse<unknown>> {
+  const paths = ["/my-reports", "/reports/my", "/students/me/maintenance-reports", "/student/maintenance-reports"];
+  let last: unknown;
+  for (const path of paths) {
+    try {
+      return await client.get(path);
+    } catch (e: unknown) {
+      last = e;
+      if (isAxiosError(e) && e.response?.status === 404) continue;
+      throw e;
+    }
+  }
+  throw last;
+}
+
+/** Khai báo hư hỏng theo loại sự cố (điện/nước/thiết bị/khác) — REST: my-reports + reports */
+export const maintenanceReportsApi = {
+  getMy: () => getMyMaintenanceReports(),
+  create: (data: { type: string; description: string; images?: string[] }) => client.post("/reports", data),
+  getById: (id: string) => client.get(`/reports/${id}`),
+  cancel: (id: string) => client.delete(`/reports/${id}`),
+};
+
+/** Lịch sinh viên (hóa đơn, hợp đồng, bảo trì, kỳ đăng ký) */
+export const scheduleApi = {
+  getMy: (params?: { from?: string; to?: string }) => client.get("/my-schedule", { params }),
+  getEvent: (id: string) => client.get(`/events/${encodeURIComponent(id)}`),
+};
+
+export const maintenanceReportsAdminApi = {
+  list: (params?: { status?: string; page?: number; limit?: number }) =>
+    client.get("/admin/maintenance-reports", { params }),
+  patch: (id: string, data: { status?: string; adminNote?: string }) =>
+    client.patch(`/admin/maintenance-reports/${id}`, data),
+};
+
 export const facilitiesApi = {
   // Student
   getMyRoom: () => client.get("/facilities/my-room"),
@@ -346,13 +439,36 @@ export const facilityReportsApi = {
 
 export const servicesApi = {
   getAll: (params?: { type?: "common" | "personal"; activeOnly?: string }) => client.get("/services", { params }),
-  create: (data: { name: string; type: "common" | "personal"; price: number; unit: "monthly" | "once"; description?: string; isActive?: boolean }) =>
-    client.post("/services", data),
+  create: (data: {
+    name: string;
+    type: "common" | "personal";
+    price: number;
+    unit: "monthly" | "once";
+    measureUnit?: "month" | "kwh" | "m3";
+    tariffType?: "fixed" | "variable";
+    description?: string;
+    isActive?: boolean;
+  }) => client.post("/services", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/services/${id}`, data),
+  patch: (id: string, data: Record<string, unknown>) => client.patch(`/services/${id}`, data),
+  remove: (id: string) => client.delete(`/services/${id}`),
   toggle: (id: string) => client.put(`/services/${id}/toggle`),
   getMyRegistrations: (params?: { month?: number; year?: number }) => client.get("/services/my-registrations", { params }),
   upsertMyRegistration: (data: { serviceId: string; month: number; year: number; quantity?: number; enabled?: boolean }) =>
     client.post("/services/my-registrations", data),
+};
+
+export const roomServicesApi = {
+  list: (params?: { room?: string; service?: string; page?: number; limit?: number }) => client.get("/room-services", { params }),
+  create: (data: { room: string; service: string; note?: string; isActive?: boolean }) => client.post("/room-services", data),
+  remove: (id: string) => client.delete(`/room-services/${id}`),
+};
+
+export const serviceUsageApi = {
+  list: (params?: { room?: string; service?: string; month?: number; year?: number; page?: number; limit?: number }) =>
+    client.get("/service-usage", { params }),
+  create: (data: { room: string; service: string; month: number; year: number; oldIndex: number; newIndex: number; note?: string }) =>
+    client.post("/service-usage", data),
 };
 
 export const roomCostsApi = {
@@ -364,6 +480,8 @@ export const roomCostsApi = {
 export const violationsApi = {
   getRules: () => client.get("/violations/rules"),
   getMy: () => client.get("/violations/my"),
+  /** Alias REST: GET /api/my-violations */
+  getMyViolations: () => client.get("/my-violations"),
   getMyStats: (params: { schoolYear: string; semester: string }) => client.get("/violations/my/stats", { params }),
   getAll: (params?: {
     user?: string;

@@ -13,6 +13,7 @@ import {
   Col,
   Statistic,
   Select,
+  Input,
 } from "antd";
 import {
   EyeOutlined,
@@ -23,7 +24,7 @@ import {
 } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
 import { contractsApi, client } from "../../api";
-import type { Contract, User } from "../../types";
+import type { Contract, ContractExtendRequest, User } from "../../types";
 import dayjs from "dayjs";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -46,6 +47,17 @@ const ContractsPage: React.FC = () => {
   const [form] = Form.useForm();
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<{ status?: string; room?: string }>({});
+  const [extendReqs, setExtendReqs] = useState<ContractExtendRequest[]>([]);
+  const [rejectExt, setRejectExt] = useState<{ id: string; note: string } | null>(null);
+
+  const loadExtendRequests = async () => {
+    try {
+      const res = await contractsApi.listExtendRequests({ status: "pending" });
+      setExtendReqs(res.data?.items || []);
+    } catch {
+      setExtendReqs([]);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -60,6 +72,7 @@ const ContractsPage: React.FC = () => {
       setData(res.data.contracts || []);
       setTotal(res.data.total || 0);
       setRooms(roomsRes.data.rooms || []);
+      void loadExtendRequests();
     } catch (err: unknown) {
       setData([]);
       const status = (err as { response?: { status?: number } })?.response?.status;
@@ -213,6 +226,95 @@ const ContractsPage: React.FC = () => {
           Xem, gia hạn, chấm dứt và xác nhận hợp đồng
         </p>
       </div>
+
+      {extendReqs.length > 0 && (
+        <Card title="Yêu cầu gia hạn từ sinh viên (chờ duyệt)" style={{ marginBottom: 24, borderRadius: 12 }} size="small">
+          <Table<ContractExtendRequest>
+            rowKey="_id"
+            pagination={false}
+            size="small"
+            dataSource={extendReqs}
+            columns={[
+              {
+                title: "Sinh viên",
+                key: "u",
+                render: (_, r) =>
+                  typeof r.user === "object" && r.user
+                    ? `${(r.user as User).fullName || ""} (${(r.user as User).studentId || ""})`
+                    : "—",
+              },
+              {
+                title: "Hợp đồng",
+                key: "c",
+                render: (_, r) => (typeof r.contract === "object" ? (r.contract as Contract).contractNumber || "—" : "—"),
+              },
+              { title: "Tháng", dataIndex: "months", width: 70 },
+              {
+                title: "Kết thúc hiện tại",
+                key: "end",
+                render: (_, r) =>
+                  r.snapshotEndDate ? new Date(r.snapshotEndDate).toLocaleDateString("vi-VN") : "—",
+              },
+              {
+                title: "",
+                key: "act",
+                width: 200,
+                render: (_, r) => (
+                  <Space>
+                    <Button
+                      type="primary"
+                      size="small"
+                      onClick={async () => {
+                        try {
+                          await contractsApi.approveExtendRequest(r._id);
+                          message.success("Đã duyệt gia hạn");
+                          void load();
+                          void loadExtendRequests();
+                        } catch (err: unknown) {
+                          message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+                        }
+                      }}
+                    >
+                      Duyệt
+                    </Button>
+                    <Button danger size="small" onClick={() => setRejectExt({ id: r._id, note: "" })}>
+                      Từ chối
+                    </Button>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </Card>
+      )}
+
+      <Modal
+        title="Từ chối yêu cầu gia hạn"
+        open={!!rejectExt}
+        onCancel={() => setRejectExt(null)}
+        onOk={async () => {
+          if (!rejectExt?.note?.trim()) {
+            message.warning("Nhập lý do");
+            return;
+          }
+          try {
+            await contractsApi.rejectExtendRequest(rejectExt.id, rejectExt.note.trim());
+            message.success("Đã từ chối");
+            setRejectExt(null);
+            void load();
+            void loadExtendRequests();
+          } catch (err: unknown) {
+            message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+          }
+        }}
+      >
+        <Input.TextArea
+          rows={3}
+          placeholder="Lý do từ chối"
+          value={rejectExt?.note || ""}
+          onChange={(e) => setRejectExt((prev) => (prev ? { ...prev, note: e.target.value } : null))}
+        />
+      </Modal>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={8}>

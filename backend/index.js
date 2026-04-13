@@ -15,8 +15,13 @@ const areaRoutes = require("./routes/areaRoutes");
 const zoneRoutes = require("./routes/zoneRoutes");
 const roomRoutes = require("./routes/roomRoutes");
 const registrationRoutes = require("./routes/registrationRoutes");
+const applicationRoutes = require("./routes/applicationRoutes");
+const applicationController = require("./controllers/applicationController");
+const { auth, requireRole } = require("./middleware/auth");
 const contractRoutes = require("./routes/contractRoutes");
+const contractController = require("./controllers/contractController");
 const billRoutes = require("./routes/billRoutes");
+const billController = require("./controllers/billController");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const ratingRoutes = require("./routes/ratingRoutes");
 const studentDashboardRoutes = require("./routes/studentDashboardRoutes");
@@ -26,9 +31,16 @@ const damageReportRoutes = require("./routes/damageReportRoutes");
 const facilityRoutes = require("./routes/facilityRoutes");
 const facilityReportRoutes = require("./routes/facilityReportRoutes");
 const serviceRoutes = require("./routes/serviceRoutes");
+const roomServiceRoutes = require("./routes/roomServiceRoutes");
+const serviceUsageRoutes = require("./routes/serviceUsageRoutes");
 const roomCostRoutes = require("./routes/roomCostRoutes");
 const violationRoutes = require("./routes/violationRoutes");
+const violationController = require("./controllers/violationController");
 const disciplinaryRoutes = require("./routes/disciplinaryRoutes");
+const maintenanceReportController = require("./controllers/maintenanceReportController");
+const maintenanceReportRoutes = require("./routes/maintenanceReportRoutes");
+const maintenanceReportAdminRoutes = require("./routes/maintenanceReportAdminRoutes");
+const scheduleController = require("./controllers/scheduleController");
 
 const app = express();
 /** CRA/webpack proxy gửi X-Forwarded-For → express-rate-limit v8 sẽ lỗi nếu không trust proxy */
@@ -66,7 +78,14 @@ app.use("/api/areas", areaRoutes);
 app.use("/api/zones", zoneRoutes);
 app.use("/api/rooms", roomRoutes);
 app.use("/api/registrations", registrationRoutes);
+/** Alias REST theo spec: danh sách đơn của sinh viên đang đăng nhập */
+app.get("/api/my-applications", auth, requireRole("user"), applicationController.listMine);
+app.use("/api/applications", applicationRoutes);
+/** Alias REST: tổng quan hợp đồng + lịch sử gia hạn cho sinh viên */
+app.get("/api/my-contract", auth, requireRole("user"), contractController.getMyContractOverview);
 app.use("/api/contracts", contractRoutes);
+/** Alias REST: danh sách hóa đơn sinh viên đang đăng nhập */
+app.get("/api/my-bills", auth, requireRole("user"), billController.getMyBills);
 app.use("/api/bills", billRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/student-dashboard", studentDashboardRoutes);
@@ -76,8 +95,20 @@ app.use("/api/damage-reports", damageReportRoutes);
 app.use("/api/facilities", facilityRoutes);
 app.use("/api/facility-reports", facilityReportRoutes);
 app.use("/api/services", serviceRoutes);
+app.use("/api/room-services", roomServiceRoutes);
+app.use("/api/service-usage", serviceUsageRoutes);
 app.use("/api/room-costs", roomCostRoutes);
+/** Alias REST: danh sách vi phạm của sinh viên */
+app.get("/api/my-violations", auth, requireRole("user"), violationController.getMyViolations);
 app.use("/api/violations", violationRoutes);
+/** Khai báo hư hỏng / sự cố phòng — REST theo spec (đăng ký lặp trên students — xem studentRoutes) */
+app.get("/api/my-reports", auth, requireRole("user"), maintenanceReportController.listMine);
+app.get("/api/student/maintenance-reports", auth, requireRole("user"), maintenanceReportController.listMine);
+app.use("/api/reports", maintenanceReportRoutes);
+app.use("/api/admin/maintenance-reports", maintenanceReportAdminRoutes);
+/** Lịch tổng hợp cho sinh viên (hóa đơn, hợp đồng, bảo trì, kỳ đăng ký) */
+app.get("/api/my-schedule", auth, requireRole("user"), scheduleController.getMySchedule);
+app.get("/api/events/:id", auth, requireRole("user"), scheduleController.getEventById);
 app.use("/api/disciplinary", disciplinaryRoutes);
 app.use("/api/ratings", ratingRoutes);
 

@@ -124,18 +124,28 @@ exports.getAllViolations = async (req, res) => {
 
 exports.getViolationById = async (req, res) => {
   try {
-    if (!isAdmin(req.user)) return res.status(403).json({ message: "Không có quyền" });
     const { id } = req.params;
     if (!mongoose.isValidObjectId(String(id))) return res.status(400).json({ message: "id không hợp lệ" });
     const doc = await Violation.findById(id)
       .populate("rule", "code name severity points handlingAction")
-      .populate("user", "fullName studentId email")
+      .populate("user", "fullName studentId email phone gender")
       .populate("room", "roomNumber area")
       .populate("room.area", "name")
       .populate("recordedBy", "fullName")
       .populate("resolution.resolvedBy", "fullName");
     if (!doc) return res.status(404).json({ message: "Không tìm thấy vi phạm" });
-    res.json(doc);
+
+    if (isAdmin(req.user)) {
+      return res.json(doc);
+    }
+    if (req.user.role === "user") {
+      const ownerId = String(doc.user?._id || doc.user || "");
+      if (!ownerId || ownerId !== String(req.user._id)) {
+        return res.status(403).json({ message: "Không có quyền xem vi phạm này" });
+      }
+      return res.json(doc);
+    }
+    return res.status(403).json({ message: "Không có quyền" });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

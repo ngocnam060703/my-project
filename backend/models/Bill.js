@@ -42,7 +42,23 @@ const billSchema = new mongoose.Schema(
       },
     ],
     total: { type: Number, required: true },
-    status: { type: String, enum: ["pending", "paid", "overdue"], default: "pending" },
+    /**
+     * unpaid: chưa thanh toán (chuẩn mới) | pending: tương đương unpaid (dữ liệu cũ)
+     * paid | overdue
+     */
+    status: { type: String, enum: ["unpaid", "pending", "paid", "overdue"], default: "unpaid" },
+    /** Lịch sử thanh toán / điều chỉnh (hiển thị chi tiết hóa đơn) */
+    paymentHistory: [
+      {
+        at: { type: Date, default: Date.now },
+        action: { type: String, enum: ["paid", "created", "adjusted"], default: "paid" },
+        method: { type: String, default: "" },
+        reference: { type: String, default: "" },
+        amount: { type: Number, default: 0 },
+        performedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        note: { type: String, default: "" },
+      },
+    ],
     paidAt: { type: Date, default: null },
     /** manual: xác nhận tay / offline | online: cổng thanh toán (demo) | counter: thu tại quầy */
     paymentMethod: { type: String, enum: ["manual", "online", "counter"], default: undefined },

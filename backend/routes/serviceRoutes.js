@@ -15,7 +15,9 @@ router.post("/my-registrations", requireRole("user"), serviceController.upsertMy
 
 // Admin/manager
 router.post("/", requireRole("admin", "manager"), serviceController.createService);
+router.patch("/:id", requireRole("admin", "manager"), serviceController.patchService);
 router.put("/:id", requireRole("admin", "manager"), serviceController.updateService);
+router.delete("/:id", requireRole("admin", "manager"), serviceController.deleteService);
 router.put("/:id/toggle", requireRole("admin", "manager"), serviceController.toggleService);
 
 module.exports = router;

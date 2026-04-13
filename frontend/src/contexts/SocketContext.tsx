@@ -26,8 +26,20 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     s.on("registration:rejected", (data: { userId?: string; message?: string }) => {
       if (data.userId === userId) message.warning(data.message || "Đơn đăng ký bị từ chối");
     });
+    s.on("application:approved", (data: { userId?: string; message?: string }) => {
+      if (data.userId === userId) message.success(data.message || "Đơn KTX của bạn đã được duyệt");
+    });
+    s.on("application:rejected", (data: { userId?: string; message?: string }) => {
+      if (data.userId === userId) message.warning(data.message || "Đơn KTX của bạn đã bị từ chối");
+    });
+    s.on("contract:extended", (data: { userId?: string; message?: string }) => {
+      if (data.userId === userId) message.success(data.message || "Hợp đồng đã được gia hạn");
+    });
     s.on("bill:new", (data: { userId?: string; message?: string }) => {
       if (data.userId === userId) message.info(data.message || "Bạn có hóa đơn mới");
+    });
+    s.on("bill:paid", (data: { userId?: string }) => {
+      if (data.userId === userId) message.success("Hóa đơn đã được thanh toán");
     });
     return () => {
       s.disconnect();

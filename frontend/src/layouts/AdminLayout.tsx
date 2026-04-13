@@ -10,13 +10,13 @@ import {
   FileAddOutlined,
   FileTextOutlined,
   DollarOutlined,
-  ToolOutlined,
   AppstoreOutlined,
   ThunderboltOutlined,
   ExclamationCircleOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   BulbOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
@@ -38,12 +38,15 @@ const AdminLayout: React.FC = () => {
     { key: "/admin/students", icon: <UserOutlined />, label: "Hồ sơ sinh viên" },
     { key: "/admin/areas", icon: <BankOutlined />, label: "Quản lý khu" },
     { key: "/admin/rooms", icon: <HomeOutlined />, label: "Quản lý phòng" },
-    { key: "/admin/registrations", icon: <FileAddOutlined />, label: "Xét duyệt đơn" },
+    { key: "/admin/registrations", icon: <FileAddOutlined />, label: "Xét duyệt đơn (cũ)" },
+    { key: "/admin/applications", icon: <FileTextOutlined />, label: "Đơn KTX (duyệt + phân phòng)" },
     { key: "/admin/contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
-    { key: "/admin/bills", icon: <DollarOutlined />, label: "Hóa đơn" },
+    { key: "/admin/bills", icon: <DollarOutlined />, label: "Hóa đơn (Ant)" },
+    { key: "/admin/billing", icon: <DollarOutlined />, label: "Hóa đơn & thanh toán" },
     { key: "/admin/violations", icon: <ExclamationCircleOutlined />, label: "Vi phạm kỷ luật" },
-    { key: "/admin/services", icon: <AppstoreOutlined />, label: "Dịch vụ" },
-    { key: "/admin/facilities", icon: <ToolOutlined />, label: "Quản lý CSVC" },
+    { key: "/admin/maintenance-reports", icon: <ToolOutlined />, label: "Khai báo hư hỏng" },
+    { key: "/admin/services", icon: <AppstoreOutlined />, label: "Dịch vụ (Ant)" },
+    { key: "/admin/dorm-services", icon: <ThunderboltOutlined />, label: "Dịch vụ KTX (BS5)" },
   ];
 
   const userMenu: MenuProps["items"] = [

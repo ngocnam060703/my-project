@@ -41,8 +41,8 @@ async function createPenaltyBill({ contractDoc, violationDoc, userId, roomId, to
     personalServiceFee: 0,
     occupants: 1,
     total: totalAmount,
-    dueDate: new Date(now.getFullYear(), now.getMonth(), 15),
-    status: "pending",
+    dueDate: new Date(now.getFullYear(), now.getMonth(), Math.min(28, 15)),
+    status: "unpaid",
     note: note || "Hóa đơn phạt vi phạm nội quy KTX",
   });
   violationDoc.bill = bill._id;

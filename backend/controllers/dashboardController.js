@@ -11,7 +11,7 @@ exports.getStats = async (req, res) => {
     const fullRooms = await Room.countDocuments({ $expr: { $gte: ["$currentOccupancy", "$capacity"] } });
     const totalStudents = await User.countDocuments({ role: "user" });
     const pendingRegistrations = await Registration.countDocuments({ status: "pending" });
-    const pendingBills = await Bill.countDocuments({ status: "pending" });
+    const pendingBills = await Bill.countDocuments({ status: { $in: ["pending", "unpaid", "overdue"] } });
     const paidBillsThisMonth = await Bill.countDocuments({ status: "paid", paidAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) } });
     const pendingViolations = await Violation.countDocuments({ status: "pending" });
 

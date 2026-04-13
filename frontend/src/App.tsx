@@ -22,6 +22,7 @@ import ProfilePage from "./pages/client/ProfilePage";
 import DamageReportPage from "./pages/client/DamageReportPage";
 import ContractRenewalPage from "./pages/client/ContractRenewalPage";
 import DormRegistrationPage from "./pages/client/DormRegistrationPage";
+import StudentApplicationsPage from "./pages/client/StudentApplicationsPage";
 import RoomTransferPage from "./pages/client/RoomTransferPage";
 import RegulationsPage from "./pages/client/RegulationsPage";
 import DashboardPage from "./pages/admin/DashboardPage";
@@ -30,11 +31,14 @@ import StudentsPage from "./pages/admin/StudentsPage";
 import AreasPage from "./pages/admin/AreasPage";
 import RoomsPageAdmin from "./pages/admin/RoomsPage";
 import RegistrationsPage from "./pages/admin/RegistrationsPage";
+import ApplicationsPage from "./pages/admin/ApplicationsPage";
 import ContractsPage from "./pages/admin/ContractsPage";
 import BillsPage from "./pages/admin/BillsPage";
-import FacilitiesPage from "./pages/admin/FacilitiesPage";
+import BillingManagementPage from "./pages/admin/BillingManagementPage";
 import ViolationsPage from "./pages/admin/ViolationsPage";
+import MaintenanceReportsAdminPage from "./pages/admin/MaintenanceReportsAdminPage";
 import ServicesPageAdmin from "./pages/admin/ServicesPage";
+import ServiceManagementBootstrapPage from "./pages/admin/ServiceManagementBootstrapPage";
 import ServicesPageClient from "./pages/client/ServicesPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
@@ -87,11 +91,16 @@ function App() {
                   <Route path="areas" element={<AreasPage />} />
                   <Route path="rooms" element={<RoomsPageAdmin />} />
                   <Route path="registrations" element={<RegistrationsPage />} />
+                  <Route path="applications" element={<ApplicationsPage />} />
                   <Route path="contracts" element={<ContractsPage />} />
                   <Route path="bills" element={<BillsPage />} />
+                  <Route path="billing" element={<BillingManagementPage />} />
                   <Route path="violations" element={<ViolationsPage />} />
-                  <Route path="facilities" element={<FacilitiesPage />} />
+                  <Route path="maintenance-reports" element={<MaintenanceReportsAdminPage />} />
+                  <Route path="facilities" element={<Navigate to="/admin/rooms" replace />} />
                   <Route path="services" element={<ServicesPageAdmin />} />
+                  <Route path="dorm-services" element={<ServiceManagementBootstrapPage />} />
+                  <Route path="dorm_services" element={<Navigate to="/admin/dorm-services" replace />} />
                 </Route>
 
                 <Route path="/student" element={<StudentAreaGuard><ClientLayout /></StudentAreaGuard>}>
@@ -99,10 +108,13 @@ function App() {
                   <Route path="rooms" element={<RoomsPage />} />
                   <Route path="rooms/:id" element={<RoomDetailPage />} />
                   <Route path="dorm-registration" element={<ProtectedRoute><DormRegistrationPage /></ProtectedRoute>} />
+                  <Route path="my-applications" element={<ProtectedRoute><StudentApplicationsPage /></ProtectedRoute>} />
+                  <Route path="dorm-applications" element={<Navigate to="/student/my-applications" replace />} />
                   <Route path="room-transfer" element={<ProtectedRoute><RoomTransferPage /></ProtectedRoute>} />
                   <Route path="my-registrations" element={<ProtectedRoute><MyRegistrationsPage /></ProtectedRoute>} />
                   <Route path="my-contracts" element={<ProtectedRoute><MyContractsPage /></ProtectedRoute>} />
                   <Route path="my-bills" element={<ProtectedRoute><MyBillsPage /></ProtectedRoute>} />
+                  <Route path="billing" element={<Navigate to="/student/my-bills" replace />} />
                   <Route path="my-violations" element={<ProtectedRoute><MyViolationsPage /></ProtectedRoute>} />
                   <Route path="regulations" element={<ProtectedRoute><RegulationsPage /></ProtectedRoute>} />
                   <Route path="calendar" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />

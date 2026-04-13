@@ -1,10 +1,30 @@
 const mongoose = require("mongoose");
 const Service = require("../models/Service");
 const ServiceRegistration = require("../models/ServiceRegistration");
+const RoomService = require("../models/RoomService");
+const ServiceUsage = require("../models/ServiceUsage");
 const Contract = require("../models/Contract");
 
 function isAdmin(user) {
   return user?.role === "admin" || user?.role === "manager";
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Tên dịch vụ không trùng (không phân biệt hoa thường), toàn hệ thống. */
+async function assertUniqueServiceName(trimmedName, excludeId) {
+  const rx = new RegExp(`^${escapeRegex(trimmedName)}$`, "i");
+  const q = { name: rx };
+  if (excludeId && mongoose.isValidObjectId(String(excludeId))) {
+    q._id = { $ne: excludeId };
+  }
+  const exists = await Service.findOne(q).select("_id");
+  if (exists) {
+    const err = new Error("DUPLICATE_NAME");
+    throw err;
+  }
 }
 
 exports.getServices = async (req, res) => {
@@ -23,20 +43,29 @@ exports.getServices = async (req, res) => {
 exports.createService = async (req, res) => {
   try {
     if (!isAdmin(req.user)) return res.status(403).json({ message: "Không có quyền" });
-    const { name, type, price, unit, description, isActive } = req.body;
+    const { name, type, price, unit, measureUnit, tariffType, description, isActive } = req.body;
     if (!name || !type || price == null || !unit) {
       return res.status(400).json({ message: "Thiếu name, type, price hoặc unit" });
     }
+    const p = Number(price);
+    if (!(p > 0)) return res.status(400).json({ message: "Đơn giá phải lớn hơn 0" });
+    const n = String(name).trim();
+    await assertUniqueServiceName(n);
+    const mu = measureUnit === "kwh" || measureUnit === "m3" || measureUnit === "month" ? measureUnit : "month";
+    const tt = tariffType === "variable" ? "variable" : "fixed";
     const doc = await Service.create({
-      name: String(name).trim(),
+      name: n,
       type,
-      price: Number(price),
+      price: p,
       unit,
+      measureUnit: mu,
+      tariffType: tt,
       description: description ? String(description) : "",
       isActive: isActive !== undefined ? !!isActive : true,
     });
     res.status(201).json(doc);
   } catch (error) {
+    if (error?.message === "DUPLICATE_NAME") return res.status(400).json({ message: "Tên dịch vụ đã tồn tại" });
     if (error?.code === 11000) return res.status(400).json({ message: "Dịch vụ đã tồn tại" });
     res.status(500).json({ message: error.message });
   }
@@ -48,15 +77,51 @@ exports.updateService = async (req, res) => {
     const { id } = req.params;
     if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "ID không hợp lệ" });
     const data = {};
-    ["name", "type", "unit", "description", "isActive"].forEach((k) => {
+    if (req.body.name !== undefined) {
+      const nm = String(req.body.name).trim();
+      await assertUniqueServiceName(nm, id);
+      data.name = nm;
+    }
+    ["type", "unit", "description", "isActive", "measureUnit", "tariffType"].forEach((k) => {
       if (req.body[k] !== undefined) data[k] = req.body[k];
     });
-    if (req.body.price !== undefined) data.price = Number(req.body.price);
+    if (req.body.price !== undefined) {
+      const p = Number(req.body.price);
+      if (!(p > 0)) return res.status(400).json({ message: "Đơn giá phải lớn hơn 0" });
+      data.price = p;
+    }
     const doc = await Service.findByIdAndUpdate(id, data, { new: true, runValidators: true });
     if (!doc) return res.status(404).json({ message: "Không tìm thấy dịch vụ" });
     res.json(doc);
   } catch (error) {
+    if (error?.message === "DUPLICATE_NAME") return res.status(400).json({ message: "Tên dịch vụ đã tồn tại" });
     if (error?.code === 11000) return res.status(400).json({ message: "Dịch vụ đã tồn tại" });
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** PATCH — cùng logic PUT cập nhật. */
+exports.patchService = exports.updateService;
+
+exports.deleteService = async (req, res) => {
+  try {
+    if (!isAdmin(req.user)) return res.status(403).json({ message: "Không có quyền" });
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "ID không hợp lệ" });
+    const [rs, su, reg] = await Promise.all([
+      RoomService.countDocuments({ service: id }),
+      ServiceUsage.countDocuments({ service: id }),
+      ServiceRegistration.countDocuments({ service: id }),
+    ]);
+    if (rs + su + reg > 0) {
+      return res.status(400).json({
+        message: "Không xóa được: còn gán phòng, chỉ số hoặc đăng ký sinh viên liên quan. Hãy tắt dịch vụ (inactive) thay thế.",
+      });
+    }
+    const doc = await Service.findByIdAndDelete(id);
+    if (!doc) return res.status(404).json({ message: "Không tìm thấy dịch vụ" });
+    res.json({ message: "Đã xóa" });
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };

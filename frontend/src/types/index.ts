@@ -3,6 +3,7 @@ export interface User {
   email: string;
   fullName: string;
   role: string;
+  /** Ảnh đại diện (URL tuyệt đối hoặc path — tuỳ backend) */
   avatar?: string;
   isActive?: boolean;
   isDeleted?: boolean;
@@ -91,6 +92,25 @@ export interface Room {
   amenities?: string[];
 }
 
+/** Đơn xét duyệt KTX (module Application — phân phòng khi admin duyệt) */
+export interface DormApplication {
+  _id: string;
+  user: User;
+  genderSnapshot: "male" | "female" | "unknown";
+  preferenceArea?: Area | null;
+  semester: string;
+  schoolYear: string;
+  startDate?: string;
+  status: "pending" | "approved" | "rejected";
+  assignedRoom?: Room | null;
+  note?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  reviewedBy?: User | null;
+  reviewedAt?: string | null;
+  linkedContract?: Contract | string | null;
+}
+
 export interface Registration {
   _id: string;
   user: User;
@@ -117,11 +137,49 @@ export interface Contract {
   contractNumber?: string;
   signedAt?: string | null;
   terms?: string;
+  application?: string | null;
+  /** VNĐ/tháng — nếu null UI dùng giá phòng */
+  monthlyRent?: number | null;
+  /** VNĐ — nếu null hiển thị “theo quy định” */
+  depositAmount?: number | null;
+}
+
+/** Yêu cầu gia hạn hợp đồng (sinh viên → admin duyệt) */
+export interface ContractExtendRequest {
+  _id: string;
+  contract: Contract | { _id?: string; contractNumber?: string; status?: string; endDate?: string; startDate?: string };
+  user?: string | User;
+  months: number;
+  status: "pending" | "approved" | "rejected";
+  snapshotEndDate?: string;
+  appliedEndDate?: string | null;
+  note?: string;
+  reviewedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface MyContractOverview {
+  student: Pick<User, "fullName" | "email" | "phone" | "studentId" | "gender" | "citizenId" | "dateOfBirth" | "avatar"> | null;
+  contracts: Contract[];
+  activeContract: Contract | null;
+  extendRequests: ContractExtendRequest[];
+  extensionEnabled: boolean;
+}
+
+export interface BillPaymentHistoryEntry {
+  at?: string;
+  action?: "paid" | "created" | "adjusted";
+  method?: string;
+  reference?: string;
+  amount?: number;
+  note?: string;
 }
 
 export interface Bill {
   _id: string;
   user: User;
+  contract?: Contract | string;
   room: Room;
   month: number;
   year: number;
@@ -133,11 +191,14 @@ export interface Bill {
   personalServiceFee?: number;
   occupants?: number;
   total: number;
-  status: string;
+  /** Alias backend trả về ở GET /bills/:id */
+  amount?: number;
+  status: "unpaid" | "pending" | "paid" | "overdue" | string;
   dueDate: string;
   paidAt?: string;
   paymentMethod?: "manual" | "online" | "counter";
   paymentReference?: string;
+  paymentHistory?: BillPaymentHistoryEntry[];
   note?: string;
   billType?: "monthly" | "penalty";
   violation?: string | { _id?: string; ruleName?: string; description?: string; fineAmount?: number; compensationAmount?: number; createdAt?: string };
@@ -200,4 +261,47 @@ export interface Violation {
   bill?: string | { _id?: string };
   status?: ViolationStatus;
   resolution?: ViolationResolution | null;
+}
+
+/** Khai báo hư hỏng / sự cố phòng (module Maintenance) */
+export type MaintenanceIncidentType = "electricity" | "water" | "equipment" | "other";
+export type MaintenanceReportStatus = "pending" | "processing" | "resolved";
+
+export interface MaintenanceReport {
+  _id: string;
+  user?: User | string;
+  room?: Room | string;
+  incidentType: MaintenanceIncidentType;
+  description: string;
+  images?: string[];
+  status: MaintenanceReportStatus;
+  adminNote?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Lịch của tôi — GET /my-schedule (tổng hợp động) */
+export type ScheduleEventType = "payment" | "contract" | "maintenance" | "event";
+
+export interface ScheduleEvent {
+  id: string;
+  title: string;
+  description: string;
+  type: ScheduleEventType;
+  startDate: string;
+  endDate: string;
+  status?: string;
+  createdAt?: string;
+  ref?: { kind: string; refId: string };
+}
+
+export interface ScheduleEventDetail extends ScheduleEvent {
+  raw?: Record<string, unknown>;
+  images?: string[];
+}
+
+export interface MyScheduleResponse {
+  from: string;
+  to: string;
+  events: ScheduleEvent[];
 }

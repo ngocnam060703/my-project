@@ -4,6 +4,8 @@ const contractSchema = new mongoose.Schema(
   {
     /** Có thể null khi admin tạo hợp đồng thủ công (không qua đơn đăng ký). */
     registration: { type: mongoose.Schema.Types.ObjectId, ref: "Registration", default: null },
+    /** Đơn xét duyệt (module Application) — tách biệt Registration */
+    application: { type: mongoose.Schema.Types.ObjectId, ref: "Application", default: null },
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     room: { type: mongoose.Schema.Types.ObjectId, ref: "Room", required: true },
     startDate: { type: Date, required: true },
@@ -19,6 +21,10 @@ const contractSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     paymentConfirmedAt: { type: Date, default: null },
     paymentConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    /** Giá thuê / tháng (VNĐ) — tuỳ chọn; nếu null UI dùng giá phòng */
+    monthlyRent: { type: Number, default: null },
+    /** Tiền cọc (VNĐ) — tuỳ chọn */
+    depositAmount: { type: Number, default: null },
   },
   { timestamps: true }
 );

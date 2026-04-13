@@ -6,7 +6,13 @@ const Service = require("../models/Service");
 const ServiceRegistration = require("../models/ServiceRegistration");
 const RoomMonthlyCost = require("../models/RoomMonthlyCost");
 const Room = require("../models/Room");
+const User = require("../models/User");
 const { getIO } = require("../socket");
+const { dueDateForBillingMonth } = require("../services/billingDueDate");
+const { refreshOverdueMonthlyBills } = require("../services/billingOverdue");
+
+/** Trạng thái coi là chưa thanh toán (tương thích pending cũ + unpaid mới) */
+const UNPAID_STATUSES = ["unpaid", "pending"];
 
 function toStartOfDay(d) {
   const x = new Date(d);
@@ -105,16 +111,24 @@ async function syncRoomMonthlyUtilityCost({ roomId, month, year, electricityFee,
 
 exports.getAll = async (req, res) => {
   try {
-    const { status, user, room, month, year, billType, page = 1, limit = 20 } = req.query;
+    await refreshOverdueMonthlyBills();
+    const { status, user, room, month, year, billType, search, page = 1, limit = 20 } = req.query;
     const filter = {};
     if (status) filter.status = status;
-    if (user) filter.user = user;
     if (room) filter.room = room;
-    if (month) filter.month = parseInt(month);
-    if (year) filter.year = parseInt(year);
+    if (month) filter.month = parseInt(month, 10);
+    if (year) filter.year = parseInt(year, 10);
     if (billType === "monthly" || billType === "penalty") filter.billType = billType;
+    if (search && String(search).trim()) {
+      const rx = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const users = await User.find({ fullName: rx, role: "user", isDeleted: { $ne: true } }).select("_id");
+      filter.user = { $in: users.map((u) => u._id) };
+    } else if (user) {
+      filter.user = user;
+    }
     const bills = await Bill.find(filter)
       .populate("user", "fullName email phone")
+      .populate("contract", "contractNumber status startDate endDate")
       .populate("room")
       .populate("room.area", "name")
       .populate("violation", "ruleName description fineAmount compensationAmount createdAt")
@@ -130,7 +144,9 @@ exports.getAll = async (req, res) => {
 
 exports.getMyBills = async (req, res) => {
   try {
+    await refreshOverdueMonthlyBills();
     const bills = await Bill.find({ user: req.user._id })
+      .populate("contract", "contractNumber status startDate endDate")
       .populate("room")
       .populate("room.area", "name")
       .populate("violation", "ruleName description fineAmount compensationAmount createdAt")
@@ -149,7 +165,7 @@ exports.create = async (req, res) => {
     if (!(m >= 1 && m <= 12) || y < 2000) {
       return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
     }
-    const due = dueDate ? new Date(dueDate) : new Date(y, m - 1, 15);
+    const due = dueDate ? new Date(dueDate) : dueDateForBillingMonth(y, m);
 
     // Luồng mới: tạo hóa đơn theo phòng (khuyến nghị dùng trên UI admin)
     if (roomId) {
@@ -159,17 +175,18 @@ exports.create = async (req, res) => {
       const room = await Room.findById(roomId);
       if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
 
+      const now = new Date();
+      /** Chỉ hợp đồng đang ở (active) — không tạo cho pending_payment / hết hạn / terminate */
       const contracts = await Contract.find({
         room: roomId,
-        status: { $in: ["active", "pending_payment"] },
+        status: "active",
+        endDate: { $gte: toStartOfDay(now) },
       })
         .populate("user", "fullName email")
         .populate("room", "price roomNumber area");
       if (!contracts.length) {
-        return res.status(400).json({ message: "Phòng chưa có sinh viên có hợp đồng hiệu lực" });
+        return res.status(400).json({ message: "Phòng chưa có sinh viên với hợp đồng active (đã ký và còn hạn)" });
       }
-
-      const now = new Date();
       const hasExpired = contracts.some((c) => isContractExpired(c.endDate, now));
       if (hasExpired) {
         return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể tạo hóa đơn" });
@@ -236,8 +253,17 @@ exports.create = async (req, res) => {
           personalServiceBreakdown: personalBreakdown,
           total,
           dueDate: due,
-          status: "pending",
+          status: "unpaid",
           note: `Công thức: (Phòng + Điện + Nước + Dịch vụ chung) / ${occupants} + dịch vụ cá nhân`,
+          paymentHistory: [
+            {
+              at: new Date(),
+              action: "created",
+              amount: Math.round(total),
+              performedBy: req.user._id,
+              note: "Tạo hóa đơn theo phòng",
+            },
+          ],
         });
         created += 1;
         createdBills.push(bill);
@@ -260,6 +286,12 @@ exports.create = async (req, res) => {
     if (!contractDoc) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
 
     const now = new Date();
+    if (contractDoc.status === "terminated" || contractDoc.status === "expired") {
+      return res.status(400).json({ message: "Hợp đồng đã kết thúc / hết hạn, không thể tạo hóa đơn" });
+    }
+    if (contractDoc.status !== "active") {
+      return res.status(400).json({ message: "Chỉ tạo hóa đơn khi hợp đồng đang active" });
+    }
     if (isContractExpired(contractDoc.endDate, now)) {
       return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể tạo hóa đơn" });
     }
@@ -278,6 +310,16 @@ exports.create = async (req, res) => {
       otherFee: Number(otherFee || 0),
       total,
       dueDate: due,
+      status: "unpaid",
+      paymentHistory: [
+        {
+          at: new Date(),
+          action: "created",
+          amount: Math.round(total),
+          performedBy: req.user._id,
+          note: "Tạo hóa đơn thủ công",
+        },
+      ],
     });
     await syncRoomMonthlyUtilityCost({
       roomId: contractDoc.room._id,
@@ -306,7 +348,7 @@ exports.generateByMonth = async (req, res) => {
   try {
     const month = Number(req.body?.month);
     const year = Number(req.body?.year);
-    const dueDate = req.body?.dueDate ? new Date(req.body.dueDate) : new Date(year, month - 1, 15);
+    const dueDate = req.body?.dueDate ? new Date(req.body.dueDate) : dueDateForBillingMonth(year, month);
     if (!(month >= 1 && month <= 12) || year < 2000) {
       return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
     }
@@ -315,7 +357,7 @@ exports.generateByMonth = async (req, res) => {
     const today = toStartOfDay(now);
 
     const contracts = await Contract.find({
-      status: { $in: ["active", "pending_payment"] },
+      status: "active",
       endDate: { $gte: today },
     })
       .populate("room", "price roomNumber area")
@@ -391,8 +433,17 @@ exports.generateByMonth = async (req, res) => {
           personalServiceBreakdown: personalBreakdown,
           total,
           dueDate,
-          status: "pending",
+          status: "unpaid",
           note: `Công thức: (Phòng + Điện + Nước + Dịch vụ chung) / ${occupants} + dịch vụ cá nhân`,
+          paymentHistory: [
+            {
+              at: new Date(),
+              action: "created",
+              amount: Math.round(total),
+              performedBy: req.user?._id || null,
+              note: "Sinh tự động theo tháng",
+            },
+          ],
         });
         created += 1;
 
@@ -420,19 +471,41 @@ exports.markPaid = async (req, res) => {
   try {
     const bill = await Bill.findById(req.params.id).populate("contract");
     if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    if (bill.status === "paid") {
+      return res.status(400).json({ message: "Hóa đơn đã được thanh toán" });
+    }
+    if (!UNPAID_STATUSES.includes(bill.status) && bill.status !== "overdue") {
+      return res.status(400).json({ message: "Hóa đơn không ở trạng thái chờ thanh toán" });
+    }
     const isAdmin = req.user.role === "admin" || req.user.role === "manager";
-    if (!isAdmin && bill.user.toString() !== req.user._id.toString()) {
+    const billUserId = String(bill.user?._id || bill.user || "");
+    if (!isAdmin && billUserId !== String(req.user._id)) {
       return res.status(403).json({ message: "Không có quyền thanh toán hóa đơn này" });
     }
     if (bill.contract && isContractExpired(bill.contract.endDate, new Date())) {
       return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể thanh toán hóa đơn này" });
     }
     const method = req.body?.paymentMethod === "counter" ? "counter" : "manual";
+    const ref = isAdmin && req.body?.paymentReference ? String(req.body.paymentReference).trim() : "";
     bill.status = "paid";
     bill.paidAt = new Date();
     bill.paymentMethod = isAdmin ? method : "manual";
-    bill.paymentReference = isAdmin && req.body?.paymentReference ? String(req.body.paymentReference).trim() : "";
+    bill.paymentReference = ref;
+    bill.paymentHistory = bill.paymentHistory || [];
+    bill.paymentHistory.push({
+      at: new Date(),
+      action: "paid",
+      method: isAdmin ? method : "manual",
+      reference: ref,
+      amount: Math.round(Number(bill.total || 0)),
+      performedBy: req.user._id,
+      note: isAdmin ? "Admin xác nhận thanh toán" : "Sinh viên xác nhận (demo)",
+    });
     await bill.save();
+    if (!isAdmin) {
+      const io = getIO();
+      io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
+    }
     res.json(bill);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -444,26 +517,138 @@ exports.payOnline = async (req, res) => {
   try {
     const bill = await Bill.findById(req.params.id).populate("contract");
     if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
-    if (bill.user.toString() !== req.user._id.toString()) {
+    const billUserId = String(bill.user?._id || bill.user || "");
+    if (billUserId !== String(req.user._id)) {
       return res.status(403).json({ message: "Chỉ thanh toán được hóa đơn của chính bạn" });
     }
     if (bill.status === "paid") {
       return res.status(400).json({ message: "Hóa đơn đã được thanh toán" });
     }
-    if (bill.status !== "pending" && bill.status !== "overdue") {
+    if (!UNPAID_STATUSES.includes(bill.status) && bill.status !== "overdue") {
       return res.status(400).json({ message: "Hóa đơn không ở trạng thái chờ thanh toán" });
     }
     if (bill.contract && isContractExpired(bill.contract.endDate, new Date())) {
       return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể thanh toán" });
     }
+    const ref = `ONL-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
     bill.status = "paid";
     bill.paidAt = new Date();
     bill.paymentMethod = "online";
-    bill.paymentReference = `ONL-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+    bill.paymentReference = ref;
+    bill.paymentHistory = bill.paymentHistory || [];
+    bill.paymentHistory.push({
+      at: new Date(),
+      action: "paid",
+      method: "online",
+      reference: ref,
+      amount: Math.round(Number(bill.total || 0)),
+      performedBy: req.user._id,
+      note: "Thanh toán online (mô phỏng)",
+    });
     await bill.save();
     const io = getIO();
     io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
     res.json(bill);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Chi tiết một hóa đơn (admin/manager hoặc chính sinh viên). `amount` = tổng phải trả (alias của total). */
+exports.getById = async (req, res) => {
+  try {
+    await refreshOverdueMonthlyBills();
+    const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "ID không hợp lệ" });
+    }
+    const bill = await Bill.findById(id)
+      .populate("user", "fullName email phone studentId gender")
+      .populate("contract", "contractNumber status startDate endDate signedAt")
+      .populate("room")
+      .populate("room.area", "name")
+      .populate("violation", "ruleName description fineAmount compensationAmount createdAt");
+    if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    const isStaff = req.user.role === "admin" || req.user.role === "manager";
+    const billUserId = String(bill.user?._id || bill.user || "");
+    if (!isStaff && billUserId !== String(req.user._id)) {
+      return res.status(403).json({ message: "Không có quyền xem hóa đơn này" });
+    }
+    const o = bill.toObject();
+    o.amount = bill.total;
+    res.json(o);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Admin: sửa hạn, ghi chú hoặc điều chỉnh khoản phí (hóa đơn chưa paid). */
+exports.updateBill = async (req, res) => {
+  try {
+    const bill = await Bill.findById(req.params.id);
+    if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    if (bill.status === "paid") {
+      return res.status(400).json({ message: "Không chỉnh sửa hóa đơn đã thanh toán" });
+    }
+    const { dueDate, note, roomFee, electricityFee, waterFee, otherFee, sharedCommonFee, personalServiceFee } = req.body;
+    if (dueDate) bill.dueDate = new Date(dueDate);
+    if (note !== undefined) bill.note = String(note);
+    if (roomFee !== undefined) bill.roomFee = Math.max(0, Number(roomFee));
+    if (electricityFee !== undefined) bill.electricityFee = Math.max(0, Number(electricityFee));
+    if (waterFee !== undefined) bill.waterFee = Math.max(0, Number(waterFee));
+    if (otherFee !== undefined) bill.otherFee = Math.max(0, Number(otherFee));
+    if (sharedCommonFee !== undefined) bill.sharedCommonFee = Math.max(0, Number(sharedCommonFee));
+    if (personalServiceFee !== undefined) bill.personalServiceFee = Math.max(0, Number(personalServiceFee));
+    bill.total =
+      Number(bill.roomFee || 0) +
+      Number(bill.electricityFee || 0) +
+      Number(bill.waterFee || 0) +
+      Number(bill.otherFee || 0) +
+      Number(bill.sharedCommonFee || 0) +
+      Number(bill.personalServiceFee || 0);
+    bill.paymentHistory = bill.paymentHistory || [];
+    bill.paymentHistory.push({
+      at: new Date(),
+      action: "adjusted",
+      method: "admin",
+      reference: "",
+      amount: Math.round(bill.total),
+      performedBy: req.user._id,
+      note: "Điều chỉnh hóa đơn",
+    });
+    await bill.save();
+    const out = await Bill.findById(bill._id)
+      .populate("user", "fullName email")
+      .populate("contract", "contractNumber status")
+      .populate("room")
+      .populate("room.area", "name");
+    res.json(out);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Thống kê doanh thu (hóa đơn monthly đã paid) theo năm — bonus. */
+exports.revenueSummary = async (req, res) => {
+  try {
+    const year = parseInt(String(req.query.year || new Date().getFullYear()), 10);
+    const byMonth = await Bill.aggregate([
+      { $match: { billType: "monthly", status: "paid", year } },
+      { $group: { _id: "$month", total: { $sum: "$total" }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
+    const yearTotal = byMonth.reduce((s, r) => s + r.total, 0);
+    res.json({ year, byMonth, yearTotal });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Gọi tay cập nhật trạng thái quá hạn (thường đã chạy tự động khi GET danh sách). */
+exports.runOverdueRefresh = async (req, res) => {
+  try {
+    const r = await refreshOverdueMonthlyBills();
+    res.json({ ok: true, modifiedCount: r.modifiedCount });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

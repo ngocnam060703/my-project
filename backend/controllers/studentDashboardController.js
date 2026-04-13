@@ -35,7 +35,7 @@ exports.getDashboard = async (req, res) => {
       Registration.findOne({ user: userId, status: "approved" }).sort({ createdAt: -1 }).populate(roomPopulate),
       Contract.find({ user: userId, status: "active" }).populate(roomPopulate).sort({ endDate: -1 }),
       Contract.find({ user: userId, status: "pending_payment" }).populate(roomPopulate).sort({ createdAt: -1 }),
-      Bill.find({ user: userId, status: { $in: ["pending", "overdue"] } }),
+      Bill.find({ user: userId, status: { $in: ["unpaid", "pending", "overdue"] } }),
       RegistrationPeriod.findOne({ isActive: true, startDate: { $lte: now }, endDate: { $gte: now } }),
     ]);
 

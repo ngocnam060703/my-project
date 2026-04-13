@@ -3,7 +3,43 @@ const Contract = require("../models/Contract");
 const Room = require("../models/Room");
 const User = require("../models/User");
 const Notification = require("../models/Notification");
+const ContractExtendRequest = require("../models/ContractExtendRequest");
+const ContractExtensionSetting = require("../models/ContractExtensionSetting");
 const { getIO } = require("../socket");
+
+const CONTRACT_EXT_SETTING_KEY = "contract_extension";
+
+async function isContractExtensionGloballyEnabled() {
+  const doc = await ContractExtensionSetting.findOne({ key: CONTRACT_EXT_SETTING_KEY });
+  return doc?.enable_contract_extension !== false;
+}
+
+function addCalendarMonths(date, months) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + Number(months));
+  return d;
+}
+
+async function notifyAdminsNewExtendRequest({ studentName, contractNumber, months }) {
+  const io = getIO();
+  const admins = await User.find({ $or: [{ role: "admin" }, { role: "manager" }] }).select("_id");
+  if (!admins.length) return;
+  const title = "Yêu cầu gia hạn hợp đồng";
+  const message = `${studentName || "Sinh viên"} xin gia hạn HĐ ${contractNumber || ""} thêm ${months} tháng.`;
+  const link = "/admin/contracts";
+  await Notification.insertMany(
+    admins.map((a) => ({
+      user: a._id,
+      title,
+      message,
+      type: "contract_renewal",
+      link,
+    }))
+  );
+  for (const a of admins) {
+    io.emit("notification:new", { userId: String(a._id), title, message, link });
+  }
+}
 
 async function decrementRoomOccupancy(roomId) {
   if (!roomId) return;
@@ -182,7 +218,8 @@ exports.getById = async (req, res) => {
         ],
       });
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
-    if (req.user.role === "user" && contract.user._id.toString() !== req.user._id.toString()) {
+    const ownerId = String(contract.user?._id || contract.user || "");
+    if (req.user.role === "user" && ownerId !== String(req.user._id)) {
       return res.status(403).json({ message: "Không có quyền xem" });
     }
     res.json(contract);
@@ -292,5 +329,196 @@ exports.confirmPayment = async (req, res) => {
     res.json(contract);
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+/** GET /api/my-contract — tổng hợp cho UI “Hợp đồng của tôi” */
+exports.getMyContractOverview = async (req, res) => {
+  try {
+    const student = await User.findById(req.user._id)
+      .select("fullName email phone studentId gender citizenId dateOfBirth avatar")
+      .lean();
+    const contracts = await Contract.find({ user: req.user._id })
+      .populate({
+        path: "room",
+        populate: [
+          { path: "area", select: "name" },
+          { path: "roomLeader", select: "_id fullName" },
+        ],
+      })
+      .sort({ createdAt: -1 })
+      .lean();
+    const activeContract = contracts.find((c) => c.status === "active") || null;
+    const extendRequests = await ContractExtendRequest.find({ user: req.user._id })
+      .populate("contract", "contractNumber status endDate startDate")
+      .sort({ createdAt: -1 })
+      .lean();
+    const extensionEnabled = await isContractExtensionGloballyEnabled();
+    res.json({ student, contracts, activeContract, extendRequests, extensionEnabled });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Sinh viên: POST /contracts/:id/request-extend */
+exports.requestExtend = async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Mã hợp đồng không hợp lệ" });
+    }
+    if (!(await isContractExtensionGloballyEnabled())) {
+      return res.status(400).json({ message: "Chức năng gia hạn hợp đồng hiện đang tắt" });
+    }
+    const months = parseInt(req.body?.months, 10);
+    if (!Number.isFinite(months) || months < 1 || months > 36) {
+      return res.status(400).json({ message: "Số tháng gia hạn phải từ 1 đến 36" });
+    }
+    const contract = await Contract.findById(id);
+    if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+    if (String(contract.user) !== String(req.user._id)) {
+      return res.status(403).json({ message: "Không có quyền với hợp đồng này" });
+    }
+    if (contract.status !== "active") {
+      return res.status(400).json({ message: "Chỉ hợp đồng đang hiệu lực (active) mới được gửi yêu cầu gia hạn" });
+    }
+    const dup = await ContractExtendRequest.findOne({ contract: contract._id, status: "pending" });
+    if (dup) {
+      return res.status(400).json({ message: "Đã có yêu cầu gia hạn đang chờ duyệt cho hợp đồng này" });
+    }
+    const doc = await ContractExtendRequest.create({
+      contract: contract._id,
+      user: req.user._id,
+      months,
+      status: "pending",
+      snapshotEndDate: contract.endDate,
+    });
+    const populated = await ContractExtendRequest.findById(doc._id)
+      .populate("contract", "contractNumber")
+      .lean();
+    await notifyAdminsNewExtendRequest({
+      studentName: req.user.fullName,
+      contractNumber: contract.contractNumber,
+      months,
+    });
+    res.status(201).json(populated);
+  } catch (e) {
+    if (e && e.code === 11000) {
+      return res.status(400).json({ message: "Đã có yêu cầu gia hạn đang chờ duyệt" });
+    }
+    res.status(500).json({ message: e.message });
+  }
+};
+
+/** Admin / Manager: danh sách yêu cầu gia hạn */
+exports.listExtendRequests = async (req, res) => {
+  try {
+    const st = String(req.query.status || "pending");
+    const filter = {};
+    if (st !== "all") filter.status = st;
+    const rows = await ContractExtendRequest.find(filter)
+      .populate("user", "fullName email studentId")
+      .populate("contract", "contractNumber status startDate endDate")
+      .populate("reviewedBy", "fullName")
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+    res.json({ items: rows });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+exports.approveExtendRequest = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  try {
+    const rid = String(req.params.requestId || "").trim();
+    if (!mongoose.isValidObjectId(rid)) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: "ID yêu cầu không hợp lệ" });
+    }
+    const reqDoc = await ContractExtendRequest.findById(rid).session(session);
+    if (!reqDoc || reqDoc.status !== "pending") {
+      await session.abortTransaction();
+      return res.status(404).json({ message: "Không tìm thấy yêu cầu hoặc đã xử lý" });
+    }
+    const contract = await Contract.findById(reqDoc.contract).session(session);
+    if (!contract) {
+      await session.abortTransaction();
+      return res.status(400).json({ message: "Hợp đồng không tồn tại" });
+    }
+    if (contract.status !== "active") {
+      await session.abortTransaction();
+      return res.status(400).json({ message: "Hợp đồng không còn active, không thể gia hạn" });
+    }
+    const newEnd = addCalendarMonths(contract.endDate, reqDoc.months);
+    contract.endDate = newEnd;
+    await contract.save({ session });
+    reqDoc.status = "approved";
+    reqDoc.appliedEndDate = newEnd;
+    reqDoc.reviewedBy = req.user._id;
+    reqDoc.reviewedAt = new Date();
+    reqDoc.note = "";
+    await reqDoc.save({ session });
+    await session.commitTransaction();
+
+    const io = getIO();
+    io.emit("contract:extended", {
+      userId: String(contract.user),
+      message: `Yêu cầu gia hạn ${reqDoc.months} tháng đã được duyệt. Ngày kết thúc mới: ${newEnd.toLocaleDateString("vi-VN")}`,
+    });
+    await Notification.create({
+      user: contract.user,
+      title: "Gia hạn hợp đồng được duyệt",
+      message: `Hợp đồng ${contract.contractNumber} đã được gia hạn thêm ${reqDoc.months} tháng.`,
+      type: "contract_renewal",
+      link: "/student/my-contracts",
+    });
+
+    const out = await ContractExtendRequest.findById(reqDoc._id)
+      .populate("contract", "contractNumber endDate")
+      .lean();
+    res.json({ request: out, contract });
+  } catch (e) {
+    await session.abortTransaction();
+    res.status(500).json({ message: e.message });
+  } finally {
+    session.endSession();
+  }
+};
+
+exports.rejectExtendRequest = async (req, res) => {
+  try {
+    const rid = String(req.params.requestId || "").trim();
+    if (!mongoose.isValidObjectId(rid)) {
+      return res.status(400).json({ message: "ID yêu cầu không hợp lệ" });
+    }
+    const note = String(req.body?.note || "").trim();
+    if (!note) return res.status(400).json({ message: "Vui lòng nhập lý do từ chối" });
+    const reqDoc = await ContractExtendRequest.findById(rid);
+    if (!reqDoc || reqDoc.status !== "pending") {
+      return res.status(404).json({ message: "Không tìm thấy yêu cầu hoặc đã xử lý" });
+    }
+    reqDoc.status = "rejected";
+    reqDoc.note = note;
+    reqDoc.reviewedBy = req.user._id;
+    reqDoc.reviewedAt = new Date();
+    await reqDoc.save();
+
+    const contract = await Contract.findById(reqDoc.contract).select("user contractNumber").lean();
+    if (contract?.user) {
+      await Notification.create({
+        user: contract.user,
+        title: "Yêu cầu gia hạn bị từ chối",
+        message: `Hợp đồng ${contract.contractNumber}: ${note}`,
+        type: "contract_renewal",
+        link: "/student/my-contracts",
+      });
+    }
+
+    res.json(await ContractExtendRequest.findById(reqDoc._id).populate("contract", "contractNumber").lean());
+  } catch (e) {
+    res.status(500).json({ message: e.message });
   }
 };

@@ -6,6 +6,7 @@ import { billsApi, client } from "../../api";
 import type { Bill } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
+  unpaid: { color: "orange", text: "Chưa thanh toán" },
   pending: { color: "orange", text: "Chưa thanh toán" },
   paid: { color: "green", text: "Đã thanh toán" },
   overdue: { color: "red", text: "Quá hạn" },
@@ -126,8 +127,8 @@ const BillsPage: React.FC = () => {
     });
   };
 
-  const unpaidTotal = data.filter((b) => b.status === "pending" || b.status === "overdue").reduce((s, b) => s + (b.total || 0), 0);
-  const unpaidCount = data.filter((b) => b.status === "pending" || b.status === "overdue").length;
+  const unpaidTotal = data.filter((b) => b.status === "pending" || b.status === "unpaid" || b.status === "overdue").reduce((s, b) => s + (b.total || 0), 0);
+  const unpaidCount = data.filter((b) => b.status === "pending" || b.status === "unpaid" || b.status === "overdue").length;
 
   const cols = [
     {
@@ -233,7 +234,7 @@ const BillsPage: React.FC = () => {
       render: (_: unknown, r: Bill) => (
         <Space>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
-          {(r.status === "pending" || r.status === "overdue") && (
+          {(r.status === "pending" || r.status === "unpaid" || r.status === "overdue") && (
             <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => handleMarkPaid(r)}>Đã TT</Button>
           )}
         </Space>
@@ -280,7 +281,8 @@ const BillsPage: React.FC = () => {
             value={filters.status}
             onChange={(v) => { setFilters((f) => ({ ...f, status: v })); setPage(1); }}
           >
-            <Select.Option value="pending">Chưa thanh toán</Select.Option>
+            <Select.Option value="unpaid">Chưa thanh toán (unpaid)</Select.Option>
+            <Select.Option value="pending">Chưa thanh toán (legacy)</Select.Option>
             <Select.Option value="paid">Đã thanh toán</Select.Option>
             <Select.Option value="overdue">Quá hạn</Select.Option>
           </Select>
@@ -403,7 +405,7 @@ const BillsPage: React.FC = () => {
         onCancel={() => setDetailModal(null)}
         footer={[
           <Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>,
-          detailModal && (detailModal.status === "pending" || detailModal.status === "overdue") && (
+          detailModal && (detailModal.status === "pending" || detailModal.status === "unpaid" || detailModal.status === "overdue") && (
             <Button key="pay" type="primary" icon={<CheckOutlined />} onClick={() => { handleMarkPaid(detailModal); setDetailModal(null); }}>Xác nhận đã thanh toán</Button>
           ),
         ].filter(Boolean) as React.ReactNode[]}

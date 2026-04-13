@@ -1,273 +1,433 @@
-import React, { useState, useEffect } from "react";
-import { Table, Tag, Spin, Empty, message, Button, Card, Row, Col, Statistic, Modal } from "antd";
-import { ReloadOutlined, FileTextOutlined, EyeOutlined } from "@ant-design/icons";
-import { useNavigate } from "react-router-dom";
-import { authApi, contractsApi, dashboardApi } from "../../api";
-import type { Contract } from "../../types";
+/**
+ * Module "Hợp đồng của tôi" — Bootstrap 5: thông tin SV, phòng, HĐ, countdown, yêu cầu gia hạn.
+ * API: GET /api/my-contract, GET /api/contracts/:id, POST /api/contracts/:id/request-extend
+ */
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import "bootstrap/dist/css/bootstrap.min.css";
+import { isAxiosError } from "axios";
+import { contractsApi, dashboardApi } from "../../api";
+import { useSocket } from "../../contexts/SocketContext";
+import { useAuth } from "../../contexts/AuthContext";
+import type { Contract, ContractExtendRequest, MyContractOverview, Room } from "../../types";
 
-const statusMap: Record<string, { color: string; text: string }> = {
-  pending_payment: { color: "gold", text: "Chưa hiệu lực (chờ admin xác nhận)" },
-  active: { color: "green", text: "Có hiệu lực" },
-  expired: { color: "default", text: "Hết hạn" },
-  terminated: { color: "red", text: "Đã chấm dứt" },
-};
+function fmtMoney(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return `${Math.round(Number(n)).toLocaleString("vi-VN")}đ`;
+}
+
+function monthsBetween(start: string | Date, end: string | Date): number {
+  const a = new Date(start);
+  const b = new Date(end);
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
+  let m = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  if (b.getDate() < a.getDate()) m -= 1;
+  return Math.max(0, m);
+}
+
+function daysRemaining(endDate: string | Date): number {
+  const end = new Date(endDate);
+  end.setHours(23, 59, 59, 999);
+  const now = new Date();
+  return Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function statusBadge(status: string): { cls: string; label: string } {
+  switch (status) {
+    case "active":
+      return { cls: "text-bg-success", label: "Đang hiệu lực" };
+    case "pending_payment":
+      return { cls: "text-bg-warning text-dark", label: "Chờ thanh toán / chờ hiệu lực" };
+    case "expired":
+      return { cls: "text-bg-secondary", label: "Hết hạn" };
+    case "terminated":
+      return { cls: "text-bg-danger", label: "Đã kết thúc" };
+    default:
+      return { cls: "text-bg-light text-dark", label: status };
+  }
+}
+
+function monthlyRentDisplay(c: Contract): string {
+  if (c.monthlyRent != null && c.monthlyRent > 0) return fmtMoney(c.monthlyRent);
+  const r = c.room as Room | undefined;
+  if (r?.pricePerPerson != null && r.pricePerPerson > 0) return fmtMoney(r.pricePerPerson);
+  if (r?.price != null) return fmtMoney(r.price);
+  return "—";
+}
+
+function depositDisplay(c: Contract): string {
+  if (c.depositAmount != null && c.depositAmount >= 0) return fmtMoney(c.depositAmount);
+  return "Theo quy định KTX (liên hệ BQL)";
+}
+
+function errMsg(e: unknown): string {
+  if (isAxiosError(e)) {
+    const m = (e.response?.data as { message?: string } | undefined)?.message;
+    if (m) return m;
+  }
+  return "Có lỗi xảy ra";
+}
+
+function avatarSrc(student: MyContractOverview["student"] | null): string | null {
+  const a = student?.avatar;
+  if (!a || typeof a !== "string") return null;
+  if (a.startsWith("http")) return a;
+  return null;
+}
 
 const MyContractsPage: React.FC = () => {
-  const navigate = useNavigate();
-  const [data, setData] = useState<Contract[]>([]);
+  const { user: authUser } = useAuth();
+  const { socket } = useSocket();
+  const [data, setData] = useState<MyContractOverview | null>(null);
   const [loading, setLoading] = useState(true);
-  const [detailModal, setDetailModal] = useState<Contract | null>(null);
-  const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
-  const [contractExtensionEnabled, setContractExtensionEnabled] = useState<boolean | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [extendModalContract, setExtendModalContract] = useState<Contract | null>(null);
+  const [extendMonths, setExtendMonths] = useState(6);
+  const [extendSubmitting, setExtendSubmitting] = useState(false);
 
-  useEffect(() => {
-    Promise.all([contractsApi.getMy(), authApi.getProfile()])
-      .then(([contractsRes, profileRes]) => {
-        setData(contractsRes.data || []);
-        setProfile(profileRes.data || null);
-      })
-      .catch(() => message.error("Không tải được"))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    const run = async () => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const { data: d } = await contractsApi.getMyContractOverview();
+      setData(d);
+    } catch (firstErr) {
+      /** Backend cũ chưa mount GET /api/my-contract → dùng GET /contracts/my + setting gia hạn */
       try {
-        const res = await dashboardApi.getContractExtensionSetting();
-        const v = res.data?.enable_contract_extension;
-        setContractExtensionEnabled(typeof v === "boolean" ? v : true);
+        const [contractsRes, settingRes] = await Promise.all([
+          contractsApi.getMy(),
+          dashboardApi.getContractExtensionSetting().catch(() => ({ data: { enable_contract_extension: true } })),
+        ]);
+        const contracts = (contractsRes.data as Contract[]) || [];
+        setData({
+          student: null,
+          contracts,
+          activeContract: contracts.find((c) => c.status === "active") || null,
+          extendRequests: [],
+          extensionEnabled:
+            (settingRes.data as { enable_contract_extension?: boolean } | undefined)?.enable_contract_extension !== false,
+        });
+        setErr(null);
       } catch {
-        // Không tải được setting -> tắt theo mặc định để không cho phép gia hạn trái policy.
-        setContractExtensionEnabled(false);
+        setErr(errMsg(firstErr));
+        setData(null);
       }
-    };
-    void run();
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const activeCount = data.filter((c) => c.status === "active").length;
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  if (loading) return <Spin size="large" style={{ display: "block", margin: "40px auto" }} />;
+  useEffect(() => {
+    if (!socket || !authUser) return;
+    const uid = String((authUser as { _id?: string })._id || (authUser as { id?: string }).id || "");
+    const onExt = (payload: { userId?: string }) => {
+      if (payload.userId === uid) void load();
+    };
+    socket.on("contract:extended", onExt);
+    return () => {
+      socket.off("contract:extended", onExt);
+    };
+  }, [socket, authUser, load]);
 
-  const columns = [
-    { title: "Số HĐ", dataIndex: "contractNumber", key: "contractNumber", width: 140, render: (v: string) => <strong>{v || "-"}</strong> },
-    { title: "Phòng", dataIndex: ["room", "roomNumber"], key: "room", width: 80 },
-    { title: "Khu", dataIndex: ["room", "area", "name"], key: "area", width: 90 },
-    { title: "Từ ngày", dataIndex: "startDate", key: "startDate", width: 100, render: (d: string) => new Date(d).toLocaleDateString("vi-VN") },
-    { title: "Đến ngày", dataIndex: "endDate", key: "endDate", width: 100, render: (d: string) => new Date(d).toLocaleDateString("vi-VN") },
-    { title: "Trạng thái", dataIndex: "status", key: "status", width: 120, render: (s: string) => <Tag color={statusMap[s]?.color}>{statusMap[s]?.text || s}</Tag> },
-    {
-      title: "Hành động",
-      key: "action",
-      width: 180,
-      render: (_: unknown, r: Contract) => (
-        <>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
-          {r.status === "pending_payment" && !r.signedAt && (
-            <Button
-              type="link"
-              size="small"
-              onClick={async () => {
-                try {
-                  await contractsApi.sign(r._id);
-                  message.success("Đã ký xác nhận. Chờ admin xác nhận.");
-                  const res = await contractsApi.getMy();
-                  setData(res.data || []);
-                } catch (err: unknown) {
-                  message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
-                }
-              }}
-            >
-              Ký xác nhận
-            </Button>
-          )}
-          {r.status === "active" && contractExtensionEnabled === true && (
-            <Button type="link" size="small" icon={<ReloadOutlined />} onClick={() => navigate(`/student/contract-renewal/${r._id}`)}>Gia hạn</Button>
-          )}
-        </>
-      ),
-    },
-  ];
+  const primary = data?.activeContract || data?.contracts?.[0] || null;
+  const student =
+    data?.student ||
+    (authUser
+      ? {
+          fullName: authUser.fullName,
+          email: authUser.email,
+          phone: authUser.phone,
+          studentId: authUser.studentId,
+          gender: authUser.gender,
+          citizenId: authUser.citizenId,
+          dateOfBirth: authUser.dateOfBirth ?? undefined,
+          avatar: (authUser as { avatar?: string }).avatar,
+        }
+      : null);
 
-  const studentName = String(profile?.fullName || "-");
-  const studentGender = String(profile?.gender || "-");
-  const studentId = String(profile?.studentId || "-");
-  const citizenId = String(profile?.citizenId || "-");
-  const dateOfBirth = profile?.dateOfBirth ? new Date(String(profile.dateOfBirth)).toLocaleDateString("vi-VN") : "-";
-  const ethnicity = "-";
-  const lessorAddress = "................................................................................................";
-  const lessorPhone = ".............................................................................................";
+  const countdown = useMemo(() => {
+    if (!primary || primary.status !== "active") return null;
+    const d = daysRemaining(primary.endDate);
+    if (d < 0) return { text: "Đã quá hạn kết thúc", warn: true };
+    if (d <= 30) return { text: `Còn ${d} ngày đến hạn hợp đồng`, warn: true };
+    return { text: `Còn ${d} ngày đến ngày kết thúc (${new Date(primary.endDate).toLocaleDateString("vi-VN")})`, warn: false };
+  }, [primary]);
+
+  const submitExtend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extendModalContract) return;
+    setExtendSubmitting(true);
+    try {
+      await contractsApi.requestExtend(extendModalContract._id, extendMonths);
+      setExtendModalContract(null);
+      await load();
+    } catch (e2) {
+      setErr(errMsg(e2));
+    } finally {
+      setExtendSubmitting(false);
+    }
+  };
+
+  const signContract = async (c: Contract) => {
+    try {
+      await contractsApi.sign(c._id);
+      await load();
+    } catch (e2) {
+      setErr(errMsg(e2));
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="p-5 text-center">
+        <div className="spinner-border text-primary" role="status" />
+      </div>
+    );
+  }
 
   return (
-    <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}><FileTextOutlined /> Hợp đồng của tôi</h2>
-        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Xem hợp đồng thuê phòng và gia hạn khi cần</p>
-      </div>
+    <div className="container pb-5" style={{ maxWidth: 960 }}>
+      <h4 className="mb-1">Hợp đồng của tôi</h4>
+      <p className="text-muted small mb-4">Xem thông tin KTX, thời hạn và gửi yêu cầu gia hạn (admin duyệt).</p>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12}>
-          <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
-            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Đang hiệu lực</span>} value={activeCount} suffix="hợp đồng" valueStyle={{ color: "#fff", fontSize: 20 }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12}>
-          <Card>
-            <Statistic title="Tổng hợp đồng" value={data.length} suffix="hợp đồng" />
-          </Card>
-        </Col>
-      </Row>
+      {err && (
+        <div className="alert alert-danger py-2" role="alert">
+          {err}
+        </div>
+      )}
 
-      <Card style={{ borderRadius: 12 }}>
-        {data.length === 0 ? (
-          <Empty description="Chưa có hợp đồng nào" />
-        ) : (
-          <Table
-            columns={columns}
-            dataSource={data}
-            rowKey="_id"
-            pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hợp đồng/năm` }}
-            size="middle"
-          />
-        )}
-      </Card>
+      {!primary && (
+        <div className="alert alert-info">Bạn chưa có hợp đồng nào trên hệ thống.</div>
+      )}
 
-      <Modal
-        title={`Chi tiết HĐ ${detailModal?.contractNumber || ""}`}
-        open={!!detailModal}
-        onCancel={() => setDetailModal(null)}
-        width={900}
-        footer={
-          <>
-            <Button onClick={() => setDetailModal(null)}>Đóng</Button>
-            {detailModal?.status === "pending_payment" && !detailModal?.signedAt && (
-              <Button
-                type="primary"
-                onClick={async () => {
-                  try {
-                    await contractsApi.sign(detailModal._id);
-                    message.success("Đã ký xác nhận. Chờ admin xác nhận.");
-                    const res = await contractsApi.getMy();
-                    setData(res.data || []);
-                    setDetailModal((prev) => (prev ? { ...prev, signedAt: new Date().toISOString() } : prev));
-                  } catch (err: unknown) {
-                    message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
-                  }
-                }}
-              >
-                Ký xác nhận hợp đồng
-              </Button>
-            )}
-            {detailModal?.status === "active" && contractExtensionEnabled === true && (
-              <Button
-                type="primary"
-                icon={<ReloadOutlined />}
-                onClick={() => {
-                  setDetailModal(null);
-                  navigate(`/student/contract-renewal/${detailModal._id}`);
-                }}
-                style={{ marginLeft: 8 }}
-              >
-                Gia hạn
-              </Button>
-            )}
-          </>
-        }
-      >
-        {detailModal && (
-          <div style={{ maxHeight: "70vh", overflowY: "auto", lineHeight: 1.8, paddingRight: 6 }}>
-            <h3 style={{ textAlign: "center", marginBottom: 4 }}>HỢP ĐỒNG THUÊ CHỖ Ở NỘI TRÚ</h3>
-            <p style={{ marginBottom: 12, textAlign: "center" }}>
-              <strong>Số hợp đồng:</strong> {detailModal.contractNumber || "-"}
-            </p>
+      {primary && (
+        <>
+          {countdown && (
+            <div className={`alert ${countdown.warn ? "alert-warning" : "alert-light border"} small mb-3`}>{countdown.text}</div>
+          )}
 
-            <p><strong>BÊN CHO THUÊ (BÊN A):</strong> KÝ TÚC XÁ TRƯỜNG ĐẠI HỌC (ĐH)</p>
-            <p><strong>Địa chỉ:</strong> {lessorAddress}</p>
-            <p><strong>Điện thoại:</strong> {lessorPhone}</p>
-
-            <p style={{ marginTop: 10 }}><strong>BÊN THUÊ (BÊN B):</strong></p>
-            <p><strong>Họ và tên:</strong> {studentName} &nbsp;&nbsp;&nbsp; <strong>Nam/Nữ:</strong> {studentGender}</p>
-            <p><strong>Mã SV:</strong> {studentId} &nbsp;&nbsp;&nbsp; <strong>CCCD:</strong> {citizenId}</p>
-            <p><strong>Ngày sinh:</strong> {dateOfBirth} &nbsp;&nbsp;&nbsp; <strong>Dân tộc:</strong> {ethnicity}</p>
-
-            <p style={{ marginTop: 10 }}><strong>ĐIỀU 1: NỘI DUNG THUÊ</strong></p>
-            <p>
-              Bên A đồng ý cho Bên B thuê 01 chỗ ở nội trú tại: Phòng{" "}
-              <strong>{typeof detailModal.room === "object" ? detailModal.room?.roomNumber : "-"}</strong>, Tầng{" "}
-              <strong>{typeof detailModal.room === "object" ? detailModal.room?.floor || "-" : "-"}</strong>, Nhà{" "}
-              <strong>
-                {typeof detailModal.room === "object" && detailModal.room?.area && typeof detailModal.room.area === "object"
-                  ? detailModal.room.area.name
-                  : "-"}
-              </strong>{" "}
-              của KTX Trường ĐH.
-            </p>
-            <p>Bên B được sử dụng trang thiết bị tại phòng theo nội quy của Trường ĐH.</p>
-
-            <p style={{ marginTop: 10 }}><strong>ĐIỀU 2: CHI PHÍ VÀ THANH TOÁN</strong></p>
-            <p>
-              Giá thuê: <strong>{typeof detailModal.room === "object" ? `${Number(detailModal.room?.price || 0).toLocaleString("vi-VN")} VNĐ/tháng` : "-"}</strong>.{" "}
-              Tổng cộng: <strong>{typeof detailModal.room === "object" ? `${(Number(detailModal.room?.price || 0) * 12).toLocaleString("vi-VN")} VNĐ` : "-"}</strong>.
-            </p>
-            <p>Tiền thế chấp tài sản: <strong>100.000 VNĐ/sinh viên</strong>.</p>
-            <p>
-              Thời hạn thuê: Từ ngày <strong>{new Date(detailModal.startDate).toLocaleDateString("vi-VN")}</strong> đến ngày{" "}
-              <strong>{new Date(detailModal.endDate).toLocaleDateString("vi-VN")}</strong>.
-            </p>
-            <p>Phương thức thanh toán: Thanh toán trực tuyến qua tài khoản của Trường ĐH tại thời điểm nhận phòng.</p>
-            <p>Tiền điện, nước: Thanh toán hàng tháng theo chỉ số công tơ và đơn giá quy định.</p>
-
-            <p style={{ marginTop: 10 }}><strong>ĐIỀU 3: TRÁCH NHIỆM CỦA SINH VIÊN</strong></p>
-            <p>Chấp hành nghiêm chỉnh pháp luật, nội quy KTX và quy định về PCCC.</p>
-            <p>Ở đúng vị trí được sắp xếp; không tự ý chuyển nhượng chỗ ở cho người khác.</p>
-            <p>Giữ gìn vệ sinh, bảo quản tài sản công. Bồi thường nếu gây hư hỏng, mất mát.</p>
-            <p>Thanh toán đầy đủ các khoản phí dịch vụ (điện, nước, gửi xe, wifi...) đúng hạn.</p>
-            <p>Bàn giao phòng và chìa khóa ngay khi hết hạn hợp đồng hoặc nghỉ hè/Tết.</p>
-
-            <p style={{ marginTop: 10 }}><strong>ĐIỀU 4: CHẤM DỨT HỢP ĐỒNG</strong></p>
-            <p>
-              Hợp đồng chấm dứt khi: Hết thời hạn; SV tự nguyện xin ra; SV tốt nghiệp/thôi học; hoặc SV vi phạm kỷ luật bị buộc ra khỏi KTX.
-            </p>
-            <p>(Lưu ý: Trường ĐH không hoàn trả phí nội trú nếu SV vi phạm kỷ luật hoặc chấm dứt hợp đồng sau 01 tháng).</p>
-
-            <p style={{ marginTop: 10 }}><strong>ĐIỀU 5: ĐIỀU KHOẢN CHUNG</strong></p>
-            <p>
-              Mọi hư hỏng tài sản hoặc nợ phí sẽ được trừ vào tiền thế chấp. Sau khi hoàn tất thủ tục trả phòng, Trường ĐH sẽ hoàn trả lại tiền thế chấp cho sinh viên.
-            </p>
-
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 24 }}>
-              <div style={{ textAlign: "center", width: "48%" }}>
-                <strong>ĐẠI DIỆN BÊN B</strong>
-                <div>(Ký, ghi rõ họ tên)</div>
-                <div style={{ marginTop: 16, minHeight: 24 }}>
-                  {detailModal.signedAt ? `${studentName} - Đã ký ngày ${new Date(detailModal.signedAt).toLocaleString("vi-VN")}` : "Chưa ký"}
-                </div>
-              </div>
-              <div style={{ textAlign: "center", width: "48%" }}>
-                <strong>ĐẠI DIỆN BÊN A</strong>
-                <div>(Ký, ghi rõ họ tên)</div>
-                <div style={{ marginTop: 16, minHeight: 24 }}>
-                  {detailModal.status === "active" ? "Đã ký - Hợp đồng có hiệu lực" : "Chờ admin xác nhận"}
+          <div className="row g-3 mb-4">
+            <div className="col-md-4">
+              <div className="card h-100 shadow-sm">
+                <div className="card-header bg-white fw-semibold">Thông tin sinh viên</div>
+                <div className="card-body text-center">
+                  {avatarSrc(student) ? (
+                    <img src={avatarSrc(student) || ""} alt="" className="rounded-circle mb-2" width={88} height={88} style={{ objectFit: "cover" }} />
+                  ) : (
+                    <div
+                      className="rounded-circle bg-primary-subtle text-primary mx-auto mb-2 d-flex align-items-center justify-content-center fw-bold"
+                      style={{ width: 88, height: 88, fontSize: "1.5rem" }}
+                    >
+                      {(student?.fullName || "?").charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <h6 className="mb-1">{student?.fullName || "—"}</h6>
+                  <p className="small text-muted mb-0">Mã SV: {student?.studentId || "—"}</p>
+                  <p className="small text-muted mb-0">{student?.email || "—"}</p>
+                  <p className="small text-muted mb-0">SĐT: {student?.phone || "—"}</p>
                 </div>
               </div>
             </div>
 
-            <p style={{ marginTop: 16 }}>
-              <strong>Trạng thái hiện tại:</strong>{" "}
-              <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag>
-            </p>
-            {detailModal.status === "pending_payment" && (
-              <p style={{ color: "#ad6800" }}>
-                <strong>Hướng dẫn:</strong>{" "}
-                {detailModal.signedAt
-                  ? "Bạn đã ký xác nhận, vui lòng chờ admin xác nhận để trở thành thành viên KTX."
-                  : "Vui lòng bấm 'Ký xác nhận hợp đồng' để admin trở thành thành viên của ktx."}
-              </p>
-            )}
+            <div className="col-md-4">
+              <div className="card h-100 shadow-sm">
+                <div className="card-header bg-white fw-semibold">Thông tin phòng</div>
+                <div className="card-body small">
+                  <p className="mb-1">
+                    <strong>Phòng:</strong> {(primary.room as Room)?.roomNumber || "—"}
+                  </p>
+                  <p className="mb-1">
+                    <strong>Khu:</strong>{" "}
+                    {typeof (primary.room as Room)?.area === "object" && (primary.room as Room).area
+                      ? String(((primary.room as Room).area as { name?: string }).name)
+                      : "—"}
+                  </p>
+                  <p className="mb-0">
+                    <strong>Sức chứa / đang ở:</strong> {(primary.room as Room)?.capacity ?? "—"} /{" "}
+                    {(primary.room as Room)?.currentOccupancy ?? "—"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="col-md-4">
+              <div className="card h-100 shadow-sm border-primary border-opacity-25">
+                <div className="card-header bg-primary text-white fw-semibold">Hợp đồng hiện tại</div>
+                <div className="card-body small">
+                  <p className="mb-2">
+                    <span className={`badge ${statusBadge(primary.status).cls}`}>{statusBadge(primary.status).label}</span>
+                  </p>
+                  <p className="mb-1">
+                    <strong>Số HĐ:</strong> {primary.contractNumber || "—"}
+                  </p>
+                  <p className="mb-1">
+                    <strong>Bắt đầu:</strong> {new Date(primary.startDate).toLocaleDateString("vi-VN")}
+                  </p>
+                  <p className="mb-1">
+                    <strong>Kết thúc:</strong> {new Date(primary.endDate).toLocaleDateString("vi-VN")}
+                  </p>
+                  <p className="mb-1">
+                    <strong>Thời hạn (~tháng):</strong> {monthsBetween(primary.startDate, primary.endDate)}
+                  </p>
+                  <p className="mb-1">
+                    <strong>Giá thuê / tháng:</strong> {monthlyRentDisplay(primary)}
+                  </p>
+                  <p className="mb-3">
+                    <strong>Tiền cọc:</strong> {depositDisplay(primary)}
+                  </p>
+                  {primary.status === "pending_payment" && !primary.signedAt && (
+                    <button type="button" className="btn btn-warning btn-sm w-100" onClick={() => void signContract(primary)}>
+                      Ký xác nhận (chờ BQL xác nhận thanh toán)
+                    </button>
+                  )}
+                  {primary.status === "active" && Boolean(data?.extensionEnabled) && (
+                    <button type="button" className="btn btn-outline-primary btn-sm w-100" onClick={() => setExtendModalContract(primary)}>
+                      Yêu cầu gia hạn
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
-        )}
-      </Modal>
+
+          {data && data.contracts.length > 1 && (
+            <div className="card shadow-sm mb-4">
+              <div className="card-header bg-white fw-semibold">Lịch sử hợp đồng</div>
+              <div className="table-responsive">
+                <table className="table table-sm table-striped mb-0 align-middle">
+                  <thead className="table-light">
+                    <tr>
+                      <th>Số HĐ</th>
+                      <th>Phòng</th>
+                      <th>Từ</th>
+                      <th>Đến</th>
+                      <th>Trạng thái</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data!.contracts.map((c) => {
+                      const b = statusBadge(c.status);
+                      return (
+                        <tr key={c._id}>
+                          <td>{c.contractNumber}</td>
+                          <td>{(c.room as Room)?.roomNumber}</td>
+                          <td>{new Date(c.startDate).toLocaleDateString("vi-VN")}</td>
+                          <td>{new Date(c.endDate).toLocaleDateString("vi-VN")}</td>
+                          <td>
+                            <span className={`badge ${b.cls}`}>{b.label}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          <div className="card shadow-sm">
+            <div className="card-header bg-white fw-semibold">Lịch sử gia hạn (yêu cầu)</div>
+            <div className="table-responsive">
+              <table className="table table-sm mb-0 align-middle">
+                <thead className="table-light">
+                  <tr>
+                    <th>Thời gian</th>
+                    <th>Hợp đồng</th>
+                    <th>Số tháng</th>
+                    <th>Trạng thái</th>
+                    <th>Ghi chú / kết quả</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data?.extendRequests || []).map((r) => (
+                    <ExtendRow key={r._id} r={r} />
+                  ))}
+                  {(!data?.extendRequests || data.extendRequests.length === 0) && (
+                    <tr>
+                      <td colSpan={5} className="text-center text-muted py-4">
+                        Chưa có yêu cầu gia hạn.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {extendModalContract && (
+        <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.45)" }}>
+          <div className="modal-dialog">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Yêu cầu gia hạn</h5>
+                <button type="button" className="btn-close" aria-label="Đóng" onClick={() => setExtendModalContract(null)} />
+              </div>
+              <form onSubmit={submitExtend}>
+                <div className="modal-body">
+                  <p className="small text-muted">
+                    Gửi yêu cầu gia hạn thêm số tháng. Trạng thái sẽ là <strong>chờ duyệt</strong> cho đến khi BQL xử lý. Chỉ áp dụng khi hợp đồng đang{" "}
+                    <strong>active</strong>.
+                  </p>
+                  <label className="form-label">Số tháng gia hạn</label>
+                  <select className="form-select" value={extendMonths} onChange={(e) => setExtendMonths(Number(e.target.value))}>
+                    {[1, 2, 3, 4, 5, 6, 9, 12, 18, 24, 36].map((m) => (
+                      <option key={m} value={m}>
+                        {m} tháng
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-secondary" onClick={() => setExtendModalContract(null)}>
+                    Đóng
+                  </button>
+                  <button type="submit" className="btn btn-primary" disabled={extendSubmitting}>
+                    {extendSubmitting ? "Đang gửi…" : "Gửi yêu cầu"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+function ExtendRow({ r }: { r: ContractExtendRequest }) {
+  const cn = typeof r.contract === "object" ? r.contract.contractNumber || r.contract._id : r.contract;
+  let stLabel: string = r.status;
+  let stCls = "text-bg-secondary";
+  if (r.status === "pending") {
+    stLabel = "Chờ duyệt";
+    stCls = "text-bg-warning text-dark";
+  } else if (r.status === "approved") {
+    stLabel = "Đã duyệt";
+    stCls = "text-bg-success";
+  } else if (r.status === "rejected") {
+    stLabel = "Từ chối";
+    stCls = "text-bg-danger";
+  }
+  const note =
+    r.status === "approved" && r.appliedEndDate
+      ? `Ngày kết thúc mới: ${new Date(r.appliedEndDate).toLocaleDateString("vi-VN")}`
+      : r.note || "—";
+  return (
+    <tr>
+      <td className="small">{r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN") : "—"}</td>
+      <td>{cn}</td>
+      <td>{r.months}</td>
+      <td>
+        <span className={`badge ${stCls}`}>{stLabel}</span>
+      </td>
+      <td className="small">{note}</td>
+    </tr>
+  );
+}
 
 export default MyContractsPage;
