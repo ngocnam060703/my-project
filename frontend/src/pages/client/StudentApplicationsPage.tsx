@@ -5,8 +5,8 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "bootstrap/dist/css/bootstrap.min.css";
-import { isAxiosError } from "axios";
 import { applicationsApi, areasApi, contractsApi, registrationPeriodsApi } from "../../api";
+import { apiErrorMessage } from "../../utils/apiErrorMessage";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
 import type { Area, Contract, DormApplication, User } from "../../types";
@@ -32,17 +32,6 @@ function roomDisplay(a: DormApplication): string {
     r.area && typeof r.area === "object" && "name" in r.area ? String((r.area as { name?: string }).name || "") : "";
   const num = r.roomNumber || "";
   return areaName ? `${num} — ${areaName}` : num || "—";
-}
-
-function errText(e: unknown): string {
-  if (isAxiosError(e)) {
-    const st = e.response?.status;
-    if (st === 401) return "Phiên đăng nhập hết hạn — vui lòng đăng nhập lại.";
-    if (st === 404) return "API không tồn tại (404). Hãy khởi động lại backend bản mới nhất.";
-    const m = (e.response?.data as { message?: string } | undefined)?.message;
-    if (m) return m;
-  }
-  return "Có lỗi xảy ra";
 }
 
 const StudentApplicationsPage: React.FC = () => {
@@ -99,7 +88,7 @@ const StudentApplicationsPage: React.FC = () => {
       setActivePeriod(periodRes.data ?? null);
       setContracts(Array.isArray(ctrRes.data) ? ctrRes.data : []);
     } catch (e) {
-      setAlert({ type: "danger", text: errText(e) });
+      setAlert({ type: "danger", text: apiErrorMessage(e, "Có lỗi xảy ra") });
     } finally {
       setLoading(false);
     }
@@ -132,7 +121,7 @@ const StudentApplicationsPage: React.FC = () => {
       const { data } = await applicationsApi.getById(id);
       setDetail(data);
     } catch (e) {
-      setAlert({ type: "danger", text: errText(e) });
+      setAlert({ type: "danger", text: apiErrorMessage(e, "Có lỗi xảy ra") });
     } finally {
       setDetailLoading(false);
     }
@@ -163,7 +152,7 @@ const StudentApplicationsPage: React.FC = () => {
       setStartDate("");
       await loadAll();
     } catch (e) {
-      setAlert({ type: "danger", text: errText(e) });
+      setAlert({ type: "danger", text: apiErrorMessage(e, "Có lỗi xảy ra") });
     } finally {
       setSubmitting(false);
     }
@@ -178,7 +167,7 @@ const StudentApplicationsPage: React.FC = () => {
       if (detail?._id === id) setDetail(null);
       await loadAll();
     } catch (e) {
-      setAlert({ type: "danger", text: errText(e) });
+      setAlert({ type: "danger", text: apiErrorMessage(e, "Có lỗi xảy ra") });
     }
   };
 

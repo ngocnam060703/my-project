@@ -47,7 +47,8 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 /** Khai báo rõ DELETE (tránh môi trường/proxy chỉ cho GET/POST). */
-app.use(cors({ methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] }));
+/** origin: true — cho phép mọi origin dev (3000, 3001, …) gọi API khi không dùng proxy */
+app.use(cors({ origin: true, methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] }));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (req, res) => {

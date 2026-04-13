@@ -3,6 +3,7 @@ const { auth, requireRole } = require("../middleware/auth");
 const validateRequest = require("../middleware/validateRequest");
 const studentController = require("../controllers/studentController");
 const maintenanceReportController = require("../controllers/maintenanceReportController");
+const applicationController = require("../controllers/applicationController");
 const {
   studentIdParam,
   createStudentRules,
@@ -19,6 +20,9 @@ router.patch("/me", requireRole("user"), studentSelfUpdateRules, validateRequest
 
 /** Dự phòng: danh sách khai báo hư hỏng (cùng handler) — tránh 404 khi proxy/deploy khác bản index.js */
 router.get("/me/maintenance-reports", requireRole("user"), maintenanceReportController.listMine);
+
+/** Dự phòng: đơn KTX của tôi — cùng listMine */
+router.get("/me/applications", requireRole("user"), applicationController.listMine);
 
 router.get("/", requireRole("admin", "manager"), studentController.list);
 router.post("/", requireRole("admin", "manager"), createStudentRules, validateRequest, studentController.create);

@@ -214,11 +214,27 @@ export const registrationsApi = {
   reject: (id: string, reason?: string) => client.put(`/registrations/${id}/reject`, { reason }),
 };
 
+/** Thử lần lượt các đường dẫn “đơn của tôi” (alias / router khác nhau). */
+async function getMyApplicationsList(): Promise<AxiosResponse<DormApplication[]>> {
+  const paths = ["/my-applications", "/applications/my", "/students/me/applications"];
+  let last: unknown;
+  for (const path of paths) {
+    try {
+      return await client.get<DormApplication[]>(path);
+    } catch (e: unknown) {
+      last = e;
+      if (isAxiosError(e) && e.response?.status === 404) continue;
+      throw e;
+    }
+  }
+  throw last;
+}
+
 /** Xét duyệt đơn đăng ký KTX (phân phòng khi duyệt) — REST /applications + alias /my-applications */
 export const applicationsApi = {
   getMine: () => client.get<DormApplication[]>("/applications/my"),
-  /** Alias cùng dữ liệu với getMine — GET /api/my-applications */
-  getMyApplications: () => client.get<DormApplication[]>("/my-applications"),
+  /** GET /my-applications → /applications/my → /students/me/applications */
+  getMyApplications: () => getMyApplicationsList(),
   create: (data: {
     semester: string;
     schoolYear: string;
