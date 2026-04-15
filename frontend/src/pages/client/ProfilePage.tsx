@@ -3,6 +3,7 @@ import {
   Card,
   Form,
   Input,
+  DatePicker,
   Button,
   message,
   Typography,
@@ -186,13 +187,27 @@ const ProfilePage: React.FC = () => {
       }
 
       form.setFieldsValue({
+        fullName: activeProfile.fullName,
+        studentId: activeProfile.studentId,
+        className: activeProfile.className,
+        major: activeProfile.major,
+        gender: activeProfile.gender,
+        citizenId: activeProfile.citizenId,
+        dateOfBirth: activeProfile.dateOfBirth ? dayjs(activeProfile.dateOfBirth) : null,
         phone: activeProfile.phone,
         address: activeProfile.address,
+        faculty: activeProfile.faculty,
+        enrollmentDate: activeProfile.enrollmentDate ? dayjs(activeProfile.enrollmentDate) : null,
+        homeroomTeacher: activeProfile.homeroomTeacher,
         avatar: activeProfile.avatar,
         addressNative: activeProfile.addressNative,
         addressPermanent: activeProfile.addressPermanent,
         addressTemporary: activeProfile.addressTemporary,
         addressAbsent: activeProfile.addressAbsent,
+        familyFatherName: activeProfile.familyFatherName,
+        familyFatherPhone: activeProfile.familyFatherPhone,
+        familyMotherName: activeProfile.familyMotherName,
+        familyMotherPhone: activeProfile.familyMotherPhone,
         familyEmergencyPhone: activeProfile.familyEmergencyPhone,
       });
     } catch {
@@ -209,14 +224,34 @@ const ProfilePage: React.FC = () => {
   const onFinishStudent = async (v: Record<string, unknown>) => {
     setSaving(true);
     try {
+      const normalizeFormDate = (value: unknown): string | null | undefined => {
+        if (value === null) return null;
+        if (value === undefined || value === "") return undefined;
+        const d = dayjs(value as dayjs.ConfigType);
+        return d.isValid() ? d.format("YYYY-MM-DD") : undefined;
+      };
       const res = await studentsApi.updateMe({
+        fullName: v.fullName as string,
         phone: v.phone as string,
+        studentId: v.studentId as string,
+        className: v.className as string,
+        major: v.major as string,
+        gender: v.gender as string,
+        citizenId: v.citizenId as string,
+        dateOfBirth: normalizeFormDate(v.dateOfBirth),
         address: v.address as string,
+        faculty: v.faculty as string,
+        enrollmentDate: normalizeFormDate(v.enrollmentDate),
+        homeroomTeacher: v.homeroomTeacher as string,
         avatar: v.avatar as string,
         addressNative: v.addressNative as string | undefined,
         addressPermanent: v.addressPermanent as string | undefined,
         addressTemporary: v.addressTemporary as string | undefined,
         addressAbsent: v.addressAbsent as string | undefined,
+        familyFatherName: v.familyFatherName as string | undefined,
+        familyFatherPhone: v.familyFatherPhone as string | undefined,
+        familyMotherName: v.familyMotherName as string | undefined,
+        familyMotherPhone: v.familyMotherPhone as string | undefined,
         familyEmergencyPhone: v.familyEmergencyPhone as string | undefined,
       });
       const detail = res.data as StudentProfileResponse;
@@ -265,13 +300,27 @@ const ProfilePage: React.FC = () => {
   const openStudentEdit = () => {
     if (!profile) return;
     form.setFieldsValue({
+      fullName: profile.fullName,
+      studentId: profile.studentId,
+      className: profile.className,
+      major: profile.major,
+      gender: profile.gender,
+      citizenId: profile.citizenId,
+      dateOfBirth: profile.dateOfBirth ? dayjs(profile.dateOfBirth) : null,
       phone: profile.phone,
       address: profile.address,
+      faculty: profile.faculty,
+      enrollmentDate: profile.enrollmentDate ? dayjs(profile.enrollmentDate) : null,
+      homeroomTeacher: profile.homeroomTeacher,
       avatar: profile.avatar,
       addressNative: profile.addressNative,
       addressPermanent: profile.addressPermanent,
       addressTemporary: profile.addressTemporary,
       addressAbsent: profile.addressAbsent,
+      familyFatherName: profile.familyFatherName,
+      familyFatherPhone: profile.familyFatherPhone,
+      familyMotherName: profile.familyMotherName,
+      familyMotherPhone: profile.familyMotherPhone,
       familyEmergencyPhone: profile.familyEmergencyPhone,
     });
     setEditingProfile(true);
@@ -382,9 +431,70 @@ const ProfilePage: React.FC = () => {
           type="info"
           showIcon
           style={{ marginBottom: 16, borderRadius: 10 }}
-          message="Quyền chỉnh sửa của sinh viên"
-          description="Bạn có thể cập nhật SĐT, địa chỉ liên hệ và avatar. Thông tin học tập/định danh do Admin quản lý."
+          message="Cập nhật hồ sơ sinh viên đầy đủ"
+          description="Bạn có thể tự cập nhật đầy đủ thông tin cá nhân, học tập, gia đình và địa chỉ trên biểu mẫu này."
         />
+        <FormSectionTitle>Thông tin cơ bản</FormSectionTitle>
+        <Row gutter={[20, 0]}>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Họ tên" name="fullName" rules={[{ required: true, message: "Nhập họ tên" }]}>
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Email đăng nhập">
+              <Input size="large" value={profile.email} disabled />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Mã sinh viên" name="studentId" rules={[{ required: true, message: "Nhập mã sinh viên" }]}>
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Lớp" name="className">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Chuyên ngành" name="major">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Giới tính" name="gender">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="citizenId" label="CCCD/CMND" rules={[{ pattern: /^\d{9,12}$/, message: "CCCD phải gồm 9-12 chữ số" }]}>
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="dateOfBirth" label="Ngày sinh">
+              <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <FormSectionTitle>Thông tin học tập</FormSectionTitle>
+        <Row gutter={[20, 0]}>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Khoa" name="faculty">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="enrollmentDate" label="Ngày nhập học">
+              <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày nhập học" />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Giáo viên chủ nhiệm" name="homeroomTeacher">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+        </Row>
         <FormSectionTitle>Avatar</FormSectionTitle>
         <Form.Item
           name="avatar"
@@ -423,11 +533,6 @@ const ProfilePage: React.FC = () => {
               <Input size="large" placeholder="0387079343" allowClear />
             </Form.Item>
           </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Email đăng nhập">
-              <Input size="large" value={profile.email} disabled />
-            </Form.Item>
-          </Col>
         </Row>
         <FormSectionTitle>Địa chỉ</FormSectionTitle>
         <Form.Item name="address" label="Địa chỉ liên hệ">
@@ -446,6 +551,28 @@ const ProfilePage: React.FC = () => {
           <Input.TextArea rows={2} showCount maxLength={500} />
         </Form.Item>
         <FormSectionTitle>Liên hệ khẩn</FormSectionTitle>
+        <Row gutter={[20, 0]}>
+          <Col xs={24} lg={12}>
+            <Form.Item name="familyFatherName" label="Họ tên bố">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="familyFatherPhone" label="SĐT bố">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="familyMotherName" label="Họ tên mẹ">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="familyMotherPhone" label="SĐT mẹ">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+        </Row>
         <Form.Item name="familyEmergencyPhone" label="SĐT gia đình khi khẩn cấp">
           <Input size="large" allowClear />
         </Form.Item>

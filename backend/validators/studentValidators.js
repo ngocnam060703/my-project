@@ -70,5 +70,8 @@ exports.studentSelfUpdateRules = [
       return /^(0|\+84)\d{9,10}$/.test(String(v).trim());
     })
     .withMessage("Số điện thoại không hợp lệ"),
+  body("dateOfBirth").optional({ values: "falsy" }).isISO8601().withMessage("Ngày sinh không hợp lệ"),
+  body("enrollmentDate").optional({ values: "falsy" }).isISO8601().withMessage("Ngày nhập học không hợp lệ"),
+  studentCitizenRule,
   optionalAvatarUrl(),
 ];

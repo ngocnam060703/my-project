@@ -40,7 +40,7 @@ function normalizeDate(input) {
 
 async function buildStudentDetail(studentId) {
   const student = await User.findOne({ _id: studentId, role: "user", ...notDeleted })
-    .select(`-password ${STUDENT_FIELDS.join(" ")}`)
+    .select("-password")
     .lean();
   if (!student) return null;
 
@@ -227,20 +227,34 @@ exports.updateMe = async (req, res) => {
     const current = await User.findOne({ _id: req.user._id, role: "user", ...notDeleted });
     if (!current) return res.status(404).json({ message: "Không tìm thấy hồ sơ sinh viên" });
 
-    // Sinh viên chỉ được sửa thông tin liên hệ + địa chỉ + avatar
+    // Sinh viên được tự cập nhật đầy đủ thông tin hồ sơ cá nhân (trừ quyền/hệ thống)
     const updates = {};
     [
+      "fullName",
       "phone",
+      "studentId",
+      "className",
+      "major",
+      "gender",
+      "citizenId",
       "address",
+      "faculty",
+      "homeroomTeacher",
       "addressNative",
       "addressPermanent",
       "addressTemporary",
       "addressAbsent",
+      "familyFatherName",
+      "familyFatherPhone",
+      "familyMotherName",
+      "familyMotherPhone",
       "avatar",
       "familyEmergencyPhone",
     ].forEach((k) => {
       if (req.body[k] !== undefined) updates[k] = req.body[k];
     });
+    if (req.body.dateOfBirth !== undefined) updates.dateOfBirth = normalizeDate(req.body.dateOfBirth);
+    if (req.body.enrollmentDate !== undefined) updates.enrollmentDate = normalizeDate(req.body.enrollmentDate);
 
     await User.findByIdAndUpdate(current._id, updates, { runValidators: true });
     const detail = await buildStudentDetail(current._id);
