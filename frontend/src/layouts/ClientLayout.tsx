@@ -31,7 +31,7 @@ const menuItems = [
   { key: "/student/rooms", icon: <UnorderedListOutlined />, label: "Danh sách phòng" },
   { key: "/student/dorm-registration", icon: <FileTextOutlined />, label: "Đăng ký nội trú" },
   { key: "/student/my-applications", icon: <FileAddOutlined />, label: "Đơn của tôi (KTX)" },
-  { key: "/student/my-registrations", icon: <HistoryOutlined />, label: "Đăng ký phòng (cũ)" },
+  { key: "/student/my-registrations", icon: <HistoryOutlined />, label: "Chuyển phòng (cũ)" },
   { key: "/student/my-contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
   { key: "/student/my-bills", icon: <DollarOutlined />, label: "Hóa đơn" },
   { key: "/student/my-violations", icon: <ExclamationCircleOutlined />, label: "Vi phạm của tôi" },

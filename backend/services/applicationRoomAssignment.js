@@ -130,6 +130,7 @@ module.exports = {
   findCandidateRooms,
   pickBestRoomForApplication,
   assignRoomWithRetry,
+  tryIncrementRoomOccupancy,
   areaAllowsGender,
   occupancyRatio,
   normalizeGender,

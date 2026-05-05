@@ -13,6 +13,8 @@ const {
   pickBestRoomForApplication,
   assignRoomWithRetry,
   areaAllowsGender,
+  findCandidateRooms,
+  tryIncrementRoomOccupancy,
 } = require("../services/applicationRoomAssignment");
 
 function inferSemesterSchoolYearFromDate(date = new Date()) {
@@ -262,6 +264,43 @@ exports.getSuggestedRoom = async (req, res) => {
   }
 };
 
+exports.getCandidateRooms = async (req, res) => {
+  try {
+    const app = await Application.findById(req.params.id).lean();
+    if (!app) return res.status(404).json({ message: "Không tìm thấy đơn" });
+    if (app.status !== "pending") {
+      return res.status(400).json({ message: "Chỉ chọn phòng cho đơn đang chờ duyệt" });
+    }
+
+    if (req.user.role === "manager" && req.user.managedArea) {
+      if (!app.preferenceArea || String(app.preferenceArea) !== String(req.user.managedArea)) {
+        return res.status(403).json({ message: "Chỉ xem danh sách phòng cho đơn thuộc khu bạn phụ trách." });
+      }
+    }
+
+    const rooms = await findCandidateRooms(
+      { genderNorm: normalizeGender(app.genderSnapshot) || app.genderSnapshot, preferenceAreaId: app.preferenceArea || null },
+      null
+    );
+
+    const managed = req.user.role === "manager" ? req.user.managedArea : null;
+    const filtered = managed ? rooms.filter((r) => String(r.area?._id || r.area) === String(managed)) : rooms;
+
+    res.json({
+      rooms: filtered.map((r) => ({
+        _id: r._id,
+        roomNumber: r.roomNumber,
+        capacity: r.capacity,
+        currentOccupancy: r.currentOccupancy,
+        status: r.status,
+        area: r.area,
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
 exports.statsByDay = async (req, res) => {
   try {
     const days = Math.min(90, Math.max(1, parseInt(req.query.days || "14", 10)));
@@ -284,37 +323,50 @@ exports.statsByDay = async (req, res) => {
 };
 
 exports.approve = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
   try {
-    const app = await Application.findById(req.params.id).session(session);
-    if (!app) {
-      await session.abortTransaction();
-      return res.status(404).json({ message: "Không tìm thấy đơn" });
-    }
-    if (app.status !== "pending") {
-      await session.abortTransaction();
-      return res.status(400).json({ message: "Đơn đã được xử lý, không thể duyệt lại" });
-    }
+    const app = await Application.findById(req.params.id);
+    if (!app) return res.status(404).json({ message: "Không tìm thấy đơn" });
+    if (app.status !== "pending") return res.status(400).json({ message: "Đơn đã được xử lý, không thể duyệt lại" });
     if (req.user.role === "manager" && req.user.managedArea) {
       if (!app.preferenceArea || String(app.preferenceArea) !== String(req.user.managedArea)) {
-        await session.abortTransaction();
-        return res.status(403).json({
-          message: "Ban quản lý khu chỉ duyệt đơn có nguyện vọng đúng khu mình phụ trách.",
-        });
+        return res.status(403).json({ message: "Ban quản lý khu chỉ duyệt đơn có nguyện vọng đúng khu mình phụ trách." });
       }
     }
     if (await userHasActiveResidence(app.user)) {
-      await session.abortTransaction();
       return res.status(400).json({ message: "Sinh viên đã có hợp đồng KTX hiệu lực — không thể duyệt đơn mới" });
     }
 
-    const { error, room } = await assignRoomWithRetry(app, session);
-    if (error === "NO_ROOM" || !room) {
-      await session.abortTransaction();
-      return res.status(400).json({
-        message: "Không còn phòng phù hợp (giới tính / khu / chỗ trống). Vui lòng điều chỉnh khu hoặc sức chứa.",
-      });
+    const requestedRoomId = req.body?.roomId ? String(req.body.roomId) : "";
+    let room = null;
+    if (requestedRoomId) {
+      if (!mongoose.isValidObjectId(requestedRoomId)) return res.status(400).json({ message: "roomId không hợp lệ" });
+      const roomDoc = await Room.findById(requestedRoomId).populate("area", "name genderPolicy isActive isDeleted");
+      if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng đã chọn" });
+      if (roomDoc.status === "maintenance") return res.status(400).json({ message: "Phòng đang bảo trì, không thể xếp" });
+      if (req.user.role === "manager" && req.user.managedArea) {
+        if (String(roomDoc.area?._id || roomDoc.area) !== String(req.user.managedArea)) {
+          return res.status(403).json({ message: "Bạn chỉ được xếp phòng trong khu bạn phụ trách" });
+        }
+      }
+      const genderNorm = normalizeGender(app.genderSnapshot) || app.genderSnapshot;
+      const areaDoc = roomDoc.area && typeof roomDoc.area === "object" ? roomDoc.area : null;
+      if (!areaDoc || areaDoc.isDeleted || areaDoc.isActive === false) {
+        return res.status(400).json({ message: "Khu của phòng không hợp lệ hoặc đã bị khóa" });
+      }
+      if (!areaAllowsGender(areaDoc, genderNorm)) {
+        return res.status(400).json({ message: "Phòng không phù hợp theo giới tính / quy định khu" });
+      }
+      const updated = await tryIncrementRoomOccupancy(roomDoc._id, null);
+      if (!updated) return res.status(400).json({ message: "Phòng đã đầy hoặc không còn trống" });
+      room = updated;
+    } else {
+      const { error, room: autoRoom } = await assignRoomWithRetry(app, null);
+      if (error === "NO_ROOM" || !autoRoom) {
+        return res.status(400).json({
+          message: "Không còn phòng phù hợp (giới tính / khu / chỗ trống). Vui lòng điều chỉnh khu hoặc sức chứa.",
+        });
+      }
+      room = autoRoom;
     }
 
     app.status = "approved";
@@ -322,11 +374,11 @@ exports.approve = async (req, res) => {
     app.reviewedBy = req.user._id;
     app.reviewedAt = new Date();
     app.note = "";
-    await app.save({ session });
+    await app.save();
 
     const startDate = app.startDate ? new Date(app.startDate) : new Date();
-    const contract = await Contract.create(
-      [
+    const c0 = (
+      await Contract.create([
         {
           application: app._id,
           registration: null,
@@ -339,18 +391,15 @@ exports.approve = async (req, res) => {
           signedAt: null,
           createdBy: req.user._id,
         },
-      ],
-      { session }
-    );
-    const c0 = contract[0];
+      ])
+    )[0];
+
     app.linkedContract = c0._id;
     if (!room.roomLeader) {
       room.roomLeader = app.user;
-      await room.save({ session });
+      await room.save();
     }
-    await app.save({ session });
-
-    await session.commitTransaction();
+    await app.save();
 
     const io = getIO();
     io.emit("application:approved", { userId: String(app.user), message: "Đơn đăng ký KTX của bạn đã được duyệt" });
@@ -368,10 +417,7 @@ exports.approve = async (req, res) => {
       .populate("linkedContract");
     res.json({ application: out, contract: c0 });
   } catch (e) {
-    await session.abortTransaction();
     res.status(500).json({ message: e.message });
-  } finally {
-    session.endSession();
   }
 };
 

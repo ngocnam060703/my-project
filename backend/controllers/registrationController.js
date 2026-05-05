@@ -64,7 +64,7 @@ async function notifyAdminsNewRegistration({ registration, roomDoc, student, typ
 exports.getAll = async (req, res) => {
   try {
     const { status, user, room, page = 1, limit = 20 } = req.query;
-    const filter = {};
+    const filter = { registrationType: "transfer" };
     if (status) filter.status = status;
     if (user) filter.user = user;
     if (room) filter.room = room;
@@ -90,7 +90,7 @@ exports.getAll = async (req, res) => {
 
 exports.getMyRegistrations = async (req, res) => {
   try {
-    const registrations = await Registration.find({ user: req.user._id })
+    const registrations = await Registration.find({ user: req.user._id, registrationType: "transfer" })
       .populate({ path: "room", populate: { path: "area", select: "name" } })
       .populate({ path: "fromRoom", populate: { path: "area", select: "name" } })
       .populate({ path: "currentContract", select: "contractNumber status registration", populate: { path: "registration", select: "semester schoolYear" } })
@@ -116,15 +116,14 @@ exports.create = async (req, res) => {
     })
       .populate({ path: "room", select: "roomNumber area", populate: { path: "area", select: "name" } })
       .populate("registration", "semester schoolYear");
-    let roomDoc =
-      registrationType === "dorm"
-        ? await assignRoomForStudent(req.user)
-        : await Room.findById(room).populate("area", "name");
-    if (registrationType === "dorm" && !roomDoc) {
+    if (registrationType === "dorm") {
       return res.status(400).json({
-        message: "Không còn phòng trống phù hợp (giới tính / khu). Vui lòng liên hệ ban quản lý KTX.",
+        message:
+          "Đăng ký ở KTX đã chuyển sang mục Đơn KTX. Bạn không chọn phòng; admin sẽ xếp phòng khi duyệt. Vui lòng gửi đơn tại /applications.",
       });
     }
+
+    const roomDoc = await Room.findById(room).populate("area", "name");
     if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng" });
     if (registrationType === "transfer") {
       if (!activeContract) {

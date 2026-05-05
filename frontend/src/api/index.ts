@@ -252,7 +252,8 @@ export const applicationsApi = {
   /** Sinh viên: hủy đơn chỉ khi pending */
   cancel: (id: string) => client.delete(`/applications/${encodeURIComponent(id)}`),
   getSuggestedRoom: (id: string) => client.get<{ room: Room; rules: string[] }>(`/applications/${id}/suggested-room`),
-  approve: (id: string) => client.patch(`/applications/${id}/approve`),
+  getCandidateRooms: (id: string) => client.get<{ rooms: Room[] }>(`/applications/${id}/candidate-rooms`),
+  approve: (id: string, data?: { roomId?: string }) => client.patch(`/applications/${id}/approve`, data || {}),
   reject: (id: string, note: string) => client.patch(`/applications/${id}/reject`, { note }),
   statsByDay: (params?: { days?: number }) =>
     client.get<{ days: number; series: { date: string; count: number }[] }>("/applications/stats/by-day", { params }),

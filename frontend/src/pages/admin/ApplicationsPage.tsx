@@ -4,9 +4,11 @@
  * Dự án này là React; file Vue mẫu tương đương: `frontend/examples/ApplicationApprovalAdmin.example.vue`.
  */
 import React, { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { applicationsApi } from "../../api";
 import type { DormApplication, Room } from "../../types";
+import RegistrationsPanel from "./RegistrationsPage";
 
 const statusBadge: Record<string, { cls: string; text: string }> = {
   pending: { cls: "text-bg-warning", text: "Chờ duyệt" },
@@ -53,7 +55,17 @@ function roomLabel(app: DormApplication) {
   return areaName ? `${num} (${areaName})` : String(num || "—");
 }
 
+type AdminApplicationsTab = "ktx" | "registrations";
+
 const ApplicationsPage: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: AdminApplicationsTab = searchParams.get("tab") === "registrations" ? "registrations" : "ktx";
+
+  const setTab = (t: AdminApplicationsTab) => {
+    if (t === "ktx") setSearchParams({}, { replace: true });
+    else setSearchParams({ tab: "registrations" }, { replace: true });
+  };
+
   const [rows, setRows] = useState<DormApplication[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -69,6 +81,20 @@ const ApplicationsPage: React.FC = () => {
   const [rejectNote, setRejectNote] = useState("");
   const [suggest, setSuggest] = useState<{ room: Room; rules: string[] } | null>(null);
   const [stats, setStats] = useState<{ date: string; count: number }[]>([]);
+  const [statsPreset, setStatsPreset] = useState<"7d" | "14d" | "month">("14d");
+  const [assignModal, setAssignModal] = useState<{ appId: string; rooms: Room[] } | null>(null);
+  const [assignRoomId, setAssignRoomId] = useState<string>("");
+  const [chosenRoomByAppId, setChosenRoomByAppId] = useState<Record<string, Room | null>>({});
+
+  const statsDays = useCallback((): number => {
+    if (statsPreset === "7d") return 7;
+    if (statsPreset === "14d") return 14;
+    // month: from start of current month to today (cap 90 to match backend validator)
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const diffDays = Math.floor((now.getTime() - start.getTime()) / 86400000) + 1;
+    return Math.max(1, Math.min(90, diffDays));
+  }, [statsPreset]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,16 +115,16 @@ const ApplicationsPage: React.FC = () => {
       setLoading(false);
     }
     try {
-      const statsRes = await applicationsApi.statsByDay({ days: 14 });
+      const statsRes = await applicationsApi.statsByDay({ days: statsDays() });
       setStats(statsRes.data.series || []);
     } catch {
       setStats([]);
     }
-  }, [page, limit, sortOrder, status, search]);
+  }, [page, limit, sortOrder, status, search, statsDays]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (tab === "ktx") load();
+  }, [load, tab]);
 
   const openDetail = async (id: string) => {
     setLoading(true);
@@ -113,16 +139,52 @@ const ApplicationsPage: React.FC = () => {
   };
 
   const onApprove = async (id: string) => {
-    if (!window.confirm("Duyệt đơn và tự động phân phòng theo quy tắc hệ thống?")) return;
+    const chosen = chosenRoomByAppId[id];
+    const msg = chosen
+      ? `Duyệt đơn và xếp vào phòng ${chosen.roomNumber}?`
+      : "Duyệt đơn và tự động phân phòng theo quy tắc hệ thống?";
+    if (!window.confirm(msg)) return;
     setLoading(true);
     try {
-      await applicationsApi.approve(id);
+      await applicationsApi.approve(id, chosen?._id ? { roomId: chosen._id } : undefined);
+      setChosenRoomByAppId((m) => ({ ...m, [id]: null }));
       await load();
     } catch (e: unknown) {
       setErr((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Duyệt thất bại");
     } finally {
       setLoading(false);
     }
+  };
+
+  const openAssign = async (id: string) => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const { data } = await applicationsApi.getCandidateRooms(id);
+      const rooms = (data as { rooms?: Room[] })?.rooms || [];
+      setAssignRoomId("");
+      setAssignModal({ appId: id, rooms });
+    } catch (e: unknown) {
+      setErr(formatApiError(e) || "Không lấy được danh sách phòng");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onChooseRoom = () => {
+    if (!assignModal) return;
+    if (!assignRoomId) {
+      setErr("Vui lòng chọn phòng");
+      return;
+    }
+    const room = assignModal.rooms.find((x) => String(x._id) === String(assignRoomId));
+    if (!room) {
+      setErr("Không tìm thấy phòng đã chọn");
+      return;
+    }
+    setChosenRoomByAppId((m) => ({ ...m, [assignModal.appId]: room }));
+    setAssignModal(null);
+    setAssignRoomId("");
   };
 
   const onRejectSubmit = async () => {
@@ -159,32 +221,32 @@ const ApplicationsPage: React.FC = () => {
 
   return (
     <div className="applications-bootstrap container-fluid px-0">
-      <h4 className="mb-3">Xét duyệt đơn đăng ký KTX</h4>
-      <p className="text-muted small mb-4">
-        Phân phòng chỉ thực hiện khi duyệt: cùng giới tính theo khu, còn chỗ, ưu tiên khu nguyện vọng và phòng gần đầy.
-      </p>
+      <h4 className="mb-2">Xét duyệt đơn đăng ký KTX & nội trú</h4>
+      <ul className="nav nav-tabs mb-3">
+        <li className="nav-item">
+          <button
+            type="button"
+            className={`nav-link ${tab === "ktx" ? "active" : ""}`}
+            onClick={() => setTab("ktx")}
+          >
+            Đơn KTX (duyệt + phân phòng)
+          </button>
+        </li>
+        <li className="nav-item">
+          <button
+            type="button"
+            className={`nav-link ${tab === "registrations" ? "active" : ""}`}
+            onClick={() => setTab("registrations")}
+          >
+            Chuyển phòng (chọn phòng)
+          </button>
+        </li>
+      </ul>
 
-      {err && (
-        <div className="alert alert-danger alert-dismissible fade show" role="alert">
-          {err}
-          <button type="button" className="btn-close" aria-label="Close" onClick={() => setErr(null)} />
-        </div>
-      )}
-
-      <div className="card mb-4">
-        <div className="card-header">Thống kê đơn theo ngày (14 ngày gần nhất)</div>
-        <div className="card-body py-2">
-          <div className="d-flex flex-wrap gap-2">
-            {stats.length === 0 && <span className="text-muted small">Chưa có dữ liệu</span>}
-            {stats.map((s) => (
-              <span key={s.date} className="badge text-bg-secondary">
-                {s.date}: {s.count}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-
+      {tab === "registrations" ? (
+        <RegistrationsPanel embedded />
+      ) : (
+        <>
       <div className="row g-2 mb-3 align-items-end">
         <div className="col-md-3">
           <label className="form-label small mb-0">Trạng thái</label>
@@ -219,6 +281,51 @@ const ApplicationsPage: React.FC = () => {
         </div>
       </div>
 
+      <p className="text-muted small mb-4">
+        Phân phòng khi duyệt: cùng giới tính theo khu, còn chỗ, ưu tiên khu nguyện vọng và phòng gần đầy. Admin có thể chọn phòng thủ công trước khi duyệt.
+      </p>
+
+      {err && (
+        <div className="alert alert-danger alert-dismissible fade show" role="alert">
+          {err}
+          <button type="button" className="btn-close" aria-label="Close" onClick={() => setErr(null)} />
+        </div>
+      )}
+
+      <div className="card mb-4">
+        <div className="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+          <span>
+            Thống kê đơn theo ngày (
+            {statsPreset === "7d" ? "7 ngày gần nhất" : statsPreset === "14d" ? "14 ngày gần nhất" : "tháng này"}
+            )
+          </span>
+          <select
+            className="form-select form-select-sm"
+            style={{ width: 180 }}
+            value={statsPreset}
+            onChange={(e) => {
+              setStatsPreset(e.target.value as "7d" | "14d" | "month");
+              // trigger reload immediately (no need to reset page)
+              load();
+            }}
+          >
+            <option value="7d">7 ngày gần nhất</option>
+            <option value="14d">14 ngày gần nhất</option>
+            <option value="month">Tháng này</option>
+          </select>
+        </div>
+        <div className="card-body py-2">
+          <div className="d-flex flex-wrap gap-2">
+            {stats.length === 0 && <span className="text-muted small">Chưa có dữ liệu</span>}
+            {stats.map((s) => (
+              <span key={s.date} className="badge text-bg-secondary">
+                {s.date}: {s.count}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="position-relative">
         {loading && (
           <div className="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center bg-white bg-opacity-75" style={{ zIndex: 2, minHeight: 120 }}>
@@ -244,6 +351,7 @@ const ApplicationsPage: React.FC = () => {
                 const st = statusBadge[app.status] || { cls: "text-bg-secondary", text: app.status };
                 const created = app.createdAt ? new Date(app.createdAt).toLocaleString("vi-VN") : "—";
                 const g = formatGender(app.genderSnapshot);
+                const chosen = chosenRoomByAppId[app._id];
                 return (
                   <tr key={app._id}>
                     <td>{studentName(app)}</td>
@@ -252,7 +360,18 @@ const ApplicationsPage: React.FC = () => {
                     <td>
                       <span className={`badge rounded-pill ${st.cls}`}>{st.text}</span>
                     </td>
-                    <td>{roomLabel(app)}</td>
+                    <td>
+                      {chosen ? (
+                        <span className="badge text-bg-info">
+                          {chosen.roomNumber}
+                          {chosen.area && typeof chosen.area === "object" && "name" in chosen.area
+                            ? ` (${String((chosen.area as { name?: string }).name || "")})`
+                            : ""}
+                        </span>
+                      ) : (
+                        roomLabel(app)
+                      )}
+                    </td>
                     <td>
                       <div className="btn-group btn-group-sm flex-wrap" role="group">
                         <button type="button" className="btn btn-outline-primary" onClick={() => openDetail(app._id)}>
@@ -262,6 +381,9 @@ const ApplicationsPage: React.FC = () => {
                           <>
                             <button type="button" className="btn btn-outline-secondary" onClick={() => loadSuggest(app._id)}>
                               Gợi ý phòng
+                            </button>
+                            <button type="button" className="btn btn-outline-primary" onClick={() => openAssign(app._id)}>
+                              Chọn phòng
                             </button>
                             <button type="button" className="btn btn-success" onClick={() => onApprove(app._id)}>
                               Duyệt
@@ -417,6 +539,46 @@ const ApplicationsPage: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Xếp phòng thủ công */}
+      {assignModal && (
+        <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,.45)" }}>
+          <div className="modal-dialog">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">Chọn phòng cho sinh viên</h5>
+                <button type="button" className="btn-close" aria-label="Close" onClick={() => setAssignModal(null)} />
+              </div>
+              <div className="modal-body">
+                <label className="form-label">Chọn phòng</label>
+                <select className="form-select" value={assignRoomId} onChange={(e) => setAssignRoomId(e.target.value)}>
+                  <option value="">-- Chọn phòng --</option>
+                  {assignModal.rooms.map((r) => {
+                    const areaName = r.area && typeof r.area === "object" && "name" in r.area ? String((r.area as { name?: string }).name || "") : "";
+                    const occ = `${Number(r.currentOccupancy || 0)}/${Number(r.capacity || 0)}`;
+                    return (
+                      <option key={r._id} value={r._id}>
+                        {r.roomNumber}{areaName ? ` (${areaName})` : ""} — {occ}
+                      </option>
+                    );
+                  })}
+                </select>
+                {assignModal.rooms.length === 0 && <div className="text-muted small mt-2">Không có phòng phù hợp để chọn.</div>}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setAssignModal(null)}>
+                  Hủy
+                </button>
+                <button type="button" className="btn btn-primary" onClick={onChooseRoom} disabled={!assignRoomId}>
+                  Chọn phòng
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+        </>
       )}
     </div>
   );

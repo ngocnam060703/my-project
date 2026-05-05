@@ -16,7 +16,7 @@ import {
 } from "antd";
 import dayjs from "dayjs";
 import { useNavigate } from "react-router-dom";
-import { authApi, registrationPeriodsApi, registrationsApi } from "../../api";
+import { applicationsApi, authApi, registrationPeriodsApi } from "../../api";
 
 const { Title, Text } = Typography;
 
@@ -98,13 +98,13 @@ const DormRegistrationPage: React.FC = () => {
       const values = await form.validateFields();
       setSubmitting(true);
       try {
-        await registrationsApi.create({
+        await applicationsApi.create({
           semester: values.semester,
           schoolYear: values.schoolYear,
           startDate: values.startDate?.format?.("YYYY-MM-DD"),
         });
-        message.success("Đã gửi đơn. Hệ thống đã gán phòng dự kiến; sau khi admin duyệt, bạn sẽ nhận hợp đồng.");
-        navigate("/student/my-registrations");
+        message.success("Đã gửi đơn đăng ký KTX. Bạn không chọn phòng; admin sẽ xếp phòng khi duyệt (hoặc để hệ thống tự chọn).");
+        navigate("/student/my-applications");
       } catch (err: unknown) {
         message.error(
           (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Gửi đơn thất bại",
@@ -127,8 +127,8 @@ const DormRegistrationPage: React.FC = () => {
         <Alert
           type="info"
           showIcon
-          message="Phân phòng tự động"
-          description="Bạn không chọn phòng. Sau khi gửi đơn, hệ thống gán phòng dự kiến theo giới tính, khu phù hợp và chỗ trống. Admin duyệt xong sẽ tạo hợp đồng."
+          message="Bạn không chọn phòng"
+          description="Sau khi gửi đơn, admin sẽ xếp phòng cho bạn khi duyệt (hoặc để hệ thống tự chọn theo quy tắc)."
         />
 
         {periodOpen ? (

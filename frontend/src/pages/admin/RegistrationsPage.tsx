@@ -15,7 +15,9 @@ const typeMap: Record<string, { color: string; text: string }> = {
   transfer: { color: "purple", text: "Chuyển phòng" },
 };
 
-const RegistrationsPage: React.FC = () => {
+type RegistrationsPageProps = { embedded?: boolean };
+
+const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false }) => {
   const [data, setData] = useState<Registration[]>([]);
   const [total, setTotal] = useState(0);
   const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { name: string } }[]>([]);
@@ -189,10 +191,17 @@ const RegistrationsPage: React.FC = () => {
 
   return (
     <div>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Xét duyệt đơn</h2>
-        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Duyệt hoặc từ chối đơn đăng ký nội trú của sinh viên</p>
-      </div>
+      {!embedded && (
+        <div style={{ marginBottom: 24 }}>
+          <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Xét duyệt đơn</h2>
+          <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Duyệt hoặc từ chối đơn đăng ký nội trú của sinh viên</p>
+        </div>
+      )}
+      {embedded && (
+        <p className="text-muted small mb-3">
+          Luồng đăng ký chọn phòng trước: duyệt hoặc từ chối; sinh viên ký hợp đồng sau khi được duyệt.
+        </p>
+      )}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={8}>

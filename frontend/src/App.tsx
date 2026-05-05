@@ -30,7 +30,6 @@ import UsersPage from "./pages/admin/UsersPage";
 import StudentsPage from "./pages/admin/StudentsPage";
 import AreasPage from "./pages/admin/AreasPage";
 import RoomsPageAdmin from "./pages/admin/RoomsPage";
-import RegistrationsPage from "./pages/admin/RegistrationsPage";
 import ApplicationsPage from "./pages/admin/ApplicationsPage";
 import ContractsPage from "./pages/admin/ContractsPage";
 import BillsPage from "./pages/admin/BillsPage";
@@ -90,7 +89,7 @@ function App() {
                   <Route path="students" element={<StudentsPage />} />
                   <Route path="areas" element={<AreasPage />} />
                   <Route path="rooms" element={<RoomsPageAdmin />} />
-                  <Route path="registrations" element={<RegistrationsPage />} />
+                  <Route path="registrations" element={<Navigate to="/admin/applications?tab=registrations" replace />} />
                   <Route path="applications" element={<ApplicationsPage />} />
                   <Route path="contracts" element={<ContractsPage />} />
                   <Route path="bills" element={<BillsPage />} />

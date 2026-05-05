@@ -46,6 +46,14 @@ router.get(
   applicationController.getSuggestedRoom
 );
 
+/** Admin / Manager: danh sách phòng phù hợp để admin tự chọn */
+router.get(
+  "/:id/candidate-rooms",
+  auth,
+  requireRole("admin", "manager"),
+  applicationController.getCandidateRooms
+);
+
 router.get("/:id", auth, requireRole("admin", "manager", "user"), applicationController.getById);
 
 /** Sinh viên: hủy đơn pending (REST DELETE theo spec) */
