@@ -10,6 +10,7 @@
     "seed:facilities": "node scripts/seedFacilitiesFromRooms.js",
     "seed:violations": "node scripts/seedViolationRules.js",
     "migrate:registrations-to-applications": "node scripts/migrateRegistrationsToApplications.js",
+    "fix:room-occupancy": "node scripts/recountRoomOccupancy.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

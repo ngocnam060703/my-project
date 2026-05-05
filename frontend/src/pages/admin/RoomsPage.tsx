@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
-import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Tag, Space, Row, Col, Statistic, List, Checkbox } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
+import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Tag, Space, Row, Col, Statistic, List, Checkbox, Descriptions, Spin } from "antd";
 import { PlusOutlined, ApartmentOutlined, EditOutlined, DeleteOutlined, FilterOutlined, EyeOutlined, DownloadOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { roomsApi, areasApi, facilitiesApi } from "../../api";
-import type { Room } from "../../types";
+import { roomsApi, areasApi, facilitiesApi, studentsApi } from "../../api";
+import type { Room, StudentProfileResponse } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
   available: { color: "green", text: "Còn trống" },
@@ -37,6 +37,11 @@ const RoomsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [detailModal, setDetailModal] = useState<Room | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailResidents, setDetailResidents] = useState<Record<string, ResidentRow[]>>({});
+  const [detailResidentsLoading, setDetailResidentsLoading] = useState<Record<string, boolean>>({});
+  const [studentDetailModal, setStudentDetailModal] = useState<StudentProfileResponse | null>(null);
+  const [studentDetailLoading, setStudentDetailLoading] = useState(false);
   const [residentModal, setResidentModal] = useState<{
     open: boolean;
     roomId?: string;
@@ -82,8 +87,22 @@ const RoomsPage: React.FC = () => {
       const grouped: Record<string, { name: string; quantity: number }[]> = {};
       const locations = (locationsRes.data?.items || []) as FacilityLocation[];
       locations.forEach((loc) => {
-        const rid = typeof loc.room === "string" ? loc.room : String(loc.room?._id || "");
-        const name = String(loc.facility?.name || "").trim();
+        const roomRef: unknown =
+          (loc as unknown as { room?: unknown }).room ??
+          (loc as unknown as { roomId?: unknown }).roomId ??
+          (loc as unknown as { room_id?: unknown }).room_id;
+        const rid =
+          typeof roomRef === "string"
+            ? roomRef
+            : String((roomRef as { _id?: unknown; id?: unknown } | null | undefined)?._id || (roomRef as { id?: unknown } | null | undefined)?.id || "");
+
+        const facilityRef: unknown =
+          (loc as unknown as { facility?: unknown }).facility ??
+          (loc as unknown as { facilityId?: unknown }).facilityId;
+        const name =
+          typeof facilityRef === "string"
+            ? String((loc as unknown as { facilityName?: unknown }).facilityName || "").trim()
+            : String((facilityRef as { name?: unknown } | null | undefined)?.name || "").trim();
         if (!rid || !name) return;
         if (!grouped[rid]) grouped[rid] = [];
         grouped[rid].push({ name, quantity: Number(loc.quantity || 0) });
@@ -194,17 +213,6 @@ const RoomsPage: React.FC = () => {
     });
   };
 
-  const openResidents = async (r: Room) => {
-    setResidentModal({ open: true, roomId: r._id, loading: true, residents: [], room: { roomNumber: r.roomNumber, area: typeof r.area === "object" ? r.area : undefined, capacity: r.capacity, currentOccupancy: r.currentOccupancy } });
-    try {
-      const res = await roomsApi.getResidents(r._id);
-      setResidentModal({ open: true, roomId: r._id, loading: false, residents: res.data?.residents || [], room: res.data?.room || undefined });
-    } catch {
-      setResidentModal((prev) => ({ ...prev, loading: false }));
-      message.error("Không tải được danh sách sinh viên trong phòng");
-    }
-  };
-
   const setRoomLeader = async (resident: ResidentRow) => {
     if (!residentModal.roomId || !resident.user?._id) return;
     try {
@@ -222,6 +230,63 @@ const RoomsPage: React.FC = () => {
       message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không cập nhật được trưởng phòng");
     }
   };
+
+  const openRoomDetail = async (r: Room) => {
+    setDetailModal(r);
+    setDetailLoading(true);
+    try {
+      const [roomRes, facRes] = await Promise.all([
+        roomsApi.getById(r._id).catch(() => ({ data: r } as { data: Room })),
+        facilitiesApi.getLocations({ roomId: r._id, limit: 500 }).catch(() => ({ data: { items: [] } })),
+      ]);
+      setDetailModal(roomRes.data as Room);
+
+      const grouped = { ...(roomFacilities || {}) } as Record<string, { name: string; quantity: number }[]>;
+      const items = ((facRes as unknown as { data?: { items?: unknown[] } }).data?.items || []) as unknown[];
+      const list: { name: string; quantity: number }[] = [];
+      for (const raw of items) {
+        const loc = raw as { facility?: { name?: string } | string; quantity?: number };
+        const name = typeof loc.facility === "string" ? "" : String(loc.facility?.name || "").trim();
+        if (!name) continue;
+        list.push({ name, quantity: Number(loc.quantity || 0) });
+      }
+      grouped[r._id] = list;
+      setRoomFacilities(grouped);
+    } finally {
+      setDetailLoading(false);
+    }
+
+    if (detailResidents[r._id]) return;
+    setDetailResidentsLoading((m) => ({ ...m, [r._id]: true }));
+    try {
+      const res = await roomsApi.getResidents(r._id);
+      setDetailResidents((m) => ({ ...m, [r._id]: res.data?.residents || [] }));
+    } catch {
+      message.error("Không tải được danh sách sinh viên trong phòng");
+      setDetailResidents((m) => ({ ...m, [r._id]: [] }));
+    } finally {
+      setDetailResidentsLoading((m) => ({ ...m, [r._id]: false }));
+    }
+  };
+
+  const openStudentDetail = async (userId: string) => {
+    setStudentDetailLoading(true);
+    try {
+      const res = await studentsApi.getById(userId);
+      setStudentDetailModal(res.data as StudentProfileResponse);
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tải được hồ sơ sinh viên");
+    } finally {
+      setStudentDetailLoading(false);
+    }
+  };
+
+  const residenceLabel = useMemo(() => {
+    const rs = studentDetailModal?.residenceStatus;
+    if (rs === "dang_o") return { color: "green" as const, text: "Đang ở" };
+    if (rs === "da_roi") return { color: "default" as const, text: "Đã rời" };
+    return { color: "default" as const, text: String(rs || "-") };
+  }, [studentDetailModal?.residenceStatus]);
 
   const columns = [
     { title: "Số phòng", dataIndex: "roomNumber", key: "roomNumber", width: 100, render: (v: string) => <strong>{v || "-"}</strong> },
@@ -279,8 +344,7 @@ const RoomsPage: React.FC = () => {
       fixed: "right" as const,
       render: (_: unknown, r: Room) => (
         <Space>
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
-          <Button type="link" size="small" onClick={() => openResidents(r)}>Sinh viên</Button>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openRoomDetail(r)}>Chi tiết</Button>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(r)}>Sửa</Button>
           <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => handleDelete(r)} disabled={(r.currentOccupancy ?? 0) > 0}>Xóa</Button>
         </Space>
@@ -392,38 +456,135 @@ const RoomsPage: React.FC = () => {
         </Form>
       </Modal>
 
-      <Modal title={`Chi tiết phòng ${detailModal?.roomNumber || ""}`} open={!!detailModal} onCancel={() => setDetailModal(null)} footer={[<Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>, detailModal && <Button key="edit" type="primary" icon={<EditOutlined />} onClick={() => { setDetailModal(null); handleEdit(detailModal); setModalOpen(true); }}>Sửa</Button>]}>
+      <Modal
+        title={`Chi tiết phòng ${detailModal?.roomNumber || ""}`}
+        open={!!detailModal}
+        onCancel={() => setDetailModal(null)}
+        footer={[
+          <Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>,
+          detailModal && <Button key="edit" type="primary" icon={<EditOutlined />} onClick={() => { setDetailModal(null); handleEdit(detailModal); setModalOpen(true); }}>Sửa</Button>,
+        ]}
+        width={860}
+      >
+        {detailLoading && !detailModal ? (
+          <div style={{ padding: 16, textAlign: "center" }}>
+            <Spin />
+          </div>
+        ) : null}
         {detailModal && (
           <div style={{ lineHeight: 2 }}>
-            <p><strong>Số phòng:</strong> {detailModal.roomNumber}</p>
-            <p><strong>Khu:</strong> {typeof detailModal.area === "object" ? detailModal.area?.name : "-"}</p>
-            <p><strong>Tầng:</strong> {detailModal.floor ?? "-"}</p>
-            <p><strong>Sức chứa:</strong> {detailModal.currentOccupancy ?? 0}/{detailModal.capacity}</p>
-            <p><strong>Giá:</strong> <span style={{ color: "#0d9488" }}>{formatPrice(detailModal.price)}/tháng</span></p>
-            <p><strong>Giá/đầu người:</strong>{" "}
-              <span style={{ color: "#0369a1" }}>
-                {formatPrice(detailModal.pricePerPerson ?? (detailModal.capacity > 0 ? Math.round(detailModal.price / detailModal.capacity) : 0))}/người
-              </span>
-            </p>
-            <p><strong>Trạng thái:</strong> <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag></p>
-            {detailModal.description && <p><strong>Mô tả:</strong> {detailModal.description}</p>}
-            {(roomFacilities[detailModal._id] || []).length ? (
-              <p>
-                <strong>CSVC phòng:</strong>{" "}
-                <Space wrap>
-                  {(roomFacilities[detailModal._id] || []).map((x) => (
-                    <Tag key={`${detailModal._id}-${x.name}`} color="cyan">
-                      {x.name}{x.quantity > 0 ? ` (${x.quantity})` : ""}
-                    </Tag>
-                  ))}
-                </Space>
-              </p>
-            ) : null}
-            <Button style={{ marginTop: 8 }} onClick={() => openResidents(detailModal)}>
-              Xem sinh viên trong phòng
-            </Button>
+            <Descriptions bordered size="small" column={2} style={{ marginBottom: 16 }}>
+              <Descriptions.Item label="Số phòng">{detailModal.roomNumber}</Descriptions.Item>
+              <Descriptions.Item label="Khu">{typeof detailModal.area === "object" ? detailModal.area?.name : "-"}</Descriptions.Item>
+              <Descriptions.Item label="Tầng">{detailModal.floor ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label="Sức chứa">{detailModal.currentOccupancy ?? 0}/{detailModal.capacity}</Descriptions.Item>
+              <Descriptions.Item label="Giá">
+                <span style={{ color: "#0d9488" }}>{formatPrice(detailModal.price)}/tháng</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="Giá/đầu người">
+                <span style={{ color: "#0369a1" }}>
+                  {formatPrice(detailModal.pricePerPerson ?? (detailModal.capacity > 0 ? Math.round(detailModal.price / detailModal.capacity) : 0))}/người
+                </span>
+              </Descriptions.Item>
+              <Descriptions.Item label="Trạng thái" span={2}>
+                <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag>
+              </Descriptions.Item>
+              {detailModal.description ? (
+                <Descriptions.Item label="Mô tả" span={2}>{detailModal.description}</Descriptions.Item>
+              ) : null}
+            </Descriptions>
+            {(() => {
+              const items = roomFacilities[detailModal._id] || [];
+              const amen = Array.isArray(detailModal.amenities) ? detailModal.amenities.map((s) => String(s).trim()).filter(Boolean) : [];
+              return (
+                <p>
+                  <strong>CSVC phòng:</strong>{" "}
+                  {items.length === 0 && amen.length === 0 ? (
+                    <span style={{ color: "#999" }}>-</span>
+                  ) : (
+                    <Space wrap>
+                      {items.map((x) => (
+                        <Tag key={`${detailModal._id}-${x.name}`} color="cyan">
+                          {x.name}{x.quantity > 0 ? ` (${x.quantity})` : ""}
+                        </Tag>
+                      ))}
+                      {items.length === 0 && amen.map((a) => (
+                        <Tag key={`${detailModal._id}-amen-${a}`} color="cyan">
+                          {a}
+                        </Tag>
+                      ))}
+                    </Space>
+                  )}
+                </p>
+              );
+            })()}
+
+            <div style={{ marginTop: 12 }}>
+              <strong>Danh sách sinh viên đang ở</strong>
+              <div style={{ marginTop: 8 }}>
+                {detailResidentsLoading[detailModal._id] ? (
+                  <div style={{ padding: 16, textAlign: "center" }}>
+                    <Spin />
+                  </div>
+                ) : (
+                  <Table
+                    size="small"
+                    pagination={false}
+                    rowKey={(it: ResidentRow) => it.contractId || it.user?._id || Math.random().toString(16)}
+                    dataSource={detailResidents[detailModal._id] || []}
+                    columns={[
+                      { title: "Tên", key: "name", render: (_: unknown, it: ResidentRow) => it.user?.fullName || "-" },
+                      { title: "Giới tính", key: "gender", width: 90, render: (_: unknown, it: ResidentRow) => it.user?.gender || "-" },
+                      { title: "SĐT", key: "phone", width: 130, render: (_: unknown, it: ResidentRow) => it.user?.phone || "-" },
+                      { title: "Ngày vào ở", key: "startDate", width: 120, render: (_: unknown, it: ResidentRow) => (it.startDate ? new Date(it.startDate).toLocaleDateString("vi-VN") : "-") },
+                    ]}
+                    onRow={(it) => ({
+                      onClick: () => {
+                        if (it.user?._id) void openStudentDetail(it.user._id);
+                      },
+                      style: { cursor: it.user?._id ? "pointer" : "default" },
+                    })}
+                    locale={{ emptyText: "Phòng chưa có sinh viên ở" }}
+                  />
+                )}
+              </div>
+            </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        title="Hồ sơ sinh viên"
+        open={!!studentDetailModal || studentDetailLoading}
+        onCancel={() => setStudentDetailModal(null)}
+        footer={[<Button key="close" onClick={() => setStudentDetailModal(null)}>Đóng</Button>]}
+        width={520}
+      >
+        {studentDetailLoading && !studentDetailModal ? (
+          <div style={{ padding: 16, textAlign: "center" }}>
+            <Spin />
+          </div>
+        ) : null}
+        {studentDetailModal ? (
+          <Descriptions bordered size="small" column={1}>
+            <Descriptions.Item label="Họ tên">{studentDetailModal.student?.fullName || "-"}</Descriptions.Item>
+            <Descriptions.Item label="MSSV">{studentDetailModal.student?.studentId || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Lớp">{(studentDetailModal.student as any)?.className || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Khoa">{(studentDetailModal.student as any)?.faculty || "-"}</Descriptions.Item>
+            <Descriptions.Item label="CCCD">{studentDetailModal.student?.citizenId || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Địa chỉ">{studentDetailModal.student?.address || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Phụ huynh">
+              {[
+                (studentDetailModal.student as any)?.familyFatherName ? `Cha: ${(studentDetailModal.student as any).familyFatherName} (${(studentDetailModal.student as any).familyFatherPhone || "-"})` : null,
+                (studentDetailModal.student as any)?.familyMotherName ? `Mẹ: ${(studentDetailModal.student as any).familyMotherName} (${(studentDetailModal.student as any).familyMotherPhone || "-"})` : null,
+                (studentDetailModal.student as any)?.familyEmergencyPhone ? `Khẩn cấp: ${(studentDetailModal.student as any).familyEmergencyPhone}` : null,
+              ].filter(Boolean).join(" | ") || "-"}
+            </Descriptions.Item>
+            <Descriptions.Item label="Tình trạng">
+              <Tag color={residenceLabel.color}>{residenceLabel.text}</Tag>
+            </Descriptions.Item>
+          </Descriptions>
+        ) : null}
       </Modal>
       <Modal
         title={`Sinh viên phòng ${residentModal.room?.roomNumber || ""}`}

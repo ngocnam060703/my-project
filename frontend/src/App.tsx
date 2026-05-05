@@ -28,8 +28,7 @@ import RegulationsPage from "./pages/client/RegulationsPage";
 import DashboardPage from "./pages/admin/DashboardPage";
 import UsersPage from "./pages/admin/UsersPage";
 import StudentsPage from "./pages/admin/StudentsPage";
-import AreasPage from "./pages/admin/AreasPage";
-import RoomsPageAdmin from "./pages/admin/RoomsPage";
+import AreasRoomsPage from "./pages/admin/AreasRoomsPage";
 import ApplicationsPage from "./pages/admin/ApplicationsPage";
 import ContractsPage from "./pages/admin/ContractsPage";
 import BillsPage from "./pages/admin/BillsPage";
@@ -87,8 +86,9 @@ function App() {
                   <Route index element={<DashboardPage />} />
                   <Route path="users" element={<UsersPage />} />
                   <Route path="students" element={<StudentsPage />} />
-                  <Route path="areas" element={<AreasPage />} />
-                  <Route path="rooms" element={<RoomsPageAdmin />} />
+                  <Route path="housing" element={<AreasRoomsPage />} />
+                  <Route path="areas" element={<Navigate to="/admin/housing?tab=areas" replace />} />
+                  <Route path="rooms" element={<Navigate to="/admin/housing?tab=rooms" replace />} />
                   <Route path="registrations" element={<Navigate to="/admin/applications?tab=registrations" replace />} />
                   <Route path="applications" element={<ApplicationsPage />} />
                   <Route path="contracts" element={<ContractsPage />} />
