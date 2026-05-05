@@ -27,6 +27,18 @@ function isContractExpired(endDate, currentDate) {
   return end < now;
 }
 
+/**
+ * Tiền phòng / 1 sinh viên = giá phòng ÷ số slot (field capacity của phòng).
+ * Luôn tính từ price + capacity — không dùng virtual pricePerPerson để tránh lệch khi tạo HĐ.
+ * Điện/nước/dịch vụ chung vẫn chia theo số người đang ở (occupants).
+ */
+function computeRoomFeePerSlot(roomLike) {
+  const total = Number(roomLike?.price ?? 0);
+  const rawSlots = Number(roomLike?.capacity);
+  const slots = Number.isFinite(rawSlots) && rawSlots >= 1 ? rawSlots : 1;
+  return Math.round(total / slots);
+}
+
 async function buildPersonalFeeForUser({ userId, month, year }) {
   const personalServices = await Service.find({ type: "personal", isActive: true });
   if (!personalServices.length) return { total: 0, breakdown: [] };
@@ -183,7 +195,7 @@ exports.create = async (req, res) => {
         endDate: { $gte: toStartOfDay(now) },
       })
         .populate("user", "fullName email")
-        .populate("room", "price roomNumber area");
+        .populate("room", "price roomNumber area capacity");
       if (!contracts.length) {
         return res.status(400).json({ message: "Phòng chưa có sinh viên với hợp đồng active (đã ký và còn hạn)" });
       }
@@ -194,7 +206,8 @@ exports.create = async (req, res) => {
 
       const occupants = Math.max(1, contracts.length);
       const roomCost = await RoomMonthlyCost.findOne({ room: roomId, month: m, year: y });
-      const roomFeeTotal = Number(room.price || 0);
+      const feePerSlot = computeRoomFeePerSlot(room);
+      const roomFeeTotal = feePerSlot * occupants;
       const electricityTotal = electricityFee != null ? Number(electricityFee) : Number(roomCost?.electricityFee || 0);
       const waterTotal = waterFee != null ? Number(waterFee) : Number(roomCost?.waterFee || 0);
       const fixedOther = Math.max(0, Number(otherFee || 0));
@@ -221,20 +234,47 @@ exports.create = async (req, res) => {
       const io = getIO();
       let created = 0;
       let skipped = 0;
+      let updated = 0;
       const createdBills = [];
       for (const c of contracts) {
         const exists = await Bill.findOne({ contract: c._id, month: m, year: y });
-        if (exists) {
-          skipped += 1;
-          continue;
-        }
         const personal = await buildPersonalFeeForUser({ userId: c.user._id, month: m, year: y });
         const personalBreakdown = personal.breakdown;
         const personalTotal = personal.total;
-
         const sharedTotal = roomFeeTotal + electricityTotal + waterTotal + commonTotal + fixedOther;
         const sharedPerStudent = sharedTotal / occupants;
         const total = sharedPerStudent + personalTotal;
+
+        if (exists) {
+          if (exists.status === "paid") {
+            skipped += 1;
+            continue;
+          }
+          exists.roomFee = feePerSlot;
+          exists.electricityFee = electricityTotal / occupants;
+          exists.waterFee = waterTotal / occupants;
+          exists.otherFee = fixedOther / occupants;
+          exists.sharedCommonFee = commonTotal / occupants;
+          exists.personalServiceFee = personalTotal;
+          exists.occupants = occupants;
+          exists.commonServiceBreakdown = commonBreakdown;
+          exists.personalServiceBreakdown = personalBreakdown;
+          exists.total = total;
+          exists.dueDate = due;
+          exists.note = `Tiền phòng = giá phòng ÷ ${room.capacity || 1} slot; (Phòng đã ở + Điện + Nước + DV chung) / ${occupants} người + DV cá nhân`;
+          exists.paymentHistory = exists.paymentHistory || [];
+          exists.paymentHistory.push({
+            at: new Date(),
+            action: "adjusted",
+            amount: Math.round(total),
+            performedBy: req.user._id,
+            note: "Cập nhật hóa đơn theo phòng — tiền phòng theo slot (capacity)",
+          });
+          await exists.save();
+          updated += 1;
+          createdBills.push(exists);
+          continue;
+        }
 
         const bill = await Bill.create({
           contract: c._id,
@@ -242,7 +282,7 @@ exports.create = async (req, res) => {
           room: room._id,
           month: m,
           year: y,
-          roomFee: roomFeeTotal / occupants,
+          roomFee: feePerSlot,
           electricityFee: electricityTotal / occupants,
           waterFee: waterTotal / occupants,
           otherFee: fixedOther / occupants,
@@ -254,14 +294,14 @@ exports.create = async (req, res) => {
           total,
           dueDate: due,
           status: "unpaid",
-          note: `Công thức: (Phòng + Điện + Nước + Dịch vụ chung) / ${occupants} + dịch vụ cá nhân`,
+          note: `Tiền phòng = giá phòng ÷ ${room.capacity || 1} slot; (Phòng đã ở + Điện + Nước + DV chung) / ${occupants} người + DV cá nhân`,
           paymentHistory: [
             {
               at: new Date(),
               action: "created",
               amount: Math.round(total),
               performedBy: req.user._id,
-              note: "Tạo hóa đơn theo phòng",
+              note: "Tạo hóa đơn theo phòng — tiền phòng theo slot",
             },
           ],
         });
@@ -277,11 +317,11 @@ exports.create = async (req, res) => {
           link: "/student/my-bills",
         });
       }
-      return res.status(201).json({ created, skipped, bills: createdBills });
+      return res.status(201).json({ created, updated, skipped, bills: createdBills });
     }
 
     // Luồng cũ: tạo cho 1 hợp đồng
-    const total = Number(req.body?.roomFee || 0) + Number(electricityFee || 0) + Number(waterFee || 0) + Number(otherFee || 0);
+    const roomFeeFromBody = Number(req.body?.roomFee || 0);
     const contractDoc = await Contract.findById(contract).populate("user room");
     if (!contractDoc) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
 
@@ -298,13 +338,16 @@ exports.create = async (req, res) => {
 
     const existing = await Bill.findOne({ contract, month: m, year: y });
     if (existing) return res.status(400).json({ message: "Hóa đơn tháng này đã tồn tại" });
+    const contractRoomFeePerSlot = computeRoomFeePerSlot(contractDoc.room);
+    const effectiveRoomFee = roomFeeFromBody || contractRoomFeePerSlot;
+    const total = effectiveRoomFee + Number(electricityFee || 0) + Number(waterFee || 0) + Number(otherFee || 0);
     const bill = await Bill.create({
       contract,
       user: contractDoc.user._id,
       room: contractDoc.room._id,
       month: m,
       year: y,
-      roomFee: Number(req.body?.roomFee || contractDoc.room.price || 0),
+      roomFee: effectiveRoomFee,
       electricityFee: Number(electricityFee || 0),
       waterFee: Number(waterFee || 0),
       otherFee: Number(otherFee || 0),
@@ -360,7 +403,7 @@ exports.generateByMonth = async (req, res) => {
       status: "active",
       endDate: { $gte: today },
     })
-      .populate("room", "price roomNumber area")
+      .populate("room", "price roomNumber area capacity")
       .populate("user", "fullName email");
     if (!contracts.length) return res.json({ created: 0, skipped: 0, message: "Không có hợp đồng đang hiệu lực" });
 
@@ -383,7 +426,8 @@ exports.generateByMonth = async (req, res) => {
       const room = list[0].room;
       const occupants = Math.max(1, list.length);
       const roomCost = roomCostMap.get(String(room._id));
-      const roomFeeTotal = Number(room?.price || 0);
+      const feePerSlot = computeRoomFeePerSlot(room);
+      const roomFeeTotal = feePerSlot * occupants;
       const electricityTotal = Number(roomCost?.electricityFee || 0);
       const waterTotal = Number(roomCost?.waterFee || 0);
 
@@ -422,7 +466,7 @@ exports.generateByMonth = async (req, res) => {
           room: room._id,
           month,
           year,
-          roomFee: roomFeeTotal / occupants,
+          roomFee: feePerSlot,
           electricityFee: electricityTotal / occupants,
           waterFee: waterTotal / occupants,
           otherFee: 0,
@@ -434,14 +478,14 @@ exports.generateByMonth = async (req, res) => {
           total,
           dueDate,
           status: "unpaid",
-          note: `Công thức: (Phòng + Điện + Nước + Dịch vụ chung) / ${occupants} + dịch vụ cá nhân`,
+          note: `Tiền phòng = giá phòng ÷ ${room?.capacity || 1} slot; (Phòng đã ở + Điện + Nước + DV chung) / ${occupants} người + DV cá nhân`,
           paymentHistory: [
             {
               at: new Date(),
               action: "created",
               amount: Math.round(total),
               performedBy: req.user?._id || null,
-              note: "Sinh tự động theo tháng",
+              note: "Sinh tự động theo tháng — tiền phòng theo slot",
             },
           ],
         });
