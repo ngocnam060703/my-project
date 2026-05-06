@@ -288,6 +288,21 @@ const RoomsPage: React.FC = () => {
     return { color: "default" as const, text: String(rs || "-") };
   }, [studentDetailModal?.residenceStatus]);
 
+  const formatParentLine = (name?: string, phone?: string) => {
+    const n = String(name || "").trim();
+    const p = String(phone || "").trim();
+    if (!n && !p) return "-";
+    if (!n) return `SĐT: ${p}`;
+    if (!p) return n;
+    return `${n} — SĐT: ${p}`;
+  };
+
+  const formatDateVi = (v?: string | null) => {
+    if (!v) return "-";
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("vi-VN");
+  };
+
   const columns = [
     { title: "Số phòng", dataIndex: "roomNumber", key: "roomNumber", width: 100, render: (v: string) => <strong>{v || "-"}</strong> },
     { title: "Khu", dataIndex: ["area", "name"], key: "area", width: 100, render: (v: string, r: Room) => (typeof r.area === "object" ? r.area?.name : v) || "-" },
@@ -558,7 +573,7 @@ const RoomsPage: React.FC = () => {
         open={!!studentDetailModal || studentDetailLoading}
         onCancel={() => setStudentDetailModal(null)}
         footer={[<Button key="close" onClick={() => setStudentDetailModal(null)}>Đóng</Button>]}
-        width={520}
+        width={640}
       >
         {studentDetailLoading && !studentDetailModal ? (
           <div style={{ padding: 16, textAlign: "center" }}>
@@ -567,20 +582,25 @@ const RoomsPage: React.FC = () => {
         ) : null}
         {studentDetailModal ? (
           <Descriptions bordered size="small" column={1}>
-            <Descriptions.Item label="Họ tên">{studentDetailModal.student?.fullName || "-"}</Descriptions.Item>
-            <Descriptions.Item label="MSSV">{studentDetailModal.student?.studentId || "-"}</Descriptions.Item>
-            <Descriptions.Item label="Lớp">{(studentDetailModal.student as any)?.className || "-"}</Descriptions.Item>
-            <Descriptions.Item label="Khoa">{(studentDetailModal.student as any)?.faculty || "-"}</Descriptions.Item>
-            <Descriptions.Item label="CCCD">{studentDetailModal.student?.citizenId || "-"}</Descriptions.Item>
-            <Descriptions.Item label="Địa chỉ">{studentDetailModal.student?.address || "-"}</Descriptions.Item>
-            <Descriptions.Item label="Phụ huynh">
-              {[
-                (studentDetailModal.student as any)?.familyFatherName ? `Cha: ${(studentDetailModal.student as any).familyFatherName} (${(studentDetailModal.student as any).familyFatherPhone || "-"})` : null,
-                (studentDetailModal.student as any)?.familyMotherName ? `Mẹ: ${(studentDetailModal.student as any).familyMotherName} (${(studentDetailModal.student as any).familyMotherPhone || "-"})` : null,
-                (studentDetailModal.student as any)?.familyEmergencyPhone ? `Khẩn cấp: ${(studentDetailModal.student as any).familyEmergencyPhone}` : null,
-              ].filter(Boolean).join(" | ") || "-"}
+            <Descriptions.Item label="Họ tên">{studentDetailModal.student.fullName || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Email">{studentDetailModal.student.email || "-"}</Descriptions.Item>
+            <Descriptions.Item label="SĐT">{studentDetailModal.student.phone || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Giới tính">{studentDetailModal.student.gender || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Ngày sinh">{formatDateVi(studentDetailModal.student.dateOfBirth)}</Descriptions.Item>
+            <Descriptions.Item label="MSSV">{studentDetailModal.student.studentId || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Lớp">{studentDetailModal.student.className || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Khoa">{studentDetailModal.student.faculty || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Chuyên ngành">{studentDetailModal.student.major || "-"}</Descriptions.Item>
+            <Descriptions.Item label="CCCD / CMND">{studentDetailModal.student.citizenId || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Địa chỉ liên hệ">{studentDetailModal.student.address || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Thường trú">{studentDetailModal.student.addressPermanent || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Tạm trú">{studentDetailModal.student.addressTemporary || "-"}</Descriptions.Item>
+            <Descriptions.Item label="Phụ huynh (cha)">{formatParentLine(studentDetailModal.student.familyFatherName, studentDetailModal.student.familyFatherPhone)}</Descriptions.Item>
+            <Descriptions.Item label="Phụ huynh (mẹ)">{formatParentLine(studentDetailModal.student.familyMotherName, studentDetailModal.student.familyMotherPhone)}</Descriptions.Item>
+            <Descriptions.Item label="SĐT khẩn cấp">
+              {String(studentDetailModal.student.familyEmergencyPhone || "").trim() || "-"}
             </Descriptions.Item>
-            <Descriptions.Item label="Tình trạng">
+            <Descriptions.Item label="Tình trạng ở KTX">
               <Tag color={residenceLabel.color}>{residenceLabel.text}</Tag>
             </Descriptions.Item>
           </Descriptions>

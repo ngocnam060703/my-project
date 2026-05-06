@@ -54,13 +54,19 @@ async function buildStudentDetail(studentId) {
     .lean();
 
   const now = new Date();
+  const contractStillInStay = (c) => {
+    if (!c || !c.endDate) return false;
+    if (new Date(c.endDate) < now) return false;
+    return c.status === "active" || c.status === "pending_payment";
+  };
   const currentContract =
     contracts.find((c) => c.status === "active" && new Date(c.endDate) >= now) ||
+    contracts.find((c) => c.status === "pending_payment" && new Date(c.endDate) >= now) ||
     contracts.find((c) => c.status === "active") ||
     contracts.find((c) => c.status === "pending_payment") ||
     null;
   const currentRoom = currentContract?.room || null;
-  const residenceStatus = currentContract && currentContract.status === "active" ? "dang_o" : "da_roi";
+  const residenceStatus = contractStillInStay(currentContract) ? "dang_o" : "da_roi";
 
   return {
     student,

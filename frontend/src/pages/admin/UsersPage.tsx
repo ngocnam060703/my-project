@@ -46,6 +46,15 @@ const roleDisplay: Record<string, { color: string; text: string }> = {
   admin: { color: "error", text: "Admin" },
 };
 
+function formatParentLine(name?: string, phone?: string) {
+  const n = String(name || "").trim();
+  const p = String(phone || "").trim();
+  if (!n && !p) return "—";
+  if (!n) return `SĐT: ${p}`;
+  if (!p) return n;
+  return `${n} — SĐT: ${p}`;
+}
+
 const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   const { user: authUser } = useAuth();
   const authId = authUser?._id || authUser?.id;
@@ -670,7 +679,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
         title={`Chi tiết — ${du?.fullName || ""}`}
         open={!!detailPayload}
         onCancel={() => setDetailPayload(null)}
-        width={720}
+        width={820}
         footer={[
           <Button key="close" onClick={() => setDetailPayload(null)}>
             Đóng
@@ -713,10 +722,26 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
               <Descriptions column={1} size="small" bordered>
                 <Descriptions.Item label="MSSV">{du?.studentId || "—"}</Descriptions.Item>
                 <Descriptions.Item label="SĐT">{du?.phone || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Ngày sinh">
+                  {du?.dateOfBirth ? dayjs(du.dateOfBirth).format("DD/MM/YYYY") : "—"}
+                </Descriptions.Item>
+                <Descriptions.Item label="Giới tính">{du?.gender || "—"}</Descriptions.Item>
+                <Descriptions.Item label="CCCD / CMND">{du?.citizenId || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Lớp">{du?.className || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Ngành">{du?.major || "—"}</Descriptions.Item>
                 <Descriptions.Item label="Khoa">{du?.faculty || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Giáo viên chủ nhiệm">{du?.homeroomTeacher || "—"}</Descriptions.Item>
                 <Descriptions.Item label="Ngày nhập học">
                   {du?.enrollmentDate ? dayjs(du.enrollmentDate).format("DD/MM/YYYY") : "—"}
                 </Descriptions.Item>
+                <Descriptions.Item label="Quê quán">{du?.addressNative || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Thường trú">{du?.addressPermanent || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Tạm trú">{du?.addressTemporary || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Tạm vắng">{du?.addressAbsent || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Địa chỉ liên hệ">{du?.address || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Phụ huynh (cha)">{formatParentLine(du?.familyFatherName, du?.familyFatherPhone)}</Descriptions.Item>
+                <Descriptions.Item label="Phụ huynh (mẹ)">{formatParentLine(du?.familyMotherName, du?.familyMotherPhone)}</Descriptions.Item>
+                <Descriptions.Item label="SĐT liên hệ khẩn cấp">{du?.familyEmergencyPhone || "—"}</Descriptions.Item>
                 <Descriptions.Item label="Phòng đang ở (theo hợp đồng hiện hành)">
                   {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object" ? (
                     <span>

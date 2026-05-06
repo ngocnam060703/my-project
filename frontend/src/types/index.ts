@@ -11,6 +11,8 @@ export interface User {
   updatedAt?: string;
   phone?: string;
   studentId?: string;
+  /** Lớp hành chính */
+  className?: string;
   major?: string;
   gender?: string;
   citizenId?: string;
