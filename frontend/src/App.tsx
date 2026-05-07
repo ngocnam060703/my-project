@@ -38,6 +38,7 @@ import MaintenanceReportsAdminPage from "./pages/admin/MaintenanceReportsAdminPa
 import ServicesPageAdmin from "./pages/admin/ServicesPage";
 import ServiceManagementBootstrapPage from "./pages/admin/ServiceManagementBootstrapPage";
 import ServicesPageClient from "./pages/client/ServicesPage";
+import MajorsPage from "./pages/admin/MajorsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 /** `/` → admin vào /admin, còn lại (khách + sinh viên) vào /student */
@@ -86,6 +87,7 @@ function App() {
                   <Route index element={<DashboardPage />} />
                   <Route path="users" element={<UsersPage />} />
                   <Route path="students" element={<StudentsPage />} />
+                  <Route path="majors" element={<MajorsPage />} />
                   <Route path="housing" element={<AreasRoomsPage />} />
                   <Route path="areas" element={<Navigate to="/admin/housing?tab=areas" replace />} />
                   <Route path="rooms" element={<Navigate to="/admin/housing?tab=rooms" replace />} />

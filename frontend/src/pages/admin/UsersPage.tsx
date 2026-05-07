@@ -35,7 +35,7 @@ import {
   KeyOutlined,
 } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { usersApi } from "../../api";
+import { majorsApi, usersApi } from "../../api";
 import type { User, AdminUserDetailResponse, Contract } from "../../types";
 import { useAuth } from "../../contexts/AuthContext";
 import dayjs from "dayjs";
@@ -69,6 +69,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
+  const [majorOptions, setMajorOptions] = useState<Array<{ _id: string; name: string; faculty?: string; isActive?: boolean }>>([]);
   const [resetPwdOpen, setResetPwdOpen] = useState(false);
   const [resetPwdUserId, setResetPwdUserId] = useState<string | null>(null);
   const [resetForm] = Form.useForm();
@@ -118,6 +119,17 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   useEffect(() => {
     void load();
   }, [load, studentOnly]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await majorsApi.getAll({ active: true });
+        setMajorOptions(((res.data?.items || []) as Array<{ _id: string; name: string; faculty?: string; isActive?: boolean }>).filter((m) => m && m.isActive !== false));
+      } catch {
+        setMajorOptions([]);
+      }
+    })();
+  }, []);
 
   const avatarRules = [
     {
@@ -632,7 +644,22 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                   </Row>
                   <Form.Item name="citizenId" label="CCCD" rules={[req]}><Input /></Form.Item>
                   <Form.Item name="studentId" label="MSSV" rules={[req]}><Input /></Form.Item>
-                  <Form.Item name="major" label="Ngành" rules={[req]}><Input /></Form.Item>
+                  <Form.Item name="major" label="Ngành" rules={[req]}>
+                    {majorOptions.length ? (
+                      <Select
+                        allowClear
+                        showSearch
+                        placeholder="Chọn ngành"
+                        optionFilterProp="label"
+                        options={majorOptions.map((m) => ({
+                          value: m.name,
+                          label: m.faculty ? `${m.name} — ${m.faculty}` : m.name,
+                        }))}
+                      />
+                    ) : (
+                      <Input placeholder="Nhập ngành" />
+                    )}
+                  </Form.Item>
                   <Row gutter={8}>
                     <Col span={12}><Form.Item name="faculty" label="Khoa" rules={[req]}><Input /></Form.Item></Col>
                     <Col span={12}><Form.Item name="homeroomTeacher" label="Giáo viên chủ nhiệm" rules={[req]}><Input /></Form.Item></Col>

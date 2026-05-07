@@ -145,6 +145,39 @@ export interface Contract {
   monthlyRent?: number | null;
   /** VNĐ — nếu null hiển thị “theo quy định” */
   depositAmount?: number | null;
+  /** Giường hiện tại (nếu hệ thống quản lý theo giường) */
+  bed?: string | Bed | null;
+}
+
+export interface Bed {
+  _id: string;
+  room: string | Room;
+  code: string; // A1, A2, B1...
+  status: "available" | "occupied" | "reserved" | "maintenance" | "locked" | string;
+  currentUser?: string | User | null;
+  currentContract?: string | Contract | null;
+  checkInAt?: string | null;
+  equipmentStatus?: string;
+  note?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface BedHistory {
+  _id: string;
+  bed: string | Bed;
+  room: string | Room;
+  user?: string | User | null;
+  contract?: string | Contract | null;
+  action: "assigned" | "transferred_in" | "transferred_out" | "checked_out" | "status_changed" | "note_updated" | string;
+  fromBedCode?: string;
+  toBedCode?: string;
+  fromStatus?: string;
+  toStatus?: string;
+  note?: string;
+  performedBy?: string | User | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /** Yêu cầu gia hạn hợp đồng (sinh viên → admin duyệt) */

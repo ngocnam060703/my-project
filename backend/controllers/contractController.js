@@ -5,7 +5,41 @@ const User = require("../models/User");
 const Notification = require("../models/Notification");
 const ContractExtendRequest = require("../models/ContractExtendRequest");
 const ContractExtensionSetting = require("../models/ContractExtensionSetting");
+const Bill = require("../models/Bill");
+const Violation = require("../models/Violation");
+const MaintenanceReport = require("../models/MaintenanceReport");
+const Bed = require("../models/Bed");
+const BedHistory = require("../models/BedHistory");
 const { getIO } = require("../socket");
+
+async function tryAutoAssignBed(contract, performedBy) {
+  if (!contract || !contract.room || !contract.user) return;
+  if (contract.bed) return;
+  const bed = await Bed.findOne({
+    room: contract.room,
+    status: "available",
+    currentUser: null,
+    currentContract: null,
+  }).sort({ code: 1 });
+  if (!bed) return;
+  bed.status = "occupied";
+  bed.currentUser = contract.user;
+  bed.currentContract = contract._id;
+  bed.checkInAt = bed.checkInAt || new Date();
+  await bed.save();
+  contract.bed = bed._id;
+  await contract.save();
+  await BedHistory.create({
+    bed: bed._id,
+    room: bed.room,
+    user: contract.user,
+    contract: contract._id,
+    action: "assigned",
+    toBedCode: bed.code,
+    toStatus: "occupied",
+    performedBy: performedBy || null,
+  });
+}
 
 const CONTRACT_EXT_SETTING_KEY = "contract_extension";
 
@@ -56,13 +90,113 @@ function statusHoldsSlot(status) {
 
 exports.getAll = async (req, res) => {
   try {
-    const { status, user, room, page = 1, limit = 20 } = req.query;
-    const filter = {};
-    if (status) filter.status = status;
-    if (user) filter.user = user;
-    if (room) filter.room = room;
-    const contracts = await Contract.find(filter)
-      .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
+    const { status, user, room, area, search, faculty, major, hasDebt, page = 1, limit = 20 } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+
+    const baseMatch = {};
+    if (status) baseMatch.status = status;
+    if (user) baseMatch.user = user;
+    if (room) baseMatch.room = room;
+
+    // Quick filter: only students who still owe bills (pending/unpaid/overdue)
+    if (String(hasDebt || "") === "1" || String(hasDebt || "") === "true") {
+      const debtUserIds = await Bill.distinct("user", { status: { $in: ["pending", "unpaid", "overdue"] } });
+      if (!debtUserIds || debtUserIds.length === 0) {
+        return res.json({ contracts: [], total: 0 });
+      }
+      baseMatch.user = { $in: debtUserIds };
+    }
+
+    // Filter by area (khu) for contracts: room.area = area
+    if (area && String(area).trim() && !room) {
+      const roomsInArea = await Room.find({ area: String(area).trim() }).select("_id").lean();
+      baseMatch.room = { $in: roomsInArea.map((r) => r._id) };
+    }
+
+    const needsUserFilter = !!(search && String(search).trim()) || !!(faculty && String(faculty).trim()) || !!(major && String(major).trim());
+    if (needsUserFilter) {
+      const rx = search && String(search).trim()
+        ? new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+        : null;
+
+      // IMPORTANT: after $lookup + $unwind, user fields live under `user.*`
+      const userAnd = [{ "user.isDeleted": { $ne: true } }];
+      if (rx) userAnd.push({ $or: [{ "user.fullName": rx }, { "user.studentId": rx }, { "user.email": rx }, { "user.phone": rx }] });
+      if (faculty && String(faculty).trim()) userAnd.push({ "user.faculty": String(faculty).trim() });
+      if (major && String(major).trim()) userAnd.push({ "user.major": String(major).trim() });
+      const userMatch = userAnd.length > 1 ? { $and: userAnd } : userAnd[0];
+
+      const pipeline = [
+        { $match: baseMatch },
+        { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "user" } },
+        { $unwind: "$user" },
+        { $match: userMatch },
+        { $sort: { createdAt: -1 } },
+        {
+          $facet: {
+            items: [
+              { $skip: (pageNum - 1) * lim },
+              { $limit: lim },
+              { $lookup: { from: "rooms", localField: "room", foreignField: "_id", as: "room" } },
+              { $unwind: { path: "$room", preserveNullAndEmptyArrays: true } },
+              { $lookup: { from: "areas", localField: "room.area", foreignField: "_id", as: "roomArea" } },
+              { $unwind: { path: "$roomArea", preserveNullAndEmptyArrays: true } },
+              {
+                $addFields: {
+                  room: {
+                    _id: "$room._id",
+                    roomNumber: "$room.roomNumber",
+                    area: { _id: "$roomArea._id", name: "$roomArea.name" },
+                  },
+                },
+              },
+              {
+                $project: {
+                  registration: 1,
+                  application: 1,
+                  user: {
+                    _id: "$user._id",
+                    fullName: "$user.fullName",
+                    email: "$user.email",
+                    phone: "$user.phone",
+                    studentId: "$user.studentId",
+                    gender: "$user.gender",
+                    citizenId: "$user.citizenId",
+                    dateOfBirth: "$user.dateOfBirth",
+                    faculty: "$user.faculty",
+                    major: "$user.major",
+                  },
+                  room: 1,
+                  startDate: 1,
+                  endDate: 1,
+                  status: 1,
+                  contractNumber: 1,
+                  terms: 1,
+                  signedAt: 1,
+                  createdBy: 1,
+                  paymentConfirmedAt: 1,
+                  paymentConfirmedBy: 1,
+                  monthlyRent: 1,
+                  depositAmount: 1,
+                  createdAt: 1,
+                  updatedAt: 1,
+                },
+              },
+            ],
+            total: [{ $count: "count" }],
+          },
+        },
+      ];
+
+      const agg = await Contract.aggregate(pipeline);
+      const items = agg?.[0]?.items || [];
+      const totalCount = agg?.[0]?.total?.[0]?.count || 0;
+      return res.json({ contracts: items, total: totalCount });
+    }
+
+    const contracts = await Contract.find(baseMatch)
+      .populate("user", "fullName email phone studentId gender citizenId dateOfBirth faculty major")
       .populate({
         path: "room",
         populate: [
@@ -70,10 +204,10 @@ exports.getAll = async (req, res) => {
           { path: "roomLeader", select: "_id fullName" },
         ],
       })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit))
+      .skip((pageNum - 1) * lim)
+      .limit(lim)
       .sort({ createdAt: -1 });
-    const total = await Contract.countDocuments(filter);
+    const total = await Contract.countDocuments(baseMatch);
     res.json({ contracts, total });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -228,6 +362,111 @@ exports.getById = async (req, res) => {
   }
 };
 
+/**
+ * Admin/Manager: Student 360 view for a contract.
+ * GET /api/contracts/:id/360
+ */
+exports.get360 = async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "ID hợp đồng không hợp lệ" });
+    }
+
+    const contract = await Contract.findById(id)
+      .populate("user", "fullName email phone studentId gender citizenId dateOfBirth avatar className major faculty enrollmentDate homeroomTeacher addressNative addressPermanent addressTemporary addressAbsent address familyFatherName familyFatherPhone familyMotherName familyMotherPhone familyEmergencyPhone")
+      .populate({
+        path: "room",
+        populate: [{ path: "area", select: "name genderPolicy" }, { path: "roomLeader", select: "_id fullName studentId" }],
+      })
+      .lean();
+    if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+
+    const userId = String(contract.user?._id || contract.user || "");
+    const roomId = String(contract.room?._id || contract.room || "");
+    const now = new Date();
+
+    // Residence: contract history (latest first)
+    const contracts = await Contract.find({ user: userId })
+      .populate({ path: "room", populate: { path: "area", select: "name" } })
+      .sort({ startDate: -1, createdAt: -1 })
+      .lean();
+    const activeContract =
+      contracts.find((c) => c.status === "active" && new Date(c.endDate) >= now) ||
+      contracts.find((c) => c.status === "active") ||
+      contracts.find((c) => c.status === "pending_payment") ||
+      null;
+
+    // Financial: bills for this contract + unpaid for this user
+    const [billsByContract, unpaidBills] = await Promise.all([
+      Bill.find({ contract: contract._id })
+        .sort({ year: -1, month: -1, createdAt: -1 })
+        .lean(),
+      Bill.find({ user: userId, status: { $in: ["pending", "unpaid", "overdue"] } })
+        .sort({ dueDate: 1, year: -1, month: -1 })
+        .lean(),
+    ]);
+    const debtTotal = unpaidBills.reduce((sum, b) => sum + Number(b.total || 0), 0);
+
+    // Violations (by user or by room if splitToRoom)
+    const violations = await Violation.find({
+      $or: [{ user: contract.user?._id || contract.user }, { room: contract.room?._id || contract.room }],
+    })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+    const violationCount = violations.filter((v) => v.status === "pending").length;
+
+    // Maintenance reports (room/user)
+    const maintenanceReports = await MaintenanceReport.find({ $or: [{ room: roomId }, { user: userId }] })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    // Timeline (minimal v1)
+    const timeline = [];
+    if (contract.createdAt) timeline.push({ type: "contract_created", at: contract.createdAt, title: "Tạo hợp đồng", meta: { contractNumber: contract.contractNumber } });
+    if (contract.signedAt) timeline.push({ type: "student_signed", at: contract.signedAt, title: "Sinh viên ký xác nhận" });
+    if (contract.paymentConfirmedAt) timeline.push({ type: "admin_confirmed", at: contract.paymentConfirmedAt, title: "Admin xác nhận (hợp đồng có hiệu lực)" });
+    for (const b of billsByContract) {
+      timeline.push({ type: "bill_created", at: b.createdAt, title: `Tạo hóa đơn ${b.month}/${b.year}`, meta: { status: b.status, total: b.total } });
+      if (b.paidAt) timeline.push({ type: "bill_paid", at: b.paidAt, title: `Thanh toán hóa đơn ${b.month}/${b.year}`, meta: { total: b.total, method: b.paymentMethod } });
+    }
+    for (const v of violations.slice(0, 20)) {
+      timeline.push({ type: "violation", at: v.createdAt, title: `Vi phạm: ${v.ruleName || "—"}`, meta: { severity: v.severity, status: v.status } });
+    }
+    for (const r of maintenanceReports.slice(0, 20)) {
+      timeline.push({ type: "maintenance", at: r.createdAt, title: `Báo sự cố: ${r.incidentType}`, meta: { status: r.status } });
+    }
+    timeline.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+
+    res.json({
+      contract,
+      student: contract.user || null,
+      residence: {
+        currentRoom: activeContract?.room || contract.room || null,
+        activeContract: activeContract || null,
+        contractHistory: contracts,
+      },
+      financial: {
+        debtTotal,
+        unpaidBills,
+        billsByContract,
+      },
+      violations: {
+        pendingCount: violationCount,
+        items: violations,
+      },
+      maintenance: {
+        items: maintenanceReports,
+      },
+      timeline,
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
 exports.extend = async (req, res) => {
   try {
     const contract = await Contract.findById(req.params.id);
@@ -312,6 +551,13 @@ exports.confirmPayment = async (req, res) => {
     contract.paymentConfirmedAt = new Date();
     contract.paymentConfirmedBy = req.user._id;
     await contract.save();
+
+    // Auto assign bed (best effort) when contract becomes active
+    try {
+      await tryAutoAssignBed(contract, req.user?._id);
+    } catch {
+      // best-effort: bed assignment can be done manually later
+    }
 
     const io = getIO();
     io.emit("registration:approved", {

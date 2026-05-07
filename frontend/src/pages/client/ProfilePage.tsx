@@ -19,10 +19,11 @@ import {
   Grid,
   Divider,
   Flex,
+  Select,
 } from "antd";
 import dayjs from "dayjs";
 import { EditOutlined, HomeOutlined, UserOutlined, IdcardOutlined, BookOutlined, PhoneOutlined } from "@ant-design/icons";
-import { authApi, studentsApi } from "../../api";
+import { authApi, majorsApi, studentsApi } from "../../api";
 import type { StudentProfileResponse } from "../../types";
 import { useAuth } from "../../contexts/AuthContext";
 import { setUserString } from "../../utils/authStorage";
@@ -130,6 +131,8 @@ interface ProfilePayload {
   avatar?: string;
 }
 
+type MajorOption = { _id: string; name: string; faculty?: string; isActive?: boolean };
+
 const ProfilePage: React.FC = () => {
   const screens = Grid.useBreakpoint();
   const { setUser } = useAuth();
@@ -141,6 +144,7 @@ const ProfilePage: React.FC = () => {
   const [dashMeta, setDashMeta] = useState<{ studentStatus?: string; memberStatusLabel?: string }>({});
   /** Sinh viên đã đủ hồ sơ: bật form khi bấm «Chỉnh sửa hồ sơ» */
   const [editingProfile, setEditingProfile] = useState(false);
+  const [majorOptions, setMajorOptions] = useState<MajorOption[]>([]);
 
   const syncAuthUser = useCallback((p: ProfilePayload) => {
     setUser((prev) => {
@@ -220,6 +224,17 @@ const ProfilePage: React.FC = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await majorsApi.getAll({ active: true });
+        setMajorOptions(((res.data?.items || []) as MajorOption[]).filter((m) => m && m.isActive !== false));
+      } catch {
+        setMajorOptions([]);
+      }
+    })();
+  }, []);
 
   const onFinishStudent = async (v: Record<string, unknown>) => {
     setSaving(true);
@@ -458,7 +473,21 @@ const ProfilePage: React.FC = () => {
           </Col>
           <Col xs={24} lg={12}>
             <Form.Item label="Chuyên ngành" name="major">
-              <Input size="large" allowClear />
+              {majorOptions.length ? (
+                <Select
+                  size="large"
+                  allowClear
+                  showSearch
+                  placeholder="Chọn ngành"
+                  optionFilterProp="label"
+                  options={majorOptions.map((m) => ({
+                    value: m.name,
+                    label: m.faculty ? `${m.name} — ${m.faculty}` : m.name,
+                  }))}
+                />
+              ) : (
+                <Input size="large" allowClear placeholder="Nhập ngành" />
+              )}
             </Form.Item>
           </Col>
           <Col xs={24} lg={12}>

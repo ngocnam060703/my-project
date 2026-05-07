@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Tag, Space, Row, Col, Statistic, List, Checkbox, Descriptions, Spin } from "antd";
+import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Tag, Space, Row, Col, Statistic, List, Checkbox, Descriptions, Spin, Tabs, Tooltip } from "antd";
 import { PlusOutlined, ApartmentOutlined, EditOutlined, DeleteOutlined, FilterOutlined, EyeOutlined, DownloadOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
 import { roomsApi, areasApi, facilitiesApi, studentsApi } from "../../api";
-import type { Room, StudentProfileResponse } from "../../types";
+import type { Bed, Room, StudentProfileResponse } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
   available: { color: "green", text: "Còn trống" },
@@ -42,6 +42,9 @@ const RoomsPage: React.FC = () => {
   const [detailResidentsLoading, setDetailResidentsLoading] = useState<Record<string, boolean>>({});
   const [studentDetailModal, setStudentDetailModal] = useState<StudentProfileResponse | null>(null);
   const [studentDetailLoading, setStudentDetailLoading] = useState(false);
+  const [bedsByRoom, setBedsByRoom] = useState<Record<string, Bed[]>>({});
+  const [bedsLoadingByRoom, setBedsLoadingByRoom] = useState<Record<string, boolean>>({});
+  const [assigningBedId, setAssigningBedId] = useState<string | null>(null);
   const [residentModal, setResidentModal] = useState<{
     open: boolean;
     roomId?: string;
@@ -266,6 +269,36 @@ const RoomsPage: React.FC = () => {
       setDetailResidents((m) => ({ ...m, [r._id]: [] }));
     } finally {
       setDetailResidentsLoading((m) => ({ ...m, [r._id]: false }));
+    }
+  };
+
+  const loadBedsForRoom = async (roomId: string) => {
+    if (bedsByRoom[roomId]) return;
+    setBedsLoadingByRoom((m) => ({ ...m, [roomId]: true }));
+    try {
+      const res = await roomsApi.getBeds(roomId);
+      setBedsByRoom((m) => ({ ...m, [roomId]: (res.data?.beds || []) as Bed[] }));
+    } catch {
+      message.error("Không tải được danh sách giường");
+      setBedsByRoom((m) => ({ ...m, [roomId]: [] }));
+    } finally {
+      setBedsLoadingByRoom((m) => ({ ...m, [roomId]: false }));
+    }
+  };
+
+  const assignResidentToBed = async (roomId: string, bedId: string, contractId: string) => {
+    setAssigningBedId(bedId);
+    try {
+      await roomsApi.assignBed(roomId, { bedId, contractId });
+      message.success("Đã phân giường");
+      // refresh beds + residents (best effort)
+      const [bedsRes, residentsRes] = await Promise.all([roomsApi.getBeds(roomId), roomsApi.getResidents(roomId)]);
+      setBedsByRoom((m) => ({ ...m, [roomId]: (bedsRes.data?.beds || []) as Bed[] }));
+      setDetailResidents((m) => ({ ...m, [roomId]: residentsRes.data?.residents || [] }));
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không phân giường được");
+    } finally {
+      setAssigningBedId(null);
     }
   };
 
@@ -535,34 +568,139 @@ const RoomsPage: React.FC = () => {
             })()}
 
             <div style={{ marginTop: 12 }}>
-              <strong>Danh sách sinh viên đang ở</strong>
-              <div style={{ marginTop: 8 }}>
-                {detailResidentsLoading[detailModal._id] ? (
-                  <div style={{ padding: 16, textAlign: "center" }}>
-                    <Spin />
-                  </div>
-                ) : (
-                  <Table
-                    size="small"
-                    pagination={false}
-                    rowKey={(it: ResidentRow) => it.contractId || it.user?._id || Math.random().toString(16)}
-                    dataSource={detailResidents[detailModal._id] || []}
-                    columns={[
-                      { title: "Tên", key: "name", render: (_: unknown, it: ResidentRow) => it.user?.fullName || "-" },
-                      { title: "Giới tính", key: "gender", width: 90, render: (_: unknown, it: ResidentRow) => it.user?.gender || "-" },
-                      { title: "SĐT", key: "phone", width: 130, render: (_: unknown, it: ResidentRow) => it.user?.phone || "-" },
-                      { title: "Ngày vào ở", key: "startDate", width: 120, render: (_: unknown, it: ResidentRow) => (it.startDate ? new Date(it.startDate).toLocaleDateString("vi-VN") : "-") },
-                    ]}
-                    onRow={(it) => ({
-                      onClick: () => {
-                        if (it.user?._id) void openStudentDetail(it.user._id);
-                      },
-                      style: { cursor: it.user?._id ? "pointer" : "default" },
-                    })}
-                    locale={{ emptyText: "Phòng chưa có sinh viên ở" }}
-                  />
-                )}
-              </div>
+              <Tabs
+                defaultActiveKey="residents"
+                items={[
+                  {
+                    key: "residents",
+                    label: "Sinh viên đang ở",
+                    children: (
+                      <div style={{ marginTop: 8 }}>
+                        {detailResidentsLoading[detailModal._id] ? (
+                          <div style={{ padding: 16, textAlign: "center" }}>
+                            <Spin />
+                          </div>
+                        ) : (
+                          <Table
+                            size="small"
+                            pagination={false}
+                            rowKey={(it: ResidentRow) => it.contractId || it.user?._id || Math.random().toString(16)}
+                            dataSource={detailResidents[detailModal._id] || []}
+                            columns={[
+                              { title: "STT", key: "stt", width: 60, render: (_: unknown, __: ResidentRow, idx: number) => idx + 1 },
+                              { title: "Tên", key: "name", render: (_: unknown, it: ResidentRow) => it.user?.fullName || "-" },
+                              { title: "MSSV", key: "studentId", width: 110, render: (_: unknown, it: ResidentRow) => (it.user as any)?.studentId || "-" },
+                              { title: "Email", key: "email", width: 200, render: (_: unknown, it: ResidentRow) => (it.user as any)?.email || "-" },
+                              { title: "Giới tính", key: "gender", width: 90, render: (_: unknown, it: ResidentRow) => it.user?.gender || "-" },
+                              { title: "SĐT", key: "phone", width: 130, render: (_: unknown, it: ResidentRow) => it.user?.phone || "-" },
+                              { title: "Ngày vào ở", key: "startDate", width: 120, render: (_: unknown, it: ResidentRow) => (it.startDate ? new Date(it.startDate).toLocaleDateString("vi-VN") : "-") },
+                            ]}
+                            onRow={(it) => ({
+                              onClick: () => {
+                                if (it.user?._id) void openStudentDetail(it.user._id);
+                              },
+                              style: { cursor: it.user?._id ? "pointer" : "default" },
+                            })}
+                            locale={{ emptyText: "Phòng chưa có sinh viên ở" }}
+                          />
+                        )}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "beds",
+                    label: "Bed Layout",
+                    children: (
+                      <div style={{ marginTop: 8 }}>
+                        <Button
+                          size="small"
+                          onClick={() => void loadBedsForRoom(detailModal._id)}
+                          disabled={!!bedsByRoom[detailModal._id]}
+                          style={{ marginBottom: 12 }}
+                        >
+                          Tải danh sách giường
+                        </Button>
+
+                        {bedsLoadingByRoom[detailModal._id] ? (
+                          <div style={{ padding: 16, textAlign: "center" }}>
+                            <Spin />
+                          </div>
+                        ) : null}
+
+                        {bedsByRoom[detailModal._id] ? (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                            {(bedsByRoom[detailModal._id] || []).map((b) => {
+                              const st = String((b as any).status || "");
+                              const color =
+                                st === "occupied" ? "#16a34a" :
+                                st === "available" ? "#e5e7eb" :
+                                st === "reserved" ? "#38bdf8" :
+                                st === "maintenance" ? "#fb923c" :
+                                st === "locked" ? "#ef4444" : "#e5e7eb";
+                              const textColor = st === "available" ? "#111827" : "#0b1020";
+                              const occupant = (b as any).currentUser;
+                              const title = occupant && typeof occupant === "object"
+                                ? `${occupant.fullName || "—"} (${occupant.studentId || "-"})`
+                                : "Trống";
+
+                              const residents = detailResidents[detailModal._id] || [];
+                              const canAssign = st === "available" && residents.length > 0;
+
+                              return (
+                                <Tooltip key={(b as any)._id} title={title}>
+                                  <div
+                                    style={{
+                                      border: "1px solid #e5e7eb",
+                                      borderRadius: 10,
+                                      padding: 10,
+                                      background: color,
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      gap: 10,
+                                    }}
+                                  >
+                                    <div>
+                                      <div style={{ fontWeight: 700, color: textColor }}>{(b as any).code}</div>
+                                      <div style={{ fontSize: 12, color: textColor, opacity: 0.9 }}>
+                                        {st === "occupied" && occupant && typeof occupant === "object" ? (occupant.fullName || "Đang ở") : st}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      {canAssign ? (
+                                        <Select
+                                          size="small"
+                                          style={{ width: 210 }}
+                                          placeholder="Chọn SV để phân"
+                                          onChange={(v) => void assignResidentToBed(detailModal._id, (b as any)._id, String(v))}
+                                          loading={assigningBedId === (b as any)._id}
+                                          value={undefined}
+                                        >
+                                          {residents.map((r) => (
+                                            <Select.Option key={r.contractId} value={r.contractId}>
+                                              {r.user?.fullName || "—"} ({(r.user as any)?.studentId || "-"})
+                                            </Select.Option>
+                                          ))}
+                                        </Select>
+                                      ) : (
+                                        <span style={{ fontSize: 12, color: textColor, opacity: 0.85 }}>
+                                          {st === "occupied" ? "Đã có SV" : "—"}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </Tooltip>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div style={{ color: "#6b7280" }}>Chưa tải giường.</div>
+                        )}
+                      </div>
+                    ),
+                  },
+                ]}
+              />
             </div>
           </div>
         )}

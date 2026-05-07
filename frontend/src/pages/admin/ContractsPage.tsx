@@ -21,10 +21,15 @@ import {
   DownloadOutlined,
   FilterOutlined,
   CalendarOutlined,
+  FileDoneOutlined,
+  ClockCircleOutlined,
+  WarningOutlined,
+  DollarOutlined,
 } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { contractsApi, client } from "../../api";
-import type { Contract, ContractExtendRequest, User } from "../../types";
+import { contractsApi, client, opsContractsApi } from "../../api";
+import { areasApi } from "../../api";
+import type { Area, Contract, ContractExtendRequest, User } from "../../types";
 import dayjs from "dayjs";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -46,9 +51,26 @@ const ContractsPage: React.FC = () => {
   const [extendModal, setExtendModal] = useState<Contract | null>(null);
   const [form] = Form.useForm();
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<{ status?: string; room?: string }>({});
+  const [filters, setFilters] = useState<{ status?: string; room?: string; area?: string }>({});
+  const [quick, setQuick] = useState<{ hasDebt?: boolean }>({});
+  const [search, setSearch] = useState("");
+  const [faculty, setFaculty] = useState("");
+  const [major, setMajor] = useState("");
+  const [areas, setAreas] = useState<Array<Pick<Area, "_id" | "name">>>([]);
   const [extendReqs, setExtendReqs] = useState<ContractExtendRequest[]>([]);
   const [rejectExt, setRejectExt] = useState<{ id: string; note: string } | null>(null);
+  const [ops, setOps] = useState<{
+    activeContracts: number;
+    expiringSoonContracts: number;
+    studentsWithDebt: number;
+    pendingViolations: number;
+    pendingRenewalRequests: number;
+    pendingTransferRequests: number;
+    occupancyRate: number;
+    roomsOverCapacity: number;
+    roomsMaintenance: number;
+    pendingMaintenanceReports: number;
+  } | null>(null);
 
   const loadExtendRequests = async () => {
     try {
@@ -65,6 +87,11 @@ const ContractsPage: React.FC = () => {
       const params: Record<string, unknown> = { page, limit: 10 };
       if (filters.status) params.status = filters.status;
       if (filters.room) params.room = filters.room;
+      if (filters.area) params.area = filters.area;
+      if (quick.hasDebt) params.hasDebt = 1;
+      if (search.trim()) params.search = search.trim();
+      if (faculty.trim()) params.faculty = faculty.trim();
+      if (major.trim()) params.major = major.trim();
       const [res, roomsRes] = await Promise.all([
         client.get("/contracts", { params }),
         client.get("/rooms"),
@@ -85,7 +112,21 @@ const ContractsPage: React.FC = () => {
 
   useEffect(() => {
     void load();
-  }, [page, filters.status, filters.room]);
+  }, [page, filters.status, filters.room, filters.area, quick.hasDebt, search, faculty, major]);
+
+  useEffect(() => {
+    areasApi
+      .getAll()
+      .then((res) => setAreas((res.data?.areas ?? res.data ?? []) as Array<Pick<Area, "_id" | "name">>))
+      .catch(() => setAreas([]));
+  }, []);
+
+  useEffect(() => {
+    opsContractsApi
+      .dashboard()
+      .then((res) => setOps(res.data?.cards || null))
+      .catch(() => setOps(null));
+  }, []);
 
   const handleTerminate = (c: Contract) => {
     Modal.confirm({
@@ -120,9 +161,14 @@ const ContractsPage: React.FC = () => {
   };
 
   const activeCount = data.filter((c) => c.status === "active").length;
-  const terminatedCount = data.filter((c) => c.status === "terminated").length;
 
   const columns = [
+    {
+      title: "STT",
+      key: "stt",
+      width: 70,
+      render: (_: unknown, __: Contract, idx: number) => (page - 1) * 10 + idx + 1,
+    },
     {
       title: "Số HĐ",
       dataIndex: "contractNumber",
@@ -135,6 +181,20 @@ const ContractsPage: React.FC = () => {
       key: "user",
       width: 160,
       render: (_: unknown, r: Contract) => (r.user ? (typeof r.user === "object" ? (r.user as { fullName?: string }).fullName : r.user) : "-"),
+    },
+    {
+      title: "MSSV",
+      key: "studentId",
+      width: 100,
+      render: (_: unknown, r: Contract) =>
+        r.user && typeof r.user === "object" ? String((r.user as User).studentId || "-") : "-",
+    },
+    {
+      title: "Giới tính",
+      key: "gender",
+      width: 90,
+      render: (_: unknown, r: Contract) =>
+        r.user && typeof r.user === "object" ? String((r.user as User).gender || "-") : "-",
     },
     {
       title: "Phòng",
@@ -221,11 +281,27 @@ const ContractsPage: React.FC = () => {
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Quản lý hợp đồng</h2>
+        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Dorm Operations Center — Hợp đồng lưu trú</h2>
         <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
-          Xem, gia hạn, chấm dứt và xác nhận hợp đồng
+          Trung tâm vận hành lưu trú: hợp đồng, công nợ, vi phạm, gia hạn, chuyển phòng.
         </p>
       </div>
+
+      <Card style={{ borderRadius: 12, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <Input.Search
+            placeholder="Tìm kiếm theo tên hoặc MSSV"
+            allowClear
+            style={{ width: 420, maxWidth: "100%" }}
+            value={search}
+            onChange={(e) => {
+              setPage(1);
+              setSearch(e.target.value);
+            }}
+            onSearch={() => void load()}
+          />
+        </div>
+      </Card>
 
       {extendReqs.length > 0 && (
         <Card title="Yêu cầu gia hạn từ sinh viên (chờ duyệt)" style={{ marginBottom: 24, borderRadius: 12 }} size="small">
@@ -317,31 +393,93 @@ const ContractsPage: React.FC = () => {
       </Modal>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} md={6}>
           <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
-            <Statistic
-              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Hợp đồng đang hiệu lực</span>}
-              value={activeCount}
-              suffix="hợp đồng"
-              valueStyle={{ color: "#fff", fontSize: 20 }}
-            />
+            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}><FileDoneOutlined /> HĐ hiệu lực</span>} value={ops?.activeContracts ?? activeCount} suffix="hđ" valueStyle={{ color: "#fff", fontSize: 20 }} />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} md={6}>
           <Card>
-            <Statistic title="Đã chấm dứt" value={terminatedCount} suffix="hợp đồng" />
+            <Statistic title={<span><ClockCircleOutlined /> Sắp hết hạn (≤30 ngày)</span>} value={ops?.expiringSoonContracts ?? 0} suffix="hđ" />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} md={6}>
+          <Card
+            hoverable
+            onClick={() => {
+              setPage(1);
+              setQuick({ hasDebt: true });
+              void load();
+            }}
+          >
+            <Statistic title={<span><DollarOutlined /> SV còn nợ phí</span>} value={ops?.studentsWithDebt ?? 0} suffix="sv" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
           <Card>
-            <Statistic title="Tổng hợp đồng" value={total} suffix="hợp đồng" />
+            <Statistic title={<span><WarningOutlined /> Vi phạm chờ xử lý</span>} value={ops?.pendingViolations ?? 0} suffix="vụ" />
           </Card>
         </Col>
+
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic title={<span><CalendarOutlined /> Yêu cầu gia hạn</span>} value={ops?.pendingRenewalRequests ?? extendReqs.length} suffix="y/c" />
+          </Card>
+        </Col>
+        <Col xs={0} md={18} />
       </Row>
+
+      {quick.hasDebt ? (
+        <div style={{ margin: "-8px 0 16px 0" }}>
+          <Tag closable color="red" onClose={() => setQuick({})}>
+            Đang lọc: Sinh viên còn nợ phí
+          </Tag>
+        </div>
+      ) : null}
 
       <Card style={{ borderRadius: 12 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20, alignItems: "center" }}>
           <FilterOutlined style={{ color: "#6b7280" }} />
+          <Input
+            placeholder="Lọc theo khoa"
+            allowClear
+            style={{ width: 160 }}
+            value={faculty}
+            onChange={(e) => {
+              setPage(1);
+              setFaculty(e.target.value);
+            }}
+            onPressEnter={() => void load()}
+          />
+          <Input
+            placeholder="Lọc theo ngành"
+            allowClear
+            style={{ width: 160 }}
+            value={major}
+            onChange={(e) => {
+              setPage(1);
+              setMajor(e.target.value);
+            }}
+            onPressEnter={() => void load()}
+          />
+          <Select
+            placeholder="Lọc theo khu"
+            allowClear
+            style={{ width: 180 }}
+            value={filters.area}
+            onChange={(v) => {
+              setFilters((f) => ({ ...f, area: v }));
+              setPage(1);
+            }}
+            showSearch
+            optionFilterProp="children"
+          >
+            {areas.map((a) => (
+              <Select.Option key={a._id} value={a._id}>
+                {a.name}
+              </Select.Option>
+            ))}
+          </Select>
           <Select
             placeholder="Trạng thái"
             allowClear
@@ -378,6 +516,10 @@ const ContractsPage: React.FC = () => {
           <Button
             onClick={() => {
               setFilters({});
+              setSearch("");
+              setFaculty("");
+              setMajor("");
+              setQuick({});
               setPage(1);
             }}
           >
@@ -388,9 +530,14 @@ const ContractsPage: React.FC = () => {
             icon={<DownloadOutlined />}
             onClick={() =>
               exportToExcel(
-                data.map((c) => ({
+                data.map((c, idx) => ({
+                  STT: (page - 1) * 10 + idx + 1,
                   "Số HĐ": c.contractNumber,
                   "Sinh viên": c.user && typeof c.user === "object" ? (c.user as { fullName?: string }).fullName : "-",
+                  MSSV: c.user && typeof c.user === "object" ? (c.user as User).studentId || "-" : "-",
+                  "Giới tính": c.user && typeof c.user === "object" ? (c.user as User).gender || "-" : "-",
+                  Khoa: c.user && typeof c.user === "object" ? (c.user as User).faculty || "-" : "-",
+                  Ngành: c.user && typeof c.user === "object" ? (c.user as User).major || "-" : "-",
                   "Phòng": c.room && typeof c.room === "object" ? (c.room as { roomNumber?: string }).roomNumber : "-",
                   "Từ ngày": c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "-",
                   "Đến ngày": c.endDate ? new Date(c.endDate).toLocaleDateString("vi-VN") : "-",

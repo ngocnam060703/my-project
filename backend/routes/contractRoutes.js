@@ -44,6 +44,7 @@ router.post(
 
 router.post("/", requireRole("admin", "manager"), contractController.create);
 router.get(["/", ""], requireRole("admin", "manager"), contractController.getAll);
+router.get("/:id/360", requireRole("admin", "manager"), contractController.get360);
 router.get("/:id", contractController.getById);
 router.put("/:id/extend", requireRole("admin", "manager"), contractController.extend);
 router.put("/:id/terminate", requireRole("admin", "manager"), contractController.terminate);

@@ -179,6 +179,14 @@ export const zonesApi = {
       return fetchZoneDetailViaAreaAndRooms(id);
     }
   },
+  getResidents: async (id: string) => {
+    try {
+      return await client.get(`/zones/${id}/residents`);
+    } catch (e) {
+      if (!isZonesEndpointMissing(e)) throw e;
+      return await client.get(`/areas/${id}/residents`);
+    }
+  },
   create: (data: Record<string, unknown>) => client.post("/zones", data),
   update: (id: string, data: Record<string, unknown>) => client.patch(`/zones/${id}`, data),
   delete: (id: string) => client.delete(`/zones/${id}`),
@@ -189,10 +197,19 @@ export const roomsApi = {
     client.get("/rooms", { params }),
   getById: (id: string) => client.get(`/rooms/${id}`),
   getResidents: (id: string) => client.get(`/rooms/${id}/residents`),
+  getBeds: (id: string) => client.get(`/rooms/${id}/beds`),
+  assignBed: (roomId: string, payload: { bedId: string; contractId: string }) => client.post(`/rooms/${roomId}/beds/assign`, payload),
   setRoomLeader: (id: string, userId: string) => client.put(`/rooms/${id}/room-leader`, { userId }),
   create: (data: Record<string, unknown>) => client.post("/rooms", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/rooms/${id}`, data),
   delete: (id: string) => client.delete(`/rooms/${id}`),
+};
+
+export const majorsApi = {
+  getAll: (params?: { q?: string; faculty?: string; active?: boolean }) => client.get("/majors", { params }),
+  create: (data: { name: string; faculty?: string }) => client.post("/majors", data),
+  update: (id: string, data: { name?: string; faculty?: string; isActive?: boolean }) => client.patch(`/majors/${id}`, data),
+  delete: (id: string) => client.delete(`/majors/${id}`),
 };
 
 export const registrationsApi = {
@@ -277,8 +294,9 @@ export const contractsApi = {
   /** GET /api/my-contract — sinh viên: hợp đồng + lịch sử gia hạn */
   getMyContractOverview: () => client.get<MyContractOverview>("/my-contract"),
   getById: (id: string) => client.get(`/contracts/${id}`),
-  getAll: (params?: { status?: string; user?: string; room?: string; page?: number; limit?: number }) =>
+  getAll: (params?: { status?: string; user?: string; room?: string; search?: string; faculty?: string; major?: string; area?: string; hasDebt?: boolean; page?: number; limit?: number }) =>
     client.get("/contracts", { params }),
+  get360: (id: string) => client.get(`/contracts/${encodeURIComponent(id)}/360`),
   /** CRUD — giao diện admin có thể ẩn; gọi khi cần (Postman / tích hợp). */
   create: (data: Record<string, unknown>) => client.post("/contracts", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/contracts/${encodeURIComponent(String(id))}`, data),
@@ -295,6 +313,10 @@ export const contractsApi = {
   approveExtendRequest: (requestId: string) => client.patch(`/contracts/extend-requests/${encodeURIComponent(requestId)}/approve`),
   rejectExtendRequest: (requestId: string, note: string) =>
     client.patch(`/contracts/extend-requests/${encodeURIComponent(requestId)}/reject`, { note }),
+};
+
+export const opsContractsApi = {
+  dashboard: () => client.get("/ops/contracts/dashboard"),
 };
 
 export const billsApi = {

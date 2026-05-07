@@ -34,6 +34,7 @@ const AdminLayout: React.FC = () => {
     { key: "/admin", icon: <DashboardOutlined />, label: "Dashboard" },
     { key: "/admin/users", icon: <TeamOutlined />, label: "Quản lý người dùng" },
     { key: "/admin/students", icon: <UserOutlined />, label: "Hồ sơ sinh viên" },
+    { key: "/admin/majors", icon: <AppstoreOutlined />, label: "Danh mục ngành" },
     { key: "/admin/housing", icon: <HomeOutlined />, label: "Quản lý khu & phòng" },
     { key: "/admin/applications", icon: <FileTextOutlined />, label: "Đơn KTX & xét duyệt đăng ký" },
     { key: "/admin/contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
