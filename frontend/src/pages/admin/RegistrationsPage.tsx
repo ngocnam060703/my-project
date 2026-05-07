@@ -20,13 +20,24 @@ type RegistrationsPageProps = { embedded?: boolean };
 const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false }) => {
   const [data, setData] = useState<Registration[]>([]);
   const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<{ pending: number; approved: number; rejected: number }>({ pending: 0, approved: 0, rejected: 0 });
   const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { name: string } }[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<{ status?: string; room?: string }>({ status: "all" });
+  const [datePreset, setDatePreset] = useState<"7d" | "14d" | "month">("14d");
   const [rejectModal, setRejectModal] = useState<{ id: string } | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [detailModal, setDetailModal] = useState<Registration | null>(null);
+
+  const presetDays = (): number => {
+    if (datePreset === "7d") return 7;
+    if (datePreset === "14d") return 14;
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const diffDays = Math.floor((now.getTime() - start.getTime()) / 86400000) + 1;
+    return Math.max(1, Math.min(90, diffDays));
+  };
 
   const load = async () => {
     setLoading(true);
@@ -34,12 +45,14 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
       const params: Record<string, unknown> = { page, limit: 10 };
       if (filters.status && filters.status !== "all") params.status = filters.status;
       if (filters.room) params.room = filters.room;
+      params.days = presetDays();
       const [res, roomsRes] = await Promise.all([
         client.get("/registrations", { params }),
         client.get("/rooms"),
       ]);
       setData(res.data.registrations || []);
       setTotal(res.data.total || 0);
+      setStats(res.data.stats || { pending: 0, approved: 0, rejected: 0 });
       setRooms(roomsRes.data.rooms || []);
     } catch {
       message.error("Không tải được dữ liệu");
@@ -48,7 +61,7 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
     }
   };
 
-  useEffect(() => { load(); }, [page, filters.status, filters.room]);
+  useEffect(() => { load(); }, [page, filters.status, filters.room, datePreset]);
 
   const handleApprove = (id: string) => {
     Modal.confirm({
@@ -112,7 +125,7 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
     return "";
   };
 
-  const pendingCount = data.filter((r) => r.status === "pending").length;
+  const pendingCount = stats.pending ?? data.filter((r) => r.status === "pending").length;
 
   const columns = [
     {
@@ -211,7 +224,7 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
         </Col>
         <Col xs={24} sm={8}>
           <Card>
-            <Statistic title="Đã duyệt" value={data.filter((r) => r.status === "approved").length} suffix="đơn" />
+            <Statistic title="Đã duyệt" value={stats.approved ?? data.filter((r) => r.status === "approved").length} suffix="đơn" />
           </Card>
         </Col>
         <Col xs={24} sm={8}>
@@ -220,6 +233,22 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
           </Card>
         </Col>
       </Row>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+        <Select
+          size="small"
+          style={{ width: 180 }}
+          value={datePreset}
+          onChange={(v) => {
+            setPage(1);
+            setDatePreset(v);
+          }}
+        >
+          <Select.Option value="7d">7 ngày gần nhất</Select.Option>
+          <Select.Option value="14d">14 ngày gần nhất</Select.Option>
+          <Select.Option value="month">Tháng này</Select.Option>
+        </Select>
+      </div>
 
       <Card style={{ borderRadius: 12 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20, alignItems: "center" }}>

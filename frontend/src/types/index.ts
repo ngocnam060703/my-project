@@ -103,6 +103,7 @@ export interface DormApplication {
   semester: string;
   schoolYear: string;
   startDate?: string;
+  priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
   status: "pending" | "approved" | "rejected";
   assignedRoom?: Room | null;
   note?: string;

@@ -7,13 +7,21 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { applicationsApi } from "../../api";
-import type { DormApplication, Room } from "../../types";
+import { areasApi } from "../../api";
+import type { Area, DormApplication, Room } from "../../types";
 import RegistrationsPanel from "./RegistrationsPage";
 
 const statusBadge: Record<string, { cls: string; text: string }> = {
   pending: { cls: "text-bg-warning", text: "Chờ duyệt" },
   approved: { cls: "text-bg-success", text: "Đã duyệt" },
   rejected: { cls: "text-bg-danger", text: "Từ chối" },
+};
+
+const priorityLabel: Record<string, string> = {
+  none: "Bình thường",
+  ho_ngheo: "Hộ nghèo",
+  con_thuong_binh: "Con thương binh",
+  chinh_sach: "Chính sách",
 };
 
 function formatGender(g?: string) {
@@ -27,6 +35,11 @@ function studentName(app: DormApplication) {
   const u = app.user;
   if (u && typeof u === "object" && "fullName" in u) return String((u as { fullName?: string }).fullName || "-");
   return "-";
+}
+
+function appStudentUser(app: DormApplication) {
+  const u = app.user;
+  return u && typeof u === "object" ? u : null;
 }
 
 function formatApiError(e: unknown): string {
@@ -52,7 +65,12 @@ function roomLabel(app: DormApplication) {
   const num = (r as Room).roomNumber;
   const area = (r as Room).area;
   const areaName = area && typeof area === "object" && "name" in area ? String((area as { name?: string }).name) : "";
-  return areaName ? `${num} (${areaName})` : String(num || "—");
+  const cap = Number((r as Room).capacity || 0);
+  const occ = Number((r as Room).currentOccupancy || 0);
+  const vacant = cap > 0 ? Math.max(0, cap - occ) : 0;
+  const vacancyLabel = cap > 0 ? `Trống ${vacant}/${cap}` : "";
+  const base = areaName ? `${num} (${areaName})` : String(num || "—");
+  return vacancyLabel ? `${base} - ${vacancyLabel}` : base;
 }
 
 type AdminApplicationsTab = "ktx" | "registrations";
@@ -72,29 +90,35 @@ const ApplicationsPage: React.FC = () => {
   const [limit] = useState(10);
   const [status, setStatus] = useState<string>("");
   const [search, setSearch] = useState("");
+  const [faculty, setFaculty] = useState("");
+  const [enrollmentYear, setEnrollmentYear] = useState("");
+  const [area, setArea] = useState<string>("");
+  const [priorityCategory, setPriorityCategory] = useState<string>("");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const [areas, setAreas] = useState<Array<Pick<Area, "_id" | "name">>>([]);
 
   const [detail, setDetail] = useState<DormApplication | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState("");
   const [suggest, setSuggest] = useState<{ room: Room; rules: string[] } | null>(null);
-  const [stats, setStats] = useState<{ date: string; count: number }[]>([]);
-  const [statsPreset, setStatsPreset] = useState<"7d" | "14d" | "month">("14d");
+  const [datePreset, setDatePreset] = useState<"7d" | "14d" | "month">("14d");
   const [assignModal, setAssignModal] = useState<{ appId: string; rooms: Room[] } | null>(null);
   const [assignRoomId, setAssignRoomId] = useState<string>("");
   const [chosenRoomByAppId, setChosenRoomByAppId] = useState<Record<string, Room | null>>({});
+  const [listStats, setListStats] = useState<{ pending: number; approved: number; total: number }>({ pending: 0, approved: 0, total: 0 });
 
-  const statsDays = useCallback((): number => {
-    if (statsPreset === "7d") return 7;
-    if (statsPreset === "14d") return 14;
+  const presetDays = useCallback((): number => {
+    if (datePreset === "7d") return 7;
+    if (datePreset === "14d") return 14;
     // month: from start of current month to today (cap 90 to match backend validator)
     const now = new Date();
     const start = new Date(now.getFullYear(), now.getMonth(), 1);
     const diffDays = Math.floor((now.getTime() - start.getTime()) / 86400000) + 1;
     return Math.max(1, Math.min(90, diffDays));
-  }, [statsPreset]);
+  }, [datePreset]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -106,25 +130,33 @@ const ApplicationsPage: React.FC = () => {
         sortOrder,
         ...(status ? { status } : {}),
         ...(search.trim() ? { search: search.trim() } : {}),
+        ...(faculty.trim() ? { faculty: faculty.trim() } : {}),
+        ...(enrollmentYear.trim() ? { enrollmentYear: Number(enrollmentYear.trim()) } : {}),
+        ...(area ? { area } : {}),
+        ...(priorityCategory ? { priorityCategory: priorityCategory as "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach" } : {}),
+        ...(presetDays() ? { days: presetDays() } : {}),
       });
       setRows(listRes.data.applications || []);
       setTotal(listRes.data.total || 0);
+      setListStats(listRes.data.stats ?? { pending: 0, approved: 0, total: 0 });
     } catch (e: unknown) {
       setErr(formatApiError(e));
     } finally {
       setLoading(false);
     }
-    try {
-      const statsRes = await applicationsApi.statsByDay({ days: statsDays() });
-      setStats(statsRes.data.series || []);
-    } catch {
-      setStats([]);
-    }
-  }, [page, limit, sortOrder, status, search, statsDays]);
+  }, [page, limit, sortOrder, status, search, faculty, enrollmentYear, area, priorityCategory, presetDays]);
 
   useEffect(() => {
     if (tab === "ktx") load();
   }, [load, tab]);
+
+  useEffect(() => {
+    if (tab !== "ktx") return;
+    areasApi
+      .getAll()
+      .then((res) => setAreas((res.data?.areas ?? res.data ?? []) as Array<Pick<Area, "_id" | "name">>))
+      .catch(() => setAreas([]));
+  }, [tab]);
 
   const openDetail = async (id: string) => {
     setLoading(true);
@@ -247,6 +279,36 @@ const ApplicationsPage: React.FC = () => {
         <RegistrationsPanel embedded />
       ) : (
         <>
+      <div className="row g-2 mb-3">
+        <div className="col-md-4">
+          <div className="card border-0 shadow-sm text-white" style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)" }}>
+            <div className="card-body py-3">
+              <div className="small" style={{ color: "rgba(255,255,255,0.85)" }}>Đơn chờ duyệt</div>
+              <div className="h5 mb-0 fw-semibold">{listStats.pending} đơn</div>
+            </div>
+          </div>
+        </div>
+        <div className="col-md-4">
+          <div className="card border-0 shadow-sm">
+            <div className="card-body py-3">
+              <div className="small text-muted">Đã duyệt</div>
+              <div className="h5 mb-0 fw-semibold">{listStats.approved} đơn</div>
+            </div>
+          </div>
+        </div>
+        <div className="col-md-4">
+          <div className="card border-0 shadow-sm">
+            <div className="card-body py-3">
+              <div className="small text-muted">Tổng đơn</div>
+              <div className="h5 mb-0 fw-semibold">{listStats.total} đơn</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p className="text-muted small mb-3">
+        Số liệu trên theo bộ lọc ngày / khoa / khóa / khu / ưu tiên / tên (không áp dụng ô &quot;Trạng thái&quot; bên dưới).
+      </p>
+
       <div className="row g-2 mb-3 align-items-end">
         <div className="col-md-3">
           <label className="form-label small mb-0">Trạng thái</label>
@@ -257,7 +319,40 @@ const ApplicationsPage: React.FC = () => {
             <option value="rejected">Từ chối</option>
           </select>
         </div>
-        <div className="col-md-4">
+        <div className="col-md-3">
+          <label className="form-label small mb-0">Lọc theo ngày</label>
+          <select
+            className="form-select form-select-sm"
+            value={datePreset}
+            onChange={(e) => {
+              setPage(1);
+              setDatePreset(e.target.value as "7d" | "14d" | "month");
+              load();
+            }}
+          >
+            <option value="7d">7 ngày gần nhất</option>
+            <option value="14d">14 ngày gần nhất</option>
+            <option value="month">Tháng này</option>
+          </select>
+        </div>
+        <div className="col-md-3">
+          <label className="form-label small mb-0">Đối tượng ưu tiên</label>
+          <select
+            className="form-select form-select-sm"
+            value={priorityCategory}
+            onChange={(e) => {
+              setPage(1);
+              setPriorityCategory(e.target.value);
+            }}
+          >
+            <option value="">Tất cả</option>
+            <option value="none">Bình thường</option>
+            <option value="ho_ngheo">Hộ nghèo</option>
+            <option value="con_thuong_binh">Con thương binh</option>
+            <option value="chinh_sach">Chính sách</option>
+          </select>
+        </div>
+        <div className="col-md-3">
           <label className="form-label small mb-0">Tìm theo tên sinh viên</label>
           <input
             className="form-control form-control-sm"
@@ -281,6 +376,69 @@ const ApplicationsPage: React.FC = () => {
         </div>
       </div>
 
+      <div className="row g-2 mb-3 align-items-end">
+        <div className="col-md-3">
+          <label className="form-label small mb-0">Lọc theo Khoa</label>
+          <input
+            className="form-control form-control-sm"
+            placeholder="VD: IT"
+            value={faculty}
+            onChange={(e) => {
+              setPage(1);
+              setFaculty(e.target.value);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && load()}
+          />
+        </div>
+        <div className="col-md-3">
+          <label className="form-label small mb-0">Lọc theo Khóa (năm nhập học)</label>
+          <input
+            className="form-control form-control-sm"
+            placeholder="VD: 2026"
+            value={enrollmentYear}
+            onChange={(e) => {
+              setPage(1);
+              setEnrollmentYear(e.target.value);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && load()}
+          />
+        </div>
+        <div className="col-md-4">
+          <label className="form-label small mb-0">Lọc theo Dãy nhà (Khu)</label>
+          <select
+            className="form-select form-select-sm"
+            value={area}
+            onChange={(e) => {
+              setPage(1);
+              setArea(e.target.value);
+            }}
+          >
+            <option value="">Tất cả</option>
+            {areas.map((a) => (
+              <option key={a._id} value={a._id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="col-md-2">
+          <button
+            type="button"
+            className="btn btn-sm btn-outline-secondary w-100"
+            onClick={() => {
+              setPage(1);
+              setFaculty("");
+              setEnrollmentYear("");
+              setArea("");
+              setPriorityCategory("");
+              load();
+            }}
+          >
+            Xóa lọc
+          </button>
+        </div>
+      </div>
+
       <p className="text-muted small mb-4">
         Phân phòng khi duyệt: cùng giới tính theo khu, còn chỗ, ưu tiên khu nguyện vọng và phòng gần đầy. Admin có thể chọn phòng thủ công trước khi duyệt.
       </p>
@@ -291,40 +449,6 @@ const ApplicationsPage: React.FC = () => {
           <button type="button" className="btn-close" aria-label="Close" onClick={() => setErr(null)} />
         </div>
       )}
-
-      <div className="card mb-4">
-        <div className="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
-          <span>
-            Thống kê đơn theo ngày (
-            {statsPreset === "7d" ? "7 ngày gần nhất" : statsPreset === "14d" ? "14 ngày gần nhất" : "tháng này"}
-            )
-          </span>
-          <select
-            className="form-select form-select-sm"
-            style={{ width: 180 }}
-            value={statsPreset}
-            onChange={(e) => {
-              setStatsPreset(e.target.value as "7d" | "14d" | "month");
-              // trigger reload immediately (no need to reset page)
-              load();
-            }}
-          >
-            <option value="7d">7 ngày gần nhất</option>
-            <option value="14d">14 ngày gần nhất</option>
-            <option value="month">Tháng này</option>
-          </select>
-        </div>
-        <div className="card-body py-2">
-          <div className="d-flex flex-wrap gap-2">
-            {stats.length === 0 && <span className="text-muted small">Chưa có dữ liệu</span>}
-            {stats.map((s) => (
-              <span key={s.date} className="badge text-bg-secondary">
-                {s.date}: {s.count}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
 
       <div className="position-relative">
         {loading && (
@@ -338,7 +462,12 @@ const ApplicationsPage: React.FC = () => {
           <table className="table table-striped table-bordered table-sm align-middle">
             <thead className="table-light">
               <tr>
+                <th style={{ width: 60 }}>STT</th>
                 <th>Tên sinh viên</th>
+                <th>MSSV</th>
+                <th>Email</th>
+                <th>SĐT</th>
+                <th>Đối tượng ưu tiên</th>
                 <th>Ngày đăng ký</th>
                 <th>Giới tính</th>
                 <th>Trạng thái</th>
@@ -347,14 +476,21 @@ const ApplicationsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {rows.map((app) => {
+              {rows.map((app, idx) => {
+                const su = appStudentUser(app);
                 const st = statusBadge[app.status] || { cls: "text-bg-secondary", text: app.status };
                 const created = app.createdAt ? new Date(app.createdAt).toLocaleString("vi-VN") : "—";
                 const g = formatGender(app.genderSnapshot);
                 const chosen = chosenRoomByAppId[app._id];
+                const stt = (page - 1) * limit + idx + 1;
                 return (
                   <tr key={app._id}>
+                    <td>{stt}</td>
                     <td>{studentName(app)}</td>
+                    <td>{su?.studentId?.trim() ? su.studentId : "—"}</td>
+                    <td className="text-break">{su?.email?.trim() ? su.email : "—"}</td>
+                    <td>{su?.phone?.trim() ? su.phone : "—"}</td>
+                    <td>{priorityLabel[String(app.priorityCategory || "none")] || "—"}</td>
                     <td>{created}</td>
                     <td>{g}</td>
                     <td>
@@ -366,6 +502,9 @@ const ApplicationsPage: React.FC = () => {
                           {chosen.roomNumber}
                           {chosen.area && typeof chosen.area === "object" && "name" in chosen.area
                             ? ` (${String((chosen.area as { name?: string }).name || "")})`
+                            : ""}
+                          {Number(chosen.capacity || 0) > 0
+                            ? ` - Trống ${Math.max(0, Number(chosen.capacity || 0) - Number(chosen.currentOccupancy || 0))}/${Number(chosen.capacity || 0)}`
                             : ""}
                         </span>
                       ) : (
@@ -400,7 +539,7 @@ const ApplicationsPage: React.FC = () => {
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="text-center text-muted py-4">
+                  <td colSpan={11} className="text-center text-muted py-4">
                     Không có đơn
                   </td>
                 </tr>

@@ -62,6 +62,11 @@ exports.list = async (req, res) => {
     const {
       status,
       search,
+      faculty,
+      enrollmentYear,
+      area,
+      priorityCategory,
+      days,
       sortOrder = "desc",
       page = 1,
       limit = 10,
@@ -71,10 +76,68 @@ exports.list = async (req, res) => {
       filter.status = status;
     }
     if (search && String(search).trim()) {
+      // handled in unified user filter below
+    }
+
+    if (priorityCategory && ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"].includes(String(priorityCategory))) {
+      filter.priorityCategory = String(priorityCategory);
+    }
+
+    if (days) {
+      const d = parseInt(String(days), 10);
+      if (!Number.isNaN(d) && d > 0) {
+        const now = new Date();
+        const from = new Date(now.getTime() - (d - 1) * 86400000);
+        filter.createdAt = { $gte: from };
+      }
+    }
+
+    // Unified user filter for search + faculty + enrollmentYear
+    const userFilter = { role: "user", isDeleted: { $ne: true } };
+    const and = [];
+    if (search && String(search).trim()) {
       const rx = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      const users = await User.find({ fullName: rx, role: "user", isDeleted: { $ne: true } }).select("_id");
+      and.push({ fullName: rx });
+    }
+    if (faculty && String(faculty).trim()) {
+      and.push({ faculty: String(faculty).trim() });
+    }
+    if (enrollmentYear) {
+      const y = parseInt(String(enrollmentYear), 10);
+      if (!Number.isNaN(y)) {
+        const from = new Date(Date.UTC(y, 0, 1));
+        const to = new Date(Date.UTC(y + 1, 0, 1));
+        and.push({ enrollmentDate: { $gte: from, $lt: to } });
+      }
+    }
+    if (and.length > 0) {
+      const users = await User.find({ ...userFilter, $and: and }).select("_id").lean();
       filter.user = { $in: users.map((u) => u._id) };
     }
+
+    /** Lọc khu — cho danh sách theo trạng thái; cho thống kê luôn dùng $or */
+    let areaOrFilter = null;
+    let areaIdTrimmed = null;
+    let roomIdsInArea = null;
+    if (area && String(area).trim()) {
+      areaIdTrimmed = String(area).trim();
+      const roomInArea = await Room.find({ area: areaIdTrimmed }).select("_id").lean();
+      roomIdsInArea = roomInArea.map((r) => r._id);
+      areaOrFilter = { $or: [{ preferenceArea: areaIdTrimmed }, { assignedRoom: { $in: roomIdsInArea } }] };
+      if (filter.status === "pending") {
+        filter.preferenceArea = areaIdTrimmed;
+      } else if (filter.status === "approved" || filter.status === "rejected") {
+        filter.assignedRoom = { $in: roomIdsInArea };
+      } else {
+        Object.assign(filter, areaOrFilter);
+      }
+    }
+
+    const statsFilter = {};
+    if (filter.priorityCategory) statsFilter.priorityCategory = filter.priorityCategory;
+    if (filter.createdAt) statsFilter.createdAt = filter.createdAt;
+    if (filter.user) statsFilter.user = filter.user;
+    if (areaOrFilter) Object.assign(statsFilter, areaOrFilter);
 
     const order = String(sortOrder).toLowerCase() === "asc" ? 1 : -1;
     const pageNum = Math.max(1, parseInt(page, 10));
@@ -94,7 +157,18 @@ exports.list = async (req, res) => {
         .limit(lim)
         .lean();
       const total = await Application.countDocuments(filter);
-      return res.json({ applications: rows, total, page: pageNum, limit: lim });
+      const [pendingCount, approvedCount, totalAll] = await Promise.all([
+        Application.countDocuments({ ...statsFilter, status: "pending" }),
+        Application.countDocuments({ ...statsFilter, status: "approved" }),
+        Application.countDocuments(statsFilter),
+      ]);
+      return res.json({
+        applications: rows,
+        total,
+        page: pageNum,
+        limit: lim,
+        stats: { pending: pendingCount, approved: approvedCount, total: totalAll },
+      });
     }
 
     const managed = req.user.managedArea;
@@ -123,7 +197,30 @@ exports.list = async (req, res) => {
 
     const total = filtered.length;
     const slice = filtered.slice((pageNum - 1) * lim, (pageNum - 1) * lim + lim);
-    return res.json({ applications: slice, total, page: pageNum, limit: lim });
+
+    const allStats = await Application.find(statsFilter)
+      .populate("preferenceArea", "name genderPolicy")
+      .populate({ path: "assignedRoom", select: "roomNumber area capacity currentOccupancy status", populate: { path: "area", select: "name" } })
+      .sort({ createdAt: order })
+      .lean();
+    const statsFiltered = allStats.filter((app) => {
+      if (app.status === "pending") {
+        const pref = app.preferenceArea ? String(app.preferenceArea._id || app.preferenceArea) : "";
+        return pref === String(managed);
+      }
+      const ar = app.assignedRoom;
+      const rid = ar ? String(ar._id || ar) : "";
+      const aid = ar && ar.area ? String(ar.area._id || ar.area) : "";
+      if (rid && roomIdSet.has(rid)) return true;
+      return aid === String(managed);
+    });
+    const stats = {
+      pending: statsFiltered.filter((a) => a.status === "pending").length,
+      approved: statsFiltered.filter((a) => a.status === "approved").length,
+      total: statsFiltered.length,
+    };
+
+    return res.json({ applications: slice, total, page: pageNum, limit: lim, stats });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -229,6 +326,9 @@ exports.create = async (req, res) => {
       semester: sem,
       schoolYear: sy,
       startDate: startN,
+      priorityCategory: ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"].includes(String(req.body?.priorityCategory || ""))
+        ? String(req.body.priorityCategory)
+        : "none",
       status: "pending",
     });
     const populated = await Application.findById(doc._id).populate("preferenceArea", "name").populate("user", "fullName");

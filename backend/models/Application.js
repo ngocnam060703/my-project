@@ -18,6 +18,16 @@ const applicationSchema = new mongoose.Schema(
     semester: { type: String, required: true },
     schoolYear: { type: String, required: true },
     startDate: { type: Date, required: true },
+    /**
+     * Đối tượng ưu tiên (theo chính sách KTX) — hỗ trợ lọc xét duyệt.
+     * none: bình thường
+     */
+    priorityCategory: {
+      type: String,
+      enum: ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"],
+      default: "none",
+      index: true,
+    },
     status: {
       type: String,
       enum: ["pending", "approved", "rejected"],

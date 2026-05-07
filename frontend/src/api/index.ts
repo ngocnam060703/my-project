@@ -240,14 +240,27 @@ export const applicationsApi = {
     schoolYear: string;
     startDate: string;
     preferenceArea?: string;
+    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
   }) => client.post<DormApplication>("/applications", data),
   getAll: (params?: {
     status?: string;
     search?: string;
+    faculty?: string;
+    enrollmentYear?: number;
+    area?: string;
+    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
+    days?: number;
     sortOrder?: "asc" | "desc";
     page?: number;
     limit?: number;
-  }) => client.get<{ applications: DormApplication[]; total: number; page: number; limit: number }>("/applications", { params }),
+  }) =>
+    client.get<{
+      applications: DormApplication[];
+      total: number;
+      page: number;
+      limit: number;
+      stats?: { pending: number; approved: number; total: number };
+    }>("/applications", { params }),
   getById: (id: string) => client.get<DormApplication>(`/applications/${id}`),
   /** Sinh viên: hủy đơn chỉ khi pending */
   cancel: (id: string) => client.delete(`/applications/${encodeURIComponent(id)}`),

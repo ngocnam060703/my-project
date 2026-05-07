@@ -5,6 +5,10 @@ exports.createApplication = [
   body("schoolYear").trim().notEmpty().withMessage("Năm học là bắt buộc"),
   body("startDate").notEmpty().withMessage("Ngày bắt đầu là bắt buộc"),
   body("preferenceArea").optional({ values: "falsy" }).isMongoId().withMessage("preferenceArea không hợp lệ"),
+  body("priorityCategory")
+    .optional({ values: "falsy" })
+    .isIn(["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"])
+    .withMessage("priorityCategory không hợp lệ"),
 ];
 
 exports.rejectApplication = [
@@ -26,6 +30,14 @@ exports.listApplications = [
   /** Tham số query luôn là chuỗi — bật allow_string cho isInt */
   query("page").optional({ values: "falsy" }).isInt({ min: 1 }).withMessage("page phải là số nguyên ≥ 1"),
   query("limit").optional({ values: "falsy" }).isInt({ min: 1, max: 100 }).withMessage("limit từ 1 đến 100"),
+  query("priorityCategory")
+    .optional({ values: "falsy" })
+    .isIn(["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"])
+    .withMessage("priorityCategory không hợp lệ"),
+  query("faculty").optional({ values: "falsy" }).isString(),
+  query("enrollmentYear").optional({ values: "falsy" }).isInt({ min: 1990, max: 2100 }).withMessage("enrollmentYear không hợp lệ"),
+  query("area").optional({ values: "falsy" }).isMongoId().withMessage("area không hợp lệ"),
+  query("days").optional({ values: "falsy" }).isInt({ min: 1, max: 90 }).withMessage("days từ 1 đến 90"),
 ];
 
 exports.statsByDay = [
