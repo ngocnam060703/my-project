@@ -330,6 +330,12 @@ export const opsContractsApi = {
   dashboard: () => client.get("/ops/contracts/dashboard"),
 };
 
+/** Thanh toán VNPay — POST /api/payment/create-vnpay */
+export const paymentApi = {
+  createVnpay: (body: { invoiceId: string; amount: number; returnPath?: string }) =>
+    client.post("/payment/create-vnpay", body),
+};
+
 export const billsApi = {
   getMy: () => client.get("/bills/my"),
   /** Alias REST: GET /api/my-bills (cùng dữ liệu getMy) */
@@ -352,7 +358,7 @@ export const billsApi = {
     page?: number;
     limit?: number;
   }) => client.get("/bills", { params }),
-  create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; otherFee?: number; dueDate?: string }) =>
+  create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; sharedCommonFee?: number; otherFee?: number; dueDate?: string }) =>
     client.post("/bills", data),
   generate: (data: { month: number; year: number; dueDate?: string }) => client.post("/bills/generate", data),
   update: (id: string, data: Record<string, unknown>) => client.patch(`/bills/${id}`, data),

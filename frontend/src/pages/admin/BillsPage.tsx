@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { Table, Button, Modal, Form, Select, InputNumber, message, Tag, Space, Card, Row, Col, Statistic, Input } from "antd";
+import { Table, Button, Modal, Form, Select, InputNumber, message, Tag, Space, Card, Row, Col, Statistic, Input, Popover } from "antd";
 import { PlusOutlined, CheckOutlined, DownloadOutlined, FilterOutlined, EyeOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { billsApi, client, roomCostsApi, serviceUsageApi } from "../../api";
+import { billsApi, client, roomCostsApi, serviceUsageApi, paymentApi } from "../../api";
 import type { Bill } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -15,11 +15,24 @@ const statusMap: Record<string, { color: string; text: string }> = {
 const formatMoney = (v: number | undefined) => (v ?? 0).toLocaleString("vi-VN") + "đ";
 
 const paymentMethodLabel = (m?: string) => {
+  if (m === "vnpay") return "VNPay";
   if (m === "online") return "Thanh toán online";
   if (m === "counter") return "Thu tại quầy";
   if (m === "manual") return "Xác nhận / chuyển khoản";
   return "—";
 };
+
+/** Gọi API tạo phiên VNPay và chuyển hướng trình duyệt sang cổng thanh toán. */
+async function handlePayment(invoiceId: string, amount: number, returnPath?: string) {
+  const res = await paymentApi.createVnpay({
+    invoiceId,
+    amount: Math.round(Number(amount)),
+    ...(returnPath ? { returnPath } : {}),
+  });
+  const paymentUrl = (res.data as { paymentUrl?: string })?.paymentUrl;
+  if (!paymentUrl) throw new Error("Không nhận được paymentUrl");
+  window.location.href = paymentUrl;
+}
 
 type PersonalLine = NonNullable<Bill["personalServiceBreakdown"]>[number];
 
@@ -31,6 +44,10 @@ const formatPersonalServiceLine = (it: PersonalLine) => {
 };
 
 const BillsPage: React.FC = () => {
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+
   const [data, setData] = useState<Bill[]>([]);
   const [total, setTotal] = useState(0);
   const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { _id?: string; name?: string }; capacity?: number; price?: number; pricePerPerson?: number }[]>([]);
@@ -39,7 +56,10 @@ const BillsPage: React.FC = () => {
   const [detailModal, setDetailModal] = useState<Bill | null>(null);
   const [form] = Form.useForm();
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<{ status?: string; room?: string; month?: number; year?: number; billType?: string }>({});
+  const [filters, setFilters] = useState<{ status?: string; room?: string; month?: number; year?: number; billType?: string }>({
+    month: currentMonth,
+    year: currentYear,
+  });
   const [genMonth, setGenMonth] = useState(new Date().getMonth() + 1);
   const [genYear, setGenYear] = useState(new Date().getFullYear());
 
@@ -79,6 +99,32 @@ const BillsPage: React.FC = () => {
   }, [page, filters.status, filters.room, filters.month, filters.year, filters.billType]);
 
   useEffect(() => { load(); }, [load]);
+
+  /** Sau khi VNPay redirect về SPA — đọc query và làm mới danh sách. */
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const v = sp.get("vnpay");
+    if (!v) return;
+    const labels: Record<string, string> = {
+      success: "Thanh toán VNPay thành công.",
+      failed: "Thanh toán VNPay chưa hoàn tất hoặc bị từ chối.",
+      invalid: "Phản hồi VNPay không hợp lệ (chữ ký).",
+      not_found: "Không tìm thấy hóa đơn tương ứng.",
+      amount_mismatch: "Số tiền không khớp hóa đơn.",
+      already_paid: "Hóa đơn đã được thanh toán trước đó.",
+      config_error: "Cấu hình VNPay trên máy chủ chưa đủ.",
+      server_error: "Lỗi máy chủ khi xử lý callback VNPay.",
+    };
+    const msg = labels[v] || `Kết quả VNPay: ${v}`;
+    if (v === "success") message.success(msg);
+    else message.warning(msg);
+    sp.delete("vnpay");
+    sp.delete("invoiceId");
+    sp.delete("code");
+    const rest = sp.toString();
+    window.history.replaceState({}, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+    void load();
+  }, [load]);
 
   const fetchRoomCosts = useCallback(async (roomId: string, month: number, year: number) => {
     try {
@@ -136,6 +182,7 @@ const BillsPage: React.FC = () => {
     try {
       const electricityFee = (v.electricityFee as number) ?? 0;
       const waterFee = (v.waterFee as number) ?? 0;
+      const sharedCommonFee = (v.sharedCommonFee as number) ?? 0; // Wi-Fi
       const otherFee = (v.otherFee as number) ?? 0;
       const roomId = v.roomId as string;
       const room = rooms.find((r) => r._id === roomId);
@@ -147,6 +194,7 @@ const BillsPage: React.FC = () => {
         roomFee: roomFee > 0 ? roomFee : undefined,
         electricityFee,
         waterFee,
+        sharedCommonFee,
         otherFee,
         dueDate: v.dueDate ? new Date(v.dueDate as string).toISOString().split("T")[0] : undefined,
       });
@@ -167,14 +215,50 @@ const BillsPage: React.FC = () => {
   };
 
   const handleMarkPaid = (r: Bill) => {
+    let method: "manual" | "counter" = "counter";
+    let ref = "";
     Modal.confirm({
       title: "Xác nhận thanh toán",
-      content: `Xác nhận sinh viên ${(r.user as { fullName?: string })?.fullName} đã thanh toán ${r.billType === "penalty" ? "hóa đơn phạt" : `hóa đơn ${r.month}/${r.year}`} (${formatMoney(r.total)})?`,
+      width: 520,
+      content: (
+        <div>
+          <div style={{ marginBottom: 8 }}>
+            Xác nhận sinh viên <strong>{(r.user as { fullName?: string })?.fullName || "—"}</strong> đã thanh toán{" "}
+            <strong>{formatMoney(r.total)}</strong>
+            {r.billType === "penalty" ? " (hóa đơn phạt)" : ` (hóa đơn ${r.month}/${r.year})`}.
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 200, flex: 1 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Hình thức</div>
+              <Select
+                defaultValue="counter"
+                style={{ width: "100%" }}
+                onChange={(v) => {
+                  method = v as "manual" | "counter";
+                }}
+                options={[
+                  { value: "counter", label: "Thu tại quầy" },
+                  { value: "manual", label: "Xác nhận / chuyển khoản" },
+                ]}
+              />
+            </div>
+            <div style={{ minWidth: 240, flex: 2 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Mã giao dịch / ghi chú (tuỳ chọn)</div>
+              <Input
+                placeholder="VD: CK-09052026-001"
+                onChange={(e) => {
+                  ref = e.target.value;
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      ),
       okText: "Xác nhận",
       cancelText: "Hủy",
       onOk: async () => {
         try {
-          await billsApi.markPaid(r._id);
+          await billsApi.markPaid(r._id, { paymentMethod: method, paymentReference: ref?.trim() || undefined });
           message.success("Đã cập nhật");
           load();
         } catch {
@@ -205,6 +289,8 @@ const BillsPage: React.FC = () => {
       title: "Sinh viên",
       dataIndex: ["user", "fullName"],
       key: "user",
+      width: 200,
+      fixed: "left" as const,
       ellipsis: true,
     },
     {
@@ -214,51 +300,52 @@ const BillsPage: React.FC = () => {
       width: 80,
     },
     {
-      title: "Tiền phòng",
-      dataIndex: "roomFee",
-      key: "roomFee",
-      width: 110,
-      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : <span style={{ color: "#0d9488" }}>{formatMoney(v)}</span>),
-    },
-    {
-      title: "Điện",
-      dataIndex: "electricityFee",
-      key: "electricityFee",
-      width: 90,
-      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : formatMoney(v)),
-    },
-    {
-      title: "Nước",
-      dataIndex: "waterFee",
-      key: "waterFee",
-      width: 90,
-      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : formatMoney(v)),
-    },
-    {
-      title: "Dịch vụ cá nhân / Phạt",
-      dataIndex: "personalServiceFee",
-      key: "personalServiceFee",
-      width: 260,
-      render: (_: number, r: Bill) => {
-        if (r.billType === "penalty") {
-          const lines = r.penaltyBreakdown || [];
-          if (!lines.length) return "-";
-          return (
-            <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55, fontSize: 13 }}>
-              {lines.map((line, idx) => (
-                <li key={idx}>{line.label}: {formatMoney(line.amount)}</li>
-              ))}
-            </ul>
+      title: "Chi tiết phí",
+      key: "fees",
+      width: 150,
+      render: (_: unknown, r: Bill) => {
+        const content =
+          r.billType === "penalty" ? (
+            <div style={{ minWidth: 260 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết phạt</div>
+              {(r.penaltyBreakdown || []).length ? (
+                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                  {(r.penaltyBreakdown || []).map((line, idx) => (
+                    <li key={idx}>
+                      {line.label}: <strong>{formatMoney(line.amount)}</strong>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div>—</div>
+              )}
+            </div>
+          ) : (
+            <div style={{ minWidth: 280 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết phí</div>
+              <div>Tiền phòng: <strong>{formatMoney(r.roomFee)}</strong></div>
+              <div>Điện: <strong>{formatMoney(r.electricityFee)}</strong></div>
+              <div>Nước: <strong>{formatMoney(r.waterFee)}</strong></div>
+              <div>Wi‑Fi: <strong>{formatMoney(r.sharedCommonFee)}</strong></div>
+              {r.otherFee ? <div>Phí khác: <strong>{formatMoney(r.otherFee)}</strong></div> : <div>Phí khác: —</div>}
+              {(r.personalServiceBreakdown || []).length ? (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 600 }}>Dịch vụ cá nhân</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                    {(r.personalServiceBreakdown || []).map((it, idx) => (
+                      <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div style={{ marginTop: 8 }}>Dịch vụ cá nhân: —</div>
+              )}
+            </div>
           );
-        }
-        const items = r.personalServiceBreakdown || [];
-        if (!items.length) return "-";
         return (
-          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55, fontSize: 13 }}>
-            {items.map((it, idx) => (
-              <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
-            ))}
-          </ul>
+          <Popover content={content} title={null} trigger="hover">
+            <Button size="small">Xem</Button>
+          </Popover>
         );
       },
     },
@@ -292,16 +379,27 @@ const BillsPage: React.FC = () => {
         <Space>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
           {(r.status === "pending" || r.status === "unpaid" || r.status === "overdue") && (
+            <Button
+              type="link"
+              size="small"
+              onClick={async () => {
+                try {
+                  await handlePayment(r._id, r.total ?? 0, "/admin/bills");
+                } catch (e: unknown) {
+                  message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được link VNPay");
+                }
+              }}
+            >
+              VNPay
+            </Button>
+          )}
+          {(r.status === "pending" || r.status === "unpaid" || r.status === "overdue") && (
             <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => handleMarkPaid(r)}>Đã TT</Button>
           )}
         </Space>
       ),
     },
   ];
-
-  const now = new Date();
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear();
 
   return (
     <div>
@@ -310,7 +408,7 @@ const BillsPage: React.FC = () => {
         <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Tạo, xem và quản lý hóa đơn tiền phòng, điện nước</p>
       </div>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={8}>
           <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
             <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Tổng chưa thu</span>} value={unpaidTotal} formatter={(v) => formatMoney(Number(v))} valueStyle={{ color: "#fff", fontSize: 20 }} />
@@ -356,7 +454,7 @@ const BillsPage: React.FC = () => {
           <InputNumber placeholder="Tháng" min={1} max={12} style={{ width: 90 }} value={filters.month} onChange={(v) => { setFilters((f) => ({ ...f, month: v || undefined })); setPage(1); }} />
           <InputNumber placeholder="Năm" min={2020} style={{ width: 100 }} value={filters.year} onChange={(v) => { setFilters((f) => ({ ...f, year: v || undefined })); setPage(1); }} />
           <Input placeholder="Lọc phòng" style={{ width: 120 }} value={filters.room} onChange={(e) => { setFilters((f) => ({ ...f, room: e.target.value || undefined })); setPage(1); }} />
-          <Button onClick={() => { setFilters({}); setPage(1); }}>Xóa bộ lọc</Button>
+          <Button onClick={() => { setFilters({ month: currentMonth, year: currentYear }); setPage(1); }}>Xóa bộ lọc</Button>
           <div style={{ flex: 1 }} />
           <Space>
             <Button icon={<DownloadOutlined />} onClick={() => exportToExcel(data.map((b) => ({
@@ -367,10 +465,12 @@ const BillsPage: React.FC = () => {
               "Tiền phòng": b.billType === "penalty" ? "" : b.roomFee,
               "Điện": b.billType === "penalty" ? "" : b.electricityFee,
               "Nước": b.billType === "penalty" ? "" : b.waterFee,
+              "Wifi": b.billType === "penalty" ? "" : b.sharedCommonFee,
               "Dịch vụ cá nhân / Phạt": b.billType === "penalty"
                 ? (b.penaltyBreakdown || []).map((x) => `${x.label || "Mục"}: ${x.amount ?? 0}`).join("; ")
                 : (b.personalServiceBreakdown || []).map((x) => formatPersonalServiceLine(x)).join("; "),
               "Phí dịch vụ cá nhân": b.personalServiceFee || 0,
+              "Phí khác": b.billType === "penalty" ? "" : b.otherFee,
               "Tổng": b.total,
               "Hạn": new Date(b.dueDate).toLocaleDateString("vi-VN"),
               "Trạng thái": statusMap[b.status]?.text || b.status,
@@ -396,7 +496,7 @@ const BillsPage: React.FC = () => {
           rowKey="_id"
           loading={loading}
           pagination={{ total, current: page, pageSize: 10, onChange: setPage, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hóa đơn` }}
-          scroll={{ x: 1220 }}
+          scroll={{ x: 980 }}
           size="middle"
         />
       </Card>
@@ -457,7 +557,8 @@ const BillsPage: React.FC = () => {
           </Form.Item>
           <Form.Item name="electricityFee" label="Tiền điện (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="waterFee" label="Tiền nước (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-          <Form.Item name="otherFee" label="Phí khác (Wifi, gửi xe...)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
+          <Form.Item name="sharedCommonFee" label="Tiền Wi‑Fi (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
+          <Form.Item name="otherFee" label="Phí khác (gửi xe...)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="dueDate" label="Hạn thanh toán"><Input type="date" /></Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit" block>Tạo hóa đơn</Button>
@@ -471,6 +572,21 @@ const BillsPage: React.FC = () => {
         onCancel={() => setDetailModal(null)}
         footer={[
           <Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>,
+          detailModal && (detailModal.status === "pending" || detailModal.status === "unpaid" || detailModal.status === "overdue") && (
+            <Button
+              key="vnpay"
+              type="default"
+              onClick={async () => {
+                try {
+                  await handlePayment(detailModal._id, detailModal.total ?? 0, "/admin/bills");
+                } catch (e: unknown) {
+                  message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được link VNPay");
+                }
+              }}
+            >
+              Thanh toán VNPay
+            </Button>
+          ),
           detailModal && (detailModal.status === "pending" || detailModal.status === "unpaid" || detailModal.status === "overdue") && (
             <Button key="pay" type="primary" icon={<CheckOutlined />} onClick={() => { handleMarkPaid(detailModal); setDetailModal(null); }}>Xác nhận đã thanh toán</Button>
           ),
@@ -527,7 +643,10 @@ const BillsPage: React.FC = () => {
               <>
                 <p><strong>Phương thức thanh toán:</strong> {paymentMethodLabel(detailModal.paymentMethod)}</p>
                 {detailModal.paymentReference ? (
-                  <p><strong>Mã tham chiếu:</strong> {detailModal.paymentReference}</p>
+                  <p><strong>Mã tham chiếu (TxnRef):</strong> {detailModal.paymentReference}</p>
+                ) : null}
+                {detailModal.vnpayTransactionNo ? (
+                  <p><strong>Mã giao dịch VNPay:</strong> {detailModal.vnpayTransactionNo}</p>
                 ) : null}
               </>
             )}

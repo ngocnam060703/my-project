@@ -10,7 +10,6 @@ const User = require("../models/User");
 const { getIO } = require("../socket");
 const { dueDateForBillingMonth } = require("../services/billingDueDate");
 const { refreshOverdueMonthlyBills } = require("../services/billingOverdue");
-
 /** Trạng thái coi là chưa thanh toán (tương thích pending cũ + unpaid mới) */
 const UNPAID_STATUSES = ["unpaid", "pending"];
 

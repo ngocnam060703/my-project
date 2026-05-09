@@ -60,9 +60,11 @@ const billSchema = new mongoose.Schema(
       },
     ],
     paidAt: { type: Date, default: null },
-    /** manual: xác nhận tay / offline | online: cổng thanh toán (demo) | counter: thu tại quầy */
-    paymentMethod: { type: String, enum: ["manual", "online", "counter"], default: undefined },
+    /** manual | online (demo) | counter | vnpay */
+    paymentMethod: { type: String, enum: ["manual", "online", "counter", "vnpay"], default: undefined },
     paymentReference: { type: String, default: "" },
+    /** Mã giao dịch VNPay (vnp_TransactionNo) sau khi thanh toán thành công */
+    vnpayTransactionNo: { type: String, default: "" },
     dueDate: { type: Date, required: true },
     note: { type: String, default: "" },
   },
