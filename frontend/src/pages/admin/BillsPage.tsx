@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Table, Button, Modal, Form, Select, InputNumber, message, Tag, Space, Card, Row, Col, Statistic, Input, Popover } from "antd";
 import { PlusOutlined, CheckOutlined, DownloadOutlined, FilterOutlined, EyeOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { billsApi, client, roomCostsApi, serviceUsageApi, paymentApi } from "../../api";
+import { billsApi, client, roomCostsApi, serviceUsageApi } from "../../api";
 import type { Bill } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -15,24 +15,11 @@ const statusMap: Record<string, { color: string; text: string }> = {
 const formatMoney = (v: number | undefined) => (v ?? 0).toLocaleString("vi-VN") + "đ";
 
 const paymentMethodLabel = (m?: string) => {
-  if (m === "vnpay") return "VNPay";
   if (m === "online") return "Thanh toán online";
   if (m === "counter") return "Thu tại quầy";
   if (m === "manual") return "Xác nhận / chuyển khoản";
   return "—";
 };
-
-/** Gọi API tạo phiên VNPay và chuyển hướng trình duyệt sang cổng thanh toán. */
-async function handlePayment(invoiceId: string, amount: number, returnPath?: string) {
-  const res = await paymentApi.createVnpay({
-    invoiceId,
-    amount: Math.round(Number(amount)),
-    ...(returnPath ? { returnPath } : {}),
-  });
-  const paymentUrl = (res.data as { paymentUrl?: string })?.paymentUrl;
-  if (!paymentUrl) throw new Error("Không nhận được paymentUrl");
-  window.location.href = paymentUrl;
-}
 
 type PersonalLine = NonNullable<Bill["personalServiceBreakdown"]>[number];
 
@@ -99,32 +86,6 @@ const BillsPage: React.FC = () => {
   }, [page, filters.status, filters.room, filters.month, filters.year, filters.billType]);
 
   useEffect(() => { load(); }, [load]);
-
-  /** Sau khi VNPay redirect về SPA — đọc query và làm mới danh sách. */
-  useEffect(() => {
-    const sp = new URLSearchParams(window.location.search);
-    const v = sp.get("vnpay");
-    if (!v) return;
-    const labels: Record<string, string> = {
-      success: "Thanh toán VNPay thành công.",
-      failed: "Thanh toán VNPay chưa hoàn tất hoặc bị từ chối.",
-      invalid: "Phản hồi VNPay không hợp lệ (chữ ký).",
-      not_found: "Không tìm thấy hóa đơn tương ứng.",
-      amount_mismatch: "Số tiền không khớp hóa đơn.",
-      already_paid: "Hóa đơn đã được thanh toán trước đó.",
-      config_error: "Cấu hình VNPay trên máy chủ chưa đủ.",
-      server_error: "Lỗi máy chủ khi xử lý callback VNPay.",
-    };
-    const msg = labels[v] || `Kết quả VNPay: ${v}`;
-    if (v === "success") message.success(msg);
-    else message.warning(msg);
-    sp.delete("vnpay");
-    sp.delete("invoiceId");
-    sp.delete("code");
-    const rest = sp.toString();
-    window.history.replaceState({}, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
-    void load();
-  }, [load]);
 
   const fetchRoomCosts = useCallback(async (roomId: string, month: number, year: number) => {
     try {
@@ -379,21 +340,6 @@ const BillsPage: React.FC = () => {
         <Space>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
           {(r.status === "pending" || r.status === "unpaid" || r.status === "overdue") && (
-            <Button
-              type="link"
-              size="small"
-              onClick={async () => {
-                try {
-                  await handlePayment(r._id, r.total ?? 0, "/admin/bills");
-                } catch (e: unknown) {
-                  message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được link VNPay");
-                }
-              }}
-            >
-              VNPay
-            </Button>
-          )}
-          {(r.status === "pending" || r.status === "unpaid" || r.status === "overdue") && (
             <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => handleMarkPaid(r)}>Đã TT</Button>
           )}
         </Space>
@@ -573,21 +519,6 @@ const BillsPage: React.FC = () => {
         footer={[
           <Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>,
           detailModal && (detailModal.status === "pending" || detailModal.status === "unpaid" || detailModal.status === "overdue") && (
-            <Button
-              key="vnpay"
-              type="default"
-              onClick={async () => {
-                try {
-                  await handlePayment(detailModal._id, detailModal.total ?? 0, "/admin/bills");
-                } catch (e: unknown) {
-                  message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được link VNPay");
-                }
-              }}
-            >
-              Thanh toán VNPay
-            </Button>
-          ),
-          detailModal && (detailModal.status === "pending" || detailModal.status === "unpaid" || detailModal.status === "overdue") && (
             <Button key="pay" type="primary" icon={<CheckOutlined />} onClick={() => { handleMarkPaid(detailModal); setDetailModal(null); }}>Xác nhận đã thanh toán</Button>
           ),
         ].filter(Boolean) as React.ReactNode[]}
@@ -643,10 +574,7 @@ const BillsPage: React.FC = () => {
               <>
                 <p><strong>Phương thức thanh toán:</strong> {paymentMethodLabel(detailModal.paymentMethod)}</p>
                 {detailModal.paymentReference ? (
-                  <p><strong>Mã tham chiếu (TxnRef):</strong> {detailModal.paymentReference}</p>
-                ) : null}
-                {detailModal.vnpayTransactionNo ? (
-                  <p><strong>Mã giao dịch VNPay:</strong> {detailModal.vnpayTransactionNo}</p>
+                  <p><strong>Mã tham chiếu:</strong> {detailModal.paymentReference}</p>
                 ) : null}
               </>
             )}

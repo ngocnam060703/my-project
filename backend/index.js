@@ -21,7 +21,6 @@ const { auth, requireRole } = require("./middleware/auth");
 const contractRoutes = require("./routes/contractRoutes");
 const contractController = require("./controllers/contractController");
 const billRoutes = require("./routes/billRoutes");
-const paymentRoutes = require("./routes/paymentRoutes");
 const billController = require("./controllers/billController");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const ratingRoutes = require("./routes/ratingRoutes");
@@ -95,7 +94,6 @@ app.use("/api/contracts", contractRoutes);
 /** Alias REST: danh sách hóa đơn sinh viên đang đăng nhập */
 app.get("/api/my-bills", auth, requireRole("user"), billController.getMyBills);
 app.use("/api/bills", billRoutes);
-app.use("/api/payment", paymentRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/student-dashboard", studentDashboardRoutes);
 app.use("/api/registration-periods", registrationPeriodRoutes);

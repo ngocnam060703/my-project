@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { isAxiosError } from "axios";
-import { billsApi, paymentApi } from "../../api";
+import { billsApi } from "../../api";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
 import type { Bill } from "../../types";
@@ -47,18 +47,6 @@ function errText(e: unknown): string {
   return "Có lỗi xảy ra";
 }
 
-/** Thanh toán VNPay sandbox/production — redirect sang cổng sau khi máy chủ trả paymentUrl. */
-async function handlePayment(invoiceId: string, amount: number, returnPath?: string) {
-  const res = await paymentApi.createVnpay({
-    invoiceId,
-    amount: Math.round(Number(amount)),
-    ...(returnPath ? { returnPath } : {}),
-  });
-  const paymentUrl = (res.data as { paymentUrl?: string })?.paymentUrl;
-  if (!paymentUrl) throw new Error("Không nhận được paymentUrl");
-  window.location.href = paymentUrl;
-}
-
 const MyBillsPage: React.FC = () => {
   const { user } = useAuth();
   const { socket } = useSocket();
@@ -70,8 +58,6 @@ const MyBillsPage: React.FC = () => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [payingOnlineId, setPayingOnlineId] = useState<string | null>(null);
-  const [payingVnpayId, setPayingVnpayId] = useState<string | null>(null);
-  const [vnpayBanner, setVnpayBanner] = useState<{ kind: "ok" | "bad"; text: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,29 +82,6 @@ const MyBillsPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    const sp = new URLSearchParams(window.location.search);
-    const v = sp.get("vnpay");
-    if (!v) return;
-    const labels: Record<string, { kind: "ok" | "bad"; text: string }> = {
-      success: { kind: "ok", text: "Thanh toán VNPay thành công." },
-      failed: { kind: "bad", text: "Thanh toán VNPay chưa hoàn tất hoặc bị từ chối." },
-      invalid: { kind: "bad", text: "Phản hồi VNPay không hợp lệ (chữ ký)." },
-      not_found: { kind: "bad", text: "Không tìm thấy hóa đơn tương ứng." },
-      amount_mismatch: { kind: "bad", text: "Số tiền không khớp hóa đơn." },
-      already_paid: { kind: "ok", text: "Hóa đơn đã được thanh toán trước đó." },
-      config_error: { kind: "bad", text: "Cấu hình VNPay trên máy chủ chưa đủ." },
-      server_error: { kind: "bad", text: "Lỗi máy chủ khi xử lý callback VNPay." },
-    };
-    setVnpayBanner(labels[v] || { kind: "bad", text: `Kết quả VNPay: ${v}` });
-    sp.delete("vnpay");
-    sp.delete("invoiceId");
-    sp.delete("code");
-    const rest = sp.toString();
-    window.history.replaceState({}, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
     void load();
   }, [load]);
 
@@ -185,17 +148,6 @@ const MyBillsPage: React.FC = () => {
     }
   };
 
-  const payVnpay = async (id: string, amount: number) => {
-    setPayingVnpayId(id);
-    setErr(null);
-    try {
-      await handlePayment(id, amount, "/student/my-bills");
-    } catch (e) {
-      setErr(errText(e));
-      setPayingVnpayId(null);
-    }
-  };
-
   const monthly = useMemo(() => rows.filter((b) => b.billType !== "penalty"), [rows]);
   const penalty = useMemo(() => rows.filter((b) => b.billType === "penalty"), [rows]);
   const overdueList = useMemo(() => rows.filter((b) => b.status === "overdue"), [rows]);
@@ -215,13 +167,7 @@ const MyBillsPage: React.FC = () => {
   return (
     <div className="container pb-5" style={{ maxWidth: 1100 }}>
       <h4 className="mb-1">Hóa đơn của tôi</h4>
-      <p className="text-muted small mb-3">Theo dõi hạn thanh toán, trạng thái và thanh toán (VNPay / xác nhận demo / online mô phỏng).</p>
-
-      {vnpayBanner && (
-        <div className={`alert py-2 ${vnpayBanner.kind === "ok" ? "alert-success" : "alert-danger"}`}>
-          {vnpayBanner.text}
-        </div>
-      )}
+      <p className="text-muted small mb-3">Theo dõi hạn thanh toán, trạng thái và thanh toán (xác nhận demo / online mô phỏng).</p>
 
       {err && <div className="alert alert-danger py-2">{err}</div>}
 
@@ -275,10 +221,8 @@ const MyBillsPage: React.FC = () => {
                     onView={() => void openDetail(b._id)}
                     onPay={() => void payDemo(b._id)}
                     onPayOnline={() => void payOnlineDemo(b._id)}
-                    onPayVnpay={() => void payVnpay(b._id, b.total)}
                     paying={payingId === b._id}
                     payingOnline={payingOnlineId === b._id}
-                    payingVnpay={payingVnpayId === b._id}
                   />
                 ))}
               </tbody>
@@ -308,10 +252,8 @@ const MyBillsPage: React.FC = () => {
                   onView={() => void openDetail(b._id)}
                   onPay={() => void payDemo(b._id)}
                   onPayOnline={() => void payOnlineDemo(b._id)}
-                  onPayVnpay={() => void payVnpay(b._id, b.total)}
                   paying={payingId === b._id}
                   payingOnline={payingOnlineId === b._id}
-                  payingVnpay={payingVnpayId === b._id}
                 />
               ))}
               {monthly.length === 0 && (
@@ -356,14 +298,6 @@ const MyBillsPage: React.FC = () => {
                     >
                       {payingOnlineId === detail._id ? "Đang xử lý…" : "Thanh toán online (demo)"}
                     </button>
-                    <button
-                      type="button"
-                      className="btn btn-outline-success"
-                      disabled={!!payingVnpayId}
-                      onClick={() => void payVnpay(detail._id, detail.total)}
-                    >
-                      {payingVnpayId === detail._id ? "Đang chuyển…" : "Thanh toán VNPay"}
-                    </button>
                   </>
                 )}
                 <button type="button" className="btn btn-secondary" onClick={closeDetail}>
@@ -383,19 +317,15 @@ function BillRow({
   onView,
   onPay,
   onPayOnline,
-  onPayVnpay,
   paying,
   payingOnline,
-  payingVnpay,
 }: {
   b: Bill;
   onView: () => void;
   onPay: () => void;
   onPayOnline: () => void;
-  onPayVnpay: () => void;
   paying: boolean;
   payingOnline: boolean;
-  payingVnpay: boolean;
 }) {
   const st = statusUi(b.status);
   return (
@@ -418,11 +348,8 @@ function BillRow({
             <button type="button" className="btn btn-success btn-sm me-1" disabled={paying} onClick={onPay}>
               {paying ? "…" : "Pay"}
             </button>
-            <button type="button" className="btn btn-outline-success btn-sm me-1" disabled={payingOnline} onClick={onPayOnline}>
+            <button type="button" className="btn btn-outline-success btn-sm" disabled={payingOnline} onClick={onPayOnline}>
               {payingOnline ? "…" : "Online"}
-            </button>
-            <button type="button" className="btn btn-primary btn-sm" disabled={payingVnpay} onClick={onPayVnpay}>
-              {payingVnpay ? "…" : "VNPay"}
             </button>
           </>
         )}
@@ -530,21 +457,16 @@ function BillDetailBody({ b }: { b: Bill }) {
             {b.paymentMethod && (
               <p className="mb-0">
                 <strong>Phương thức:</strong>{" "}
-                {b.paymentMethod === "vnpay"
-                  ? "VNPay"
-                  : b.paymentMethod === "online"
-                    ? "Online (demo)"
-                    : b.paymentMethod === "counter"
-                      ? "Quầy"
-                      : "Xác nhận"}
+                {b.paymentMethod === "online"
+                  ? "Online (demo)"
+                  : b.paymentMethod === "counter"
+                    ? "Quầy"
+                    : b.paymentMethod === "manual"
+                      ? "Xác nhận"
+                      : String(b.paymentMethod)}
                 {b.paymentReference ? ` — ${b.paymentReference}` : ""}
               </p>
             )}
-            {b.vnpayTransactionNo ? (
-              <p className="mb-0">
-                <strong>Mã GD VNPay:</strong> {b.vnpayTransactionNo}
-              </p>
-            ) : null}
           </>
         )}
       </div>

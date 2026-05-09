@@ -300,9 +300,8 @@ export interface Bill {
   status: "unpaid" | "pending" | "paid" | "overdue" | string;
   dueDate: string;
   paidAt?: string;
-  paymentMethod?: "manual" | "online" | "counter" | "vnpay";
+  paymentMethod?: "manual" | "online" | "counter";
   paymentReference?: string;
-  vnpayTransactionNo?: string;
   paymentHistory?: BillPaymentHistoryEntry[];
   note?: string;
   billType?: "monthly" | "penalty";

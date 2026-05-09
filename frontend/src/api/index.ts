@@ -330,12 +330,6 @@ export const opsContractsApi = {
   dashboard: () => client.get("/ops/contracts/dashboard"),
 };
 
-/** Thanh toán VNPay — POST /api/payment/create-vnpay */
-export const paymentApi = {
-  createVnpay: (body: { invoiceId: string; amount: number; returnPath?: string }) =>
-    client.post("/payment/create-vnpay", body),
-};
-
 export const billsApi = {
   getMy: () => client.get("/bills/my"),
   /** Alias REST: GET /api/my-bills (cùng dữ liệu getMy) */
