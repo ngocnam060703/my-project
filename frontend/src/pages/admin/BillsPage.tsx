@@ -503,7 +503,14 @@ const BillsPage: React.FC = () => {
           </Form.Item>
           <Form.Item name="electricityFee" label="Tiền điện (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="waterFee" label="Tiền nước (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-          <Form.Item name="sharedCommonFee" label="Tiền Wi‑Fi (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
+          <Form.Item
+            name="sharedCommonFee"
+            label="Tiền Wi‑Fi — tổng gói phòng / tháng (đ)"
+            extra="Nhập tổng tiền Wi‑Fi của cả phòng (vd 200.000đ). Mỗi sinh viên trả = số này ÷ số slot (capacity). Để 0 thì chỉ dùng các dịch vụ chung trong danh mục Dịch vụ."
+            initialValue={0}
+          >
+            <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
           <Form.Item name="otherFee" label="Phí khác (gửi xe...)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="dueDate" label="Hạn thanh toán"><Input type="date" /></Form.Item>
           <Form.Item>

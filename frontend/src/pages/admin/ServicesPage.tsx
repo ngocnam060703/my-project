@@ -342,7 +342,7 @@ const ServicesPage: React.FC = () => {
           <Form.Item name="type" label="Loại" rules={[{ required: true }]}>
             <Select
               options={[
-                { value: "common", label: "Dịch vụ chung — tính vào hóa đơn phòng, chia đầu người" },
+                { value: "common", label: "Dịch vụ chung — giá theo phòng, chia đều số slot (capacity)" },
                 { value: "personal", label: "Dịch vụ cá nhân — sinh viên tự đăng ký" },
               ]}
             />

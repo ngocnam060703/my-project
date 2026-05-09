@@ -57,6 +57,43 @@ function buildCommonServicesPerStudent(commonServices, roomLike) {
   return { breakdown, commonPerStudent, slots };
 }
 
+function isWifiNamedService(s) {
+  const n = String(s.name || "").toLowerCase();
+  return n.includes("wifi") || n.includes("wi-fi") || n.includes("wi fi");
+}
+
+/**
+ * Form admin "Tiền Wi‑Fi": là **tổng gói theo phòng / tháng** → mỗi SV trả `÷ capacity`.
+ * Nếu có nhập (>0): không cộng trùng dòng Wi‑Fi trong catalog Service.
+ */
+function resolveCommonFeesForRoom(roomLike, commonServices, wifiRoomTotalFromBody) {
+  const rawWifi =
+    wifiRoomTotalFromBody != null && wifiRoomTotalFromBody !== ""
+      ? Number(wifiRoomTotalFromBody)
+      : NaN;
+  const wifiRoomTotal = Number.isFinite(rawWifi) && rawWifi > 0 ? Math.round(rawWifi) : null;
+
+  if (wifiRoomTotal != null) {
+    const sansWifi = commonServices.filter((s) => !isWifiNamedService(s));
+    const built = buildCommonServicesPerStudent(sansWifi, roomLike);
+    const slots = roomCapacitySlots(roomLike);
+    const wifiShare = Math.round(wifiRoomTotal / slots);
+    const wifiLine = {
+      service: null,
+      name: "Wi‑Fi (gói phòng)",
+      unit: "monthly",
+      totalAmount: wifiShare,
+    };
+    return {
+      breakdown: [...built.breakdown, wifiLine],
+      commonPerStudent: built.commonPerStudent + wifiShare,
+      slots,
+    };
+  }
+
+  return buildCommonServicesPerStudent(commonServices, roomLike);
+}
+
 async function buildPersonalFeeForUser({ userId, month, year }) {
   const personalServices = await Service.find({ type: "personal", isActive: true });
   if (!personalServices.length) return { total: 0, breakdown: [] };
@@ -189,7 +226,7 @@ exports.getMyBills = async (req, res) => {
 
 exports.create = async (req, res) => {
   try {
-    const { contract, roomId, month, year, electricityFee, waterFee, otherFee, dueDate } = req.body;
+    const { contract, roomId, month, year, electricityFee, waterFee, otherFee, sharedCommonFee: wifiRoomFromForm, dueDate } = req.body;
     const m = Number(month);
     const y = Number(year);
     if (!(m >= 1 && m <= 12) || y < 2000) {
@@ -230,7 +267,11 @@ exports.create = async (req, res) => {
       const fixedOther = Math.max(0, Number(otherFee || 0));
 
       const commonServices = await Service.find({ type: "common", isActive: true });
-      const { breakdown: commonBreakdown, commonPerStudent: commonFeeShare } = buildCommonServicesPerStudent(commonServices, room);
+      const { breakdown: commonBreakdown, commonPerStudent: commonFeeShare } = resolveCommonFeesForRoom(
+        room,
+        commonServices,
+        wifiRoomFromForm
+      );
 
       await syncRoomMonthlyUtilityCost({
         roomId,
