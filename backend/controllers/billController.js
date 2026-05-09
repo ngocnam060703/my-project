@@ -29,13 +29,32 @@ function isContractExpired(endDate, currentDate) {
 /**
  * Tiền phòng / 1 sinh viên = giá phòng ÷ số slot (field capacity của phòng).
  * Luôn tính từ price + capacity — không dùng virtual pricePerPerson để tránh lệch khi tạo HĐ.
- * Điện/nước/dịch vụ chung vẫn chia theo số người đang ở (occupants).
+ * Điện/nước/chi phí khác chia theo số người đang ở (occupants).
+ * DV phòng chung (Wi‑Fi, type common): giá theo phòng → chia đều theo số slot (capacity).
  */
+function roomCapacitySlots(roomLike) {
+  const rawSlots = Number(roomLike?.capacity);
+  return Number.isFinite(rawSlots) && rawSlots >= 1 ? rawSlots : 1;
+}
+
 function computeRoomFeePerSlot(roomLike) {
   const total = Number(roomLike?.price ?? 0);
-  const rawSlots = Number(roomLike?.capacity);
-  const slots = Number.isFinite(rawSlots) && rawSlots >= 1 ? rawSlots : 1;
-  return Math.round(total / slots);
+  return Math.round(total / roomCapacitySlots(roomLike));
+}
+
+/** Gói DV common (vd: Wi‑Fi/phòng): mỗi SV trả (giá phòng) ÷ capacity slot */
+function buildCommonServicesPerStudent(commonServices, roomLike) {
+  const slots = roomCapacitySlots(roomLike);
+  const breakdown = [];
+  let commonPerStudent = 0;
+  for (const s of commonServices) {
+    if (String(s.name || "").toLowerCase().includes("tiền phòng")) continue;
+    const roomAmt = Number(s.price || 0);
+    const perStudent = Math.round(roomAmt / slots);
+    commonPerStudent += perStudent;
+    breakdown.push({ service: s._id, name: s.name, unit: s.unit, totalAmount: perStudent });
+  }
+  return { breakdown, commonPerStudent, slots };
 }
 
 async function buildPersonalFeeForUser({ userId, month, year }) {
@@ -206,20 +225,12 @@ exports.create = async (req, res) => {
       const occupants = Math.max(1, contracts.length);
       const roomCost = await RoomMonthlyCost.findOne({ room: roomId, month: m, year: y });
       const feePerSlot = computeRoomFeePerSlot(room);
-      const roomFeeTotal = feePerSlot * occupants;
       const electricityTotal = electricityFee != null ? Number(electricityFee) : Number(roomCost?.electricityFee || 0);
       const waterTotal = waterFee != null ? Number(waterFee) : Number(roomCost?.waterFee || 0);
       const fixedOther = Math.max(0, Number(otherFee || 0));
 
       const commonServices = await Service.find({ type: "common", isActive: true });
-      const commonBreakdown = [];
-      let commonTotal = 0;
-      for (const s of commonServices) {
-        if (String(s.name || "").toLowerCase().includes("tiền phòng")) continue;
-        const amt = Number(s.price || 0);
-        commonTotal += amt;
-        commonBreakdown.push({ service: s._id, name: s.name, unit: s.unit, totalAmount: amt });
-      }
+      const { breakdown: commonBreakdown, commonPerStudent: commonFeeShare } = buildCommonServicesPerStudent(commonServices, room);
 
       await syncRoomMonthlyUtilityCost({
         roomId,
@@ -240,9 +251,10 @@ exports.create = async (req, res) => {
         const personal = await buildPersonalFeeForUser({ userId: c.user._id, month: m, year: y });
         const personalBreakdown = personal.breakdown;
         const personalTotal = personal.total;
-        const sharedTotal = roomFeeTotal + electricityTotal + waterTotal + commonTotal + fixedOther;
-        const sharedPerStudent = sharedTotal / occupants;
-        const total = sharedPerStudent + personalTotal;
+        const electShare = electricityTotal / occupants;
+        const waterShare = waterTotal / occupants;
+        const otherShare = fixedOther / occupants;
+        const total = feePerSlot + electShare + waterShare + otherShare + commonFeeShare + personalTotal;
 
         if (exists) {
           if (exists.status === "paid") {
@@ -250,17 +262,17 @@ exports.create = async (req, res) => {
             continue;
           }
           exists.roomFee = feePerSlot;
-          exists.electricityFee = electricityTotal / occupants;
-          exists.waterFee = waterTotal / occupants;
-          exists.otherFee = fixedOther / occupants;
-          exists.sharedCommonFee = commonTotal / occupants;
+          exists.electricityFee = electShare;
+          exists.waterFee = waterShare;
+          exists.otherFee = otherShare;
+          exists.sharedCommonFee = commonFeeShare;
           exists.personalServiceFee = personalTotal;
           exists.occupants = occupants;
           exists.commonServiceBreakdown = commonBreakdown;
           exists.personalServiceBreakdown = personalBreakdown;
           exists.total = total;
           exists.dueDate = due;
-          exists.note = `Tiền phòng = giá phòng ÷ ${room.capacity || 1} slot; (Phòng đã ở + Điện + Nước + DV chung) / ${occupants} người + DV cá nhân`;
+          exists.note = `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người đang ở; + DV cá nhân`;
           exists.paymentHistory = exists.paymentHistory || [];
           exists.paymentHistory.push({
             at: new Date(),
@@ -282,10 +294,10 @@ exports.create = async (req, res) => {
           month: m,
           year: y,
           roomFee: feePerSlot,
-          electricityFee: electricityTotal / occupants,
-          waterFee: waterTotal / occupants,
-          otherFee: fixedOther / occupants,
-          sharedCommonFee: commonTotal / occupants,
+          electricityFee: electShare,
+          waterFee: waterShare,
+          otherFee: otherShare,
+          sharedCommonFee: commonFeeShare,
           personalServiceFee: personalTotal,
           occupants,
           commonServiceBreakdown: commonBreakdown,
@@ -293,7 +305,7 @@ exports.create = async (req, res) => {
           total,
           dueDate: due,
           status: "unpaid",
-          note: `Tiền phòng = giá phòng ÷ ${room.capacity || 1} slot; (Phòng đã ở + Điện + Nước + DV chung) / ${occupants} người + DV cá nhân`,
+          note: `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người đang ở; + DV cá nhân`,
           paymentHistory: [
             {
               at: new Date(),
@@ -426,26 +438,14 @@ exports.generateByMonth = async (req, res) => {
       const occupants = Math.max(1, list.length);
       const roomCost = roomCostMap.get(String(room._id));
       const feePerSlot = computeRoomFeePerSlot(room);
-      const roomFeeTotal = feePerSlot * occupants;
       const electricityTotal = Number(roomCost?.electricityFee || 0);
       const waterTotal = Number(roomCost?.waterFee || 0);
 
-      const commonBreakdown = [];
-      let commonTotal = 0;
-      for (const s of commonServices) {
-        if (String(s.name || "").toLowerCase().includes("tiền phòng")) continue;
-        const amt = Number(s.price || 0);
-        commonTotal += amt;
-        commonBreakdown.push({
-          service: s._id,
-          name: s.name,
-          unit: s.unit,
-          totalAmount: amt,
-        });
-      }
+      const { breakdown: commonBreakdown, commonPerStudent: commonFeeShare } = buildCommonServicesPerStudent(commonServices, room);
 
-      const sharedTotal = roomFeeTotal + electricityTotal + waterTotal + commonTotal;
-      const sharedPerStudent = sharedTotal / occupants;
+      const electShare = electricityTotal / occupants;
+      const waterShare = waterTotal / occupants;
+      const basePerStudent = feePerSlot + electShare + waterShare + commonFeeShare;
 
       for (const c of list) {
         const exists = await Bill.findOne({ contract: c._id, month, year });
@@ -458,7 +458,7 @@ exports.generateByMonth = async (req, res) => {
         const personalBreakdown = personal.breakdown;
         const personalTotal = personal.total;
 
-        const total = sharedPerStudent + personalTotal;
+        const total = basePerStudent + personalTotal;
         const bill = await Bill.create({
           contract: c._id,
           user: c.user._id,
@@ -466,10 +466,10 @@ exports.generateByMonth = async (req, res) => {
           month,
           year,
           roomFee: feePerSlot,
-          electricityFee: electricityTotal / occupants,
-          waterFee: waterTotal / occupants,
+          electricityFee: electShare,
+          waterFee: waterShare,
           otherFee: 0,
-          sharedCommonFee: commonTotal / occupants,
+          sharedCommonFee: commonFeeShare,
           personalServiceFee: personalTotal,
           occupants,
           commonServiceBreakdown: commonBreakdown,
@@ -477,7 +477,7 @@ exports.generateByMonth = async (req, res) => {
           total,
           dueDate,
           status: "unpaid",
-          note: `Tiền phòng = giá phòng ÷ ${room?.capacity || 1} slot; (Phòng đã ở + Điện + Nước + DV chung) / ${occupants} người + DV cá nhân`,
+          note: `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước ÷ ${occupants} người đang ở; + DV cá nhân`,
           paymentHistory: [
             {
               at: new Date(),
