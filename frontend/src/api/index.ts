@@ -197,12 +197,21 @@ export const roomsApi = {
     client.get("/rooms", { params }),
   getById: (id: string) => client.get(`/rooms/${id}`),
   getResidents: (id: string) => client.get(`/rooms/${id}/residents`),
+  getResidencyHistory: (id: string) => client.get(`/rooms/${id}/residency-history`),
   getBeds: (id: string) => client.get(`/rooms/${id}/beds`),
   assignBed: (roomId: string, payload: { bedId: string; contractId: string }) => client.post(`/rooms/${roomId}/beds/assign`, payload),
+  checkInBed: (roomId: string, bedId: string) => client.post(`/rooms/${roomId}/beds/check-in/${encodeURIComponent(bedId)}`),
+  transferBed: (roomId: string, payload: { contractId: string; targetBedId: string; reason?: string }) =>
+    client.post(`/rooms/${roomId}/beds/transfer`, payload),
   setRoomLeader: (id: string, userId: string) => client.put(`/rooms/${id}/room-leader`, { userId }),
   create: (data: Record<string, unknown>) => client.post("/rooms", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/rooms/${id}`, data),
   delete: (id: string) => client.delete(`/rooms/${id}`),
+};
+
+export const bedsApi = {
+  checkout: (bedId: string, body?: { note?: string }) =>
+    client.post(`/beds/${encodeURIComponent(bedId)}/checkout`, body || {}),
 };
 
 export const majorsApi = {
@@ -304,6 +313,8 @@ export const contractsApi = {
   terminate: (id: string) => client.put(`/contracts/${id}/terminate`),
   sign: (id: string) => client.put(`/contracts/${id}/sign`),
   confirmPayment: (id: string) => client.put(`/contracts/${id}/confirm-payment`),
+  /** Admin: tạo slot giường nếu thiếu + gán giường trống cho hợp đồng */
+  ensureBed: (id: string) => client.put(`/contracts/${encodeURIComponent(id)}/ensure-bed`),
   /** Sinh viên: gửi yêu cầu gia hạn (chỉ hợp đồng active) */
   requestExtend: (contractId: string, months: number) =>
     client.post(`/contracts/${encodeURIComponent(contractId)}/request-extend`, { months }),
@@ -358,6 +369,7 @@ export const usersApi = {
     status?: "active" | "locked" | "";
     sortBy?: "id" | "fullName" | "createdAt";
     sortOrder?: "asc" | "desc";
+    includeDorm?: 1 | 0;
   }) => client.get("/users", { params }),
   getById: (id: string) => client.get(`/users/${id}`),
   create: (data: Record<string, unknown>) => client.post("/users", data),

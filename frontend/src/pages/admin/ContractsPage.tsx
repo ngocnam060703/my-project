@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Table,
   Button,
@@ -43,6 +44,9 @@ const lessorAddress = ".........................................................
 const lessorPhone = ".............................................................................................";
 
 const ContractsPage: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const openContractId = searchParams.get("openContract")?.trim() || "";
+
   const [data, setData] = useState<Contract[]>([]);
   const [total, setTotal] = useState(0);
   const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { name: string } }[]>([]);
@@ -113,6 +117,34 @@ const ContractsPage: React.FC = () => {
   useEffect(() => {
     void load();
   }, [page, filters.status, filters.room, filters.area, quick.hasDebt, search, faculty, major]);
+
+  useEffect(() => {
+    if (!openContractId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await contractsApi.getById(openContractId);
+        if (cancelled || !res.data) return;
+        setDetailModal(res.data as Contract);
+      } catch {
+        message.error("Không mở được hợp đồng từ liên kết");
+      } finally {
+        if (!cancelled) {
+          setSearchParams(
+            (prev) => {
+              const next = new URLSearchParams(prev);
+              next.delete("openContract");
+              return next;
+            },
+            { replace: true }
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [openContractId, setSearchParams]);
 
   useEffect(() => {
     areasApi
@@ -441,7 +473,7 @@ const ContractsPage: React.FC = () => {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20, alignItems: "center" }}>
           <FilterOutlined style={{ color: "#6b7280" }} />
           <Input
-            placeholder="Lọc theo khoa"
+            placeholder="Lọc theo khóa"
             allowClear
             style={{ width: 160 }}
             value={faculty}
@@ -536,7 +568,7 @@ const ContractsPage: React.FC = () => {
                   "Sinh viên": c.user && typeof c.user === "object" ? (c.user as { fullName?: string }).fullName : "-",
                   MSSV: c.user && typeof c.user === "object" ? (c.user as User).studentId || "-" : "-",
                   "Giới tính": c.user && typeof c.user === "object" ? (c.user as User).gender || "-" : "-",
-                  Khoa: c.user && typeof c.user === "object" ? (c.user as User).faculty || "-" : "-",
+                  Khóa: c.user && typeof c.user === "object" ? (c.user as User).faculty || "-" : "-",
                   Ngành: c.user && typeof c.user === "object" ? (c.user as User).major || "-" : "-",
                   "Phòng": c.room && typeof c.room === "object" ? (c.room as { roomNumber?: string }).roomNumber : "-",
                   "Từ ngày": c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "-",

@@ -8,38 +8,9 @@ const ContractExtensionSetting = require("../models/ContractExtensionSetting");
 const Bill = require("../models/Bill");
 const Violation = require("../models/Violation");
 const MaintenanceReport = require("../models/MaintenanceReport");
-const Bed = require("../models/Bed");
-const BedHistory = require("../models/BedHistory");
 const { getIO } = require("../socket");
-
-async function tryAutoAssignBed(contract, performedBy) {
-  if (!contract || !contract.room || !contract.user) return;
-  if (contract.bed) return;
-  const bed = await Bed.findOne({
-    room: contract.room,
-    status: "available",
-    currentUser: null,
-    currentContract: null,
-  }).sort({ code: 1 });
-  if (!bed) return;
-  bed.status = "occupied";
-  bed.currentUser = contract.user;
-  bed.currentContract = contract._id;
-  bed.checkInAt = bed.checkInAt || new Date();
-  await bed.save();
-  contract.bed = bed._id;
-  await contract.save();
-  await BedHistory.create({
-    bed: bed._id,
-    room: bed.room,
-    user: contract.user,
-    contract: contract._id,
-    action: "assigned",
-    toBedCode: bed.code,
-    toStatus: "occupied",
-    performedBy: performedBy || null,
-  });
-}
+const { tryAutoAssignBed } = require("../services/bedAllocation");
+const { releaseBedForContractId } = require("../services/bedOccupancy");
 
 const CONTRACT_EXT_SETTING_KEY = "contract_extension";
 
@@ -486,8 +457,10 @@ exports.terminate = async (req, res) => {
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
     if (contract.status === "active" || contract.status === "pending_payment") {
       await decrementRoomOccupancy(contract.room);
+      await releaseBedForContractId(contract._id, req.user?._id, "Hợp đồng chấm dứt");
     }
     contract.status = "terminated";
+    contract.bed = null;
     await contract.save();
     res.json(contract);
   } catch (error) {
@@ -554,7 +527,7 @@ exports.confirmPayment = async (req, res) => {
 
     // Auto assign bed (best effort) when contract becomes active
     try {
-      await tryAutoAssignBed(contract, req.user?._id);
+      await tryAutoAssignBed(contract._id, req.user?._id);
     } catch {
       // best-effort: bed assignment can be done manually later
     }
@@ -573,6 +546,37 @@ exports.confirmPayment = async (req, res) => {
     });
 
     res.json(contract);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Admin/Manager: đảm bảo có slot giường + gán giường trống cho hợp đồng (khắc phục thiếu bed). */
+exports.ensureBed = async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "ID hợp đồng không hợp lệ" });
+
+    const result = await tryAutoAssignBed(id, req.user?._id);
+    if (!result.ok) {
+      return res.status(400).json({ message: result.message || "Không gán được giường" });
+    }
+
+    const contract = await Contract.findById(id)
+      .populate({
+        path: "room",
+        select: "roomNumber floor area capacity currentOccupancy price status",
+        populate: { path: "area", select: "name genderPolicy" },
+      })
+      .populate("bed", "code status equipmentStatus")
+      .lean();
+
+    res.json({
+      assigned: !result.already,
+      alreadyHadBed: !!result.already,
+      bed: result.bed || contract?.bed || null,
+      contract,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

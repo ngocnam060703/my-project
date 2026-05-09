@@ -10,19 +10,7 @@ require("../models/Bed");
 const Room = require("../models/Room");
 const Bed = require("../models/Bed");
 
-function buildCodes(capacity) {
-  const cap = Math.max(1, Number(capacity || 1));
-  const codes = [];
-  const rows = ["A", "B", "C", "D", "E", "F"];
-  let idx = 0;
-  while (codes.length < cap) {
-    const r = rows[Math.floor(idx / 10)] || "A";
-    const n = (idx % 10) + 1;
-    codes.push(`${r}${n}`);
-    idx += 1;
-  }
-  return codes;
-}
+const { buildBedCodesForRoom } = require("../services/bedAllocation");
 
 async function main() {
   await connectDB();
@@ -35,7 +23,7 @@ async function main() {
       skipped += 1;
       continue;
     }
-    const codes = buildCodes(room.capacity);
+    const codes = buildBedCodesForRoom(room.roomNumber, room.capacity);
     await Bed.insertMany(codes.map((code) => ({ room: room._id, code, status: "available" })));
     created += codes.length;
   }

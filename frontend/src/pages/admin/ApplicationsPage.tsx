@@ -378,7 +378,7 @@ const ApplicationsPage: React.FC = () => {
 
       <div className="row g-2 mb-3 align-items-end">
         <div className="col-md-3">
-          <label className="form-label small mb-0">Lọc theo Khoa</label>
+          <label className="form-label small mb-0">Lọc theo khóa</label>
           <input
             className="form-control form-control-sm"
             placeholder="VD: IT"

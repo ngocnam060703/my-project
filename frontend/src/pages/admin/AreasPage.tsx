@@ -686,7 +686,7 @@ const AreasPage: React.FC = () => {
               <Descriptions.Item label="Ngày sinh">{formatDateVi(studentDetailModal.student.dateOfBirth)}</Descriptions.Item>
               <Descriptions.Item label="MSSV">{studentDetailModal.student.studentId || "—"}</Descriptions.Item>
               <Descriptions.Item label="Lớp">{studentDetailModal.student.className || "—"}</Descriptions.Item>
-              <Descriptions.Item label="Khoa">{studentDetailModal.student.faculty || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Khóa">{studentDetailModal.student.faculty || "—"}</Descriptions.Item>
               <Descriptions.Item label="Ngành">{studentDetailModal.student.major || "—"}</Descriptions.Item>
               <Descriptions.Item label="Giáo viên chủ nhiệm">{studentDetailModal.student.homeroomTeacher || "—"}</Descriptions.Item>
               <Descriptions.Item label="CCCD / CMND">{studentDetailModal.student.citizenId || "—"}</Descriptions.Item>

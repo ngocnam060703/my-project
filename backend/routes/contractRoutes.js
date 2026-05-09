@@ -49,6 +49,7 @@ router.get("/:id", contractController.getById);
 router.put("/:id/extend", requireRole("admin", "manager"), contractController.extend);
 router.put("/:id/terminate", requireRole("admin", "manager"), contractController.terminate);
 router.put("/:id/confirm-payment", requireRole("admin", "manager"), contractController.confirmPayment);
+router.put("/:id/ensure-bed", requireRole("admin", "manager"), contractController.ensureBed);
 router.put("/:id", requireRole("admin", "manager"), contractController.update);
 
 module.exports = router;

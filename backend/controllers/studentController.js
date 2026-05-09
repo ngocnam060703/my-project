@@ -11,6 +11,7 @@ const STUDENT_FIELDS = [
   "studentId",
   "className",
   "major",
+  "facultyGroup",
   "gender",
   "citizenId",
   "dateOfBirth",

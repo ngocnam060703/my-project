@@ -8,7 +8,7 @@ const bedHistorySchema = new mongoose.Schema(
     contract: { type: mongoose.Schema.Types.ObjectId, ref: "Contract", default: null, index: true },
     action: {
       type: String,
-      enum: ["assigned", "transferred_in", "transferred_out", "checked_out", "status_changed", "note_updated"],
+      enum: ["assigned", "transferred_in", "transferred_out", "checked_out", "checked_in", "status_changed", "note_updated"],
       required: true,
       index: true,
     },

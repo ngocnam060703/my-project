@@ -1,6 +1,10 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const Contract = require("../models/Contract");
+const Area = require("../models/Area");
+const Bill = require("../models/Bill");
+const Violation = require("../models/Violation");
+const BedHistory = require("../models/BedHistory");
 const { validationResult } = require("express-validator");
 
 const PROFILE_FIELDS = [
@@ -9,6 +13,7 @@ const PROFILE_FIELDS = [
   "studentId",
   "className",
   "major",
+  "facultyGroup",
   "gender",
   "citizenId",
   "dateOfBirth",
@@ -76,8 +81,9 @@ function validateRequiredStudentProfile(profileLike) {
   if (!hasText(profileLike.email)) return "Thiếu thông tin bắt buộc: Email";
   if (!hasText(profileLike.phone)) return "Thiếu thông tin bắt buộc: Số điện thoại";
   if (!hasText(profileLike.studentId)) return "Thiếu thông tin bắt buộc: Mã sinh viên";
+  if (!hasText(profileLike.facultyGroup)) return "Thiếu thông tin bắt buộc: Khoa/nhóm ngành";
   if (!hasText(profileLike.major)) return "Thiếu thông tin bắt buộc: Ngành";
-  if (!hasText(profileLike.faculty)) return "Thiếu thông tin bắt buộc: Khoa";
+  if (!hasText(profileLike.faculty)) return "Thiếu thông tin bắt buộc: Khóa";
   if (!hasText(profileLike.homeroomTeacher)) return "Thiếu thông tin bắt buộc: Giáo viên chủ nhiệm";
   if (!hasText(profileLike.gender)) return "Thiếu thông tin bắt buộc: Giới tính";
   if (!hasText(profileLike.citizenId)) return "Thiếu thông tin bắt buộc: CCCD";
@@ -114,6 +120,39 @@ exports.getAll = async (req, res) => {
       User.countDocuments({ ...filter, role: "admin" }),
     ]);
 
+    const includeDorm = String(req.query.includeDorm || "").trim();
+    if (includeDorm === "1" && String(filter.role || "") === "user" && users.length) {
+      const now = new Date();
+      const enriched = await Promise.all(
+        users.map(async (u) => {
+          try {
+            const c = await Contract.findOne({
+              user: u._id,
+              status: { $in: ["active", "pending_payment"] },
+              endDate: { $gte: now },
+            })
+              .populate({
+                path: "room",
+                select: "roomNumber area",
+                populate: { path: "area", select: "name" },
+              })
+              .lean();
+            const room = c?.room && typeof c.room === "object" ? c.room : null;
+            const areaName =
+              room?.area && typeof room.area === "object" ? String(room.area.name || "").trim() : "";
+            return {
+              ...u,
+              currentRoomNumber: room ? String(room.roomNumber || "").trim() : "",
+              currentAreaName: areaName,
+            };
+          } catch {
+            return { ...u, currentRoomNumber: "", currentAreaName: "" };
+          }
+        })
+      );
+      users.splice(0, users.length, ...enriched);
+    }
+
     res.json({
       users,
       total,
@@ -131,25 +170,213 @@ exports.getById = async (req, res) => {
     const user = await User.findOne({ _id: req.params.id, ...notDeleted }).select("-password").populate("managedArea").lean();
     if (!user) return res.status(404).json({ message: "Không tìm thấy người dùng" });
 
-    const contracts = await Contract.find({ user: user._id })
-      .populate({
-        path: "room",
-        select: "roomNumber floor area price status",
-        populate: { path: "area", select: "name genderPolicy" },
-      })
-      .sort({ updatedAt: -1 })
-      .lean();
+    let contracts = [];
+    let currentContract = null;
+    let currentRoom = null;
 
-    const now = new Date();
-    const activeContracts = contracts.filter((c) => c.status === "active" && new Date(c.endDate) >= now);
-    const currentContract = activeContracts[0] || contracts.find((c) => c.status === "active") || null;
-    const currentRoom = currentContract?.room || null;
+    if (user.role === "user") {
+      contracts = await Contract.find({ user: user._id })
+        .populate({
+          path: "room",
+          select: "roomNumber floor area price status capacity currentOccupancy",
+          populate: { path: "area", select: "name genderPolicy" },
+        })
+        .populate("bed", "code status room equipmentStatus assignedAt checkInAt")
+        .sort({ updatedAt: -1 })
+        .lean();
+
+      const now = new Date();
+      currentContract =
+        contracts.find((c) => c.status === "active" && new Date(c.endDate) >= now) ||
+        contracts.find((c) => c.status === "pending_payment" && new Date(c.endDate) >= now) ||
+        contracts.find((c) => c.status === "active") ||
+        contracts.find((c) => c.status === "pending_payment") ||
+        null;
+      currentRoom = currentContract?.room || null;
+    }
+
+    /** Lịch sử cư trú (theo HĐ + BedHistory), công nợ & vi phạm */
+    let stayHistory = [];
+    let financialSummary = null;
+    let violationsRecent = [];
+    let residencyOperationalStatus = null;
+
+    if (user.role === "user") {
+      const unpaidBills = await Bill.find({
+        user: user._id,
+        status: { $in: ["pending", "unpaid", "overdue"] },
+      })
+        .sort({ dueDate: 1, year: -1, month: -1 })
+        .limit(24)
+        .lean();
+      const debtTotal = unpaidBills.reduce((sum, b) => sum + Number(b.total || 0), 0);
+      financialSummary = {
+        debtTotal,
+        unpaidCount: unpaidBills.length,
+        unpaidBills,
+      };
+
+      violationsRecent = await Violation.find({ user: user._id }).sort({ createdAt: -1 }).limit(25).lean();
+
+      const bCur = currentContract?.bed;
+      if (!currentContract) residencyOperationalStatus = "no_active_contract";
+      else if (!bCur || typeof bCur !== "object") residencyOperationalStatus = "contract_no_bed";
+      else if (String(bCur.status) !== "occupied") residencyOperationalStatus = "no_bed_assigned";
+      else if (!bCur.checkInAt && bCur.assignedAt) residencyOperationalStatus = "assigned_pending_checkin";
+      else if (bCur.checkInAt) residencyOperationalStatus = "checked_in_staying";
+      else residencyOperationalStatus = "assigned_pending_checkin";
+
+      const histRows =
+        contracts.length > 0
+          ? await BedHistory.find({
+              user: user._id,
+              contract: { $in: contracts.map((x) => x._id) },
+            })
+              .sort({ createdAt: 1 })
+              .lean()
+          : [];
+
+      const histByContract = {};
+      for (const h of histRows) {
+        const cid = h.contract ? String(h.contract) : "";
+        if (!cid) continue;
+        if (!histByContract[cid]) histByContract[cid] = [];
+        histByContract[cid].push(h);
+      }
+
+      if (contracts.length) {
+        const now = new Date();
+        stayHistory = [...contracts]
+          .sort((a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0))
+          .map((c) => {
+            const cid = String(c._id);
+            const ev = histByContract[cid] || [];
+            const bdoc = c.bed && typeof c.bed === "object" ? c.bed : null;
+
+            let checkInAt = null;
+            for (const e of ev) {
+              if (e.action === "checked_in") {
+                checkInAt = e.createdAt;
+                break;
+              }
+            }
+            if (!checkInAt && bdoc?.checkInAt) checkInAt = bdoc.checkInAt;
+
+            let checkOutAt = null;
+            for (const e of ev) {
+              if (e.action === "checked_out") checkOutAt = e.createdAt;
+            }
+
+            const notesFromHist = [];
+            for (const e of ev) {
+              const n = String(e.note || "").trim();
+              if (!n) continue;
+              const label =
+                e.action === "checked_out"
+                  ? "Check-out"
+                  : e.action === "transferred_out"
+                    ? "Chuyển đi"
+                    : e.action === "transferred_in"
+                      ? "Chuyển đến"
+                      : e.action === "assigned"
+                        ? "Phân giường"
+                        : String(e.action);
+              notesFromHist.push(`${label}: ${n}`);
+            }
+            for (const e of ev) {
+              const from = String(e.fromBedCode || "").trim();
+              const to = String(e.toBedCode || "").trim();
+              if ((e.action === "transferred_out" || e.action === "transferred_in") && (from || to)) {
+                notesFromHist.push(`Chuyển giường ${from || "—"} → ${to || "—"}`);
+              }
+            }
+            const noteOut = [...new Set(notesFromHist)].slice(0, 5).join(" · ");
+
+            const rn = c.room && typeof c.room === "object" ? String(c.room.roomNumber || "").trim() : "";
+            let bc = bdoc ? String(bdoc.code || "").trim() : "";
+            if (!bc) {
+              for (let i = ev.length - 1; i >= 0; i--) {
+                const e = ev[i];
+                if ((e.action === "assigned" || e.action === "transferred_in") && e.toBedCode) {
+                  bc = String(e.toBedCode).trim();
+                  break;
+                }
+              }
+            }
+            const composite =
+              rn && bc ? (bc.startsWith(`${rn}-`) ? bc : `${rn}-${bc}`) : bc || rn || "—";
+
+            const isCurrent = currentContract && String(currentContract._id) === cid;
+            const ended =
+              ["terminated", "expired"].includes(String(c.status || "")) || new Date(c.endDate) < now;
+            const notYetStarted = new Date(c.startDate) > now;
+
+            let residencyStayStatus = "checked_out";
+            if (notYetStarted) residencyStayStatus = "not_started";
+            else if (isCurrent && !ended) {
+              if (residencyOperationalStatus === "assigned_pending_checkin") residencyStayStatus = "pending_checkin";
+              else if (residencyOperationalStatus === "checked_in_staying") residencyStayStatus = "staying";
+              else if (
+                residencyOperationalStatus === "contract_no_bed" ||
+                residencyOperationalStatus === "no_bed_assigned"
+              )
+                residencyStayStatus = "pending_bed";
+              else residencyStayStatus = "pending_checkin";
+            }
+
+            return {
+              contractId: c._id,
+              contractNumber: c.contractNumber,
+              status: c.status,
+              startDate: c.startDate,
+              endDate: c.endDate,
+              areaName:
+                c.room && typeof c.room === "object" && c.room.area && typeof c.room.area === "object"
+                  ? c.room.area.name
+                  : "",
+              roomNumber: rn || "",
+              bedCode: bc || "",
+              bedSlotDisplay: composite,
+              checkInAt,
+              checkOutAt,
+              residencyStayStatus,
+              note: noteOut,
+              studentName: user.fullName || "",
+              studentId: user.studentId || "",
+            };
+          });
+      }
+    }
+
+    /** Khu phụ trách (quản lý): gộp managedArea trên User + Area.manager trỏ về user */
+    let managedAreas = [];
+    if (user.role === "manager") {
+      const seen = new Set();
+      const pushArea = (doc) => {
+        if (!doc || typeof doc !== "object" || !doc._id) return;
+        const id = String(doc._id);
+        if (seen.has(id)) return;
+        seen.add(id);
+        managedAreas.push(doc);
+      };
+      if (user.managedArea && typeof user.managedArea === "object") pushArea(user.managedArea);
+      const linked = await Area.find({ manager: user._id, ...notDeleted })
+        .select("name description genderPolicy plannedTotalRooms plannedCapacity manager")
+        .sort({ name: 1 })
+        .lean();
+      linked.forEach(pushArea);
+    }
 
     res.json({
       user,
       currentRoom,
       currentContract,
       contracts,
+      managedAreas: user.role === "manager" ? managedAreas : [],
+      stayHistory: user.role === "user" ? stayHistory : [],
+      financialSummary: user.role === "user" ? financialSummary : null,
+      violationsRecent: user.role === "user" ? violationsRecent : [],
+      residencyOperationalStatus: user.role === "user" ? residencyOperationalStatus : null,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

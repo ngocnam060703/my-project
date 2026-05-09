@@ -1,5 +1,6 @@
 const Contract = require("../models/Contract");
 const Room = require("../models/Room");
+const { releaseBedForContractId } = require("./bedOccupancy");
 const Bill = require("../models/Bill");
 const Notification = require("../models/Notification");
 const { getIO } = require("../socket");
@@ -14,7 +15,9 @@ async function terminateContractDiscipline(contractId) {
       room.status = room.currentOccupancy >= room.capacity ? "full" : "available";
       await room.save();
     }
+    await releaseBedForContractId(contract._id, null, "Kỷ luật / vi phạm");
     contract.status = "terminated";
+    contract.bed = null;
     await contract.save();
   }
 }

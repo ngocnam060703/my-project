@@ -110,12 +110,14 @@ interface ProfilePayload {
   studentId?: string;
   className?: string;
   major?: string;
+  facultyGroup?: string;
   dateOfBirth?: string | null;
   gender?: string;
   phone?: string;
   address?: string;
   citizenId?: string;
   profileComplete?: boolean;
+  /** Khóa (VD: K26) */
   faculty?: string;
   enrollmentDate?: string | null;
   homeroomTeacher?: string;
@@ -131,7 +133,7 @@ interface ProfilePayload {
   avatar?: string;
 }
 
-type MajorOption = { _id: string; name: string; faculty?: string; isActive?: boolean };
+type MajorOption = { _id: string; code?: string; name: string; faculty?: string; isActive?: boolean };
 
 const ProfilePage: React.FC = () => {
   const screens = Grid.useBreakpoint();
@@ -195,6 +197,7 @@ const ProfilePage: React.FC = () => {
         studentId: activeProfile.studentId,
         className: activeProfile.className,
         major: activeProfile.major,
+        facultyGroup: activeProfile.facultyGroup,
         gender: activeProfile.gender,
         citizenId: activeProfile.citizenId,
         dateOfBirth: activeProfile.dateOfBirth ? dayjs(activeProfile.dateOfBirth) : null,
@@ -319,6 +322,7 @@ const ProfilePage: React.FC = () => {
       studentId: profile.studentId,
       className: profile.className,
       major: profile.major,
+      facultyGroup: profile.facultyGroup,
       gender: profile.gender,
       citizenId: profile.citizenId,
       dateOfBirth: profile.dateOfBirth ? dayjs(profile.dateOfBirth) : null,
@@ -472,17 +476,30 @@ const ProfilePage: React.FC = () => {
             </Form.Item>
           </Col>
           <Col xs={24} lg={12}>
-            <Form.Item label="Chuyên ngành" name="major">
+            <Form.Item label="Ngành" name="major">
               {majorOptions.length ? (
                 <Select
                   size="large"
                   allowClear
                   showSearch
-                  placeholder="Chọn ngành"
+                  placeholder="Chọn ngành (từ danh mục)"
                   optionFilterProp="label"
+                  onChange={(v) => {
+                    const vv = String(v || "").trim();
+                    const picked = majorOptions.find((m) => String(m.faculty || "").trim() === vv);
+                    if (picked) {
+                      form.setFieldsValue({
+                        // Major.name = Khoa/nhóm ngành, Major.faculty = Ngành
+                        major: String(picked.faculty || "").trim(),
+                        facultyGroup: String(picked.name || "").trim(),
+                      });
+                    }
+                  }}
                   options={majorOptions.map((m) => ({
-                    value: m.name,
-                    label: m.faculty ? `${m.name} — ${m.faculty}` : m.name,
+                    value: String(m.faculty || "").trim(),
+                    label: m.code
+                      ? `${m.code} — ${String(m.faculty || "").trim()}`
+                      : String(m.faculty || "").trim(),
                   }))}
                 />
               ) : (
@@ -509,8 +526,13 @@ const ProfilePage: React.FC = () => {
         <FormSectionTitle>Thông tin học tập</FormSectionTitle>
         <Row gutter={[20, 0]}>
           <Col xs={24} lg={12}>
-            <Form.Item label="Khoa" name="faculty">
-              <Input size="large" allowClear />
+            <Form.Item label="Khoa/nhóm ngành" name="facultyGroup">
+              <Input size="large" allowClear disabled={majorOptions.length > 0} placeholder={majorOptions.length ? "Tự điền theo ngành" : ""} />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Khóa" name="faculty">
+              <Input size="large" allowClear placeholder="VD: K26" />
             </Form.Item>
           </Col>
           <Col xs={24} lg={12}>
@@ -691,8 +713,9 @@ const ProfilePage: React.FC = () => {
               <ProfileTabPanel>
                 <Descriptions {...tabDescProps}>
                   <Descriptions.Item label="Lớp">{profile.className || "—"}</Descriptions.Item>
-                  <Descriptions.Item label="Chuyên ngành">{profile.major || "—"}</Descriptions.Item>
-                  <Descriptions.Item label="Khoa">{profile.faculty || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khoa/nhóm ngành">{profile.facultyGroup || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Ngành">{profile.major || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khóa">{profile.faculty || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Ngày nhập học">{formatDateVi(profile.enrollmentDate)}</Descriptions.Item>
                   <Descriptions.Item label="GVCN">{profile.homeroomTeacher || "—"}</Descriptions.Item>
                 </Descriptions>
@@ -717,7 +740,8 @@ const ProfilePage: React.FC = () => {
             children: (
               <ProfileTabPanel>
                 <Descriptions {...tabDescProps}>
-                  <Descriptions.Item label="Khoa">{profile.faculty || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khoa/nhóm ngành">{profile.facultyGroup || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khóa">{profile.faculty || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Ngày nhập học">{formatDateVi(profile.enrollmentDate)}</Descriptions.Item>
                   <Descriptions.Item label="GVCN">{profile.homeroomTeacher || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Quê quán">{profile.addressNative || "—"}</Descriptions.Item>

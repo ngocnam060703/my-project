@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Button, Card, Form, Input, Modal, Space, Switch, Table, Tag, message } from "antd";
+import { Button, Card, Form, Input, Modal, Space, Table, message } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { majorsApi } from "../../api";
 
 type MajorRow = {
   _id: string;
+  code?: string;
   name: string;
   faculty?: string;
   isActive?: boolean;
+  residentsInDorm?: number;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -20,6 +22,8 @@ const MajorsPage: React.FC = () => {
   const [editing, setEditing] = useState<MajorRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
+  const pageSize = 20;
+  const [page, setPage] = useState(1);
 
   const load = async () => {
     setLoading(true);
@@ -27,7 +31,10 @@ const MajorsPage: React.FC = () => {
       const res = await majorsApi.getAll({ q: q.trim() || undefined });
       setRows((res.data?.items || []) as MajorRow[]);
     } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tải được danh sách ngành");
+      message.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+          "Không tải được danh sách ngành"
+      );
       setRows([]);
     } finally {
       setLoading(false);
@@ -42,27 +49,39 @@ const MajorsPage: React.FC = () => {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ name: "", faculty: "", isActive: true });
+    form.setFieldsValue({ code: "", name: "", faculty: "" });
     setModalOpen(true);
   };
 
   const openEdit = (r: MajorRow) => {
     setEditing(r);
     form.resetFields();
-    form.setFieldsValue({ name: r.name, faculty: r.faculty || "", isActive: r.isActive !== false });
+    form.setFieldsValue({
+      code: r.code || "",
+      name: r.name,
+      faculty: r.faculty || "",
+    });
     setModalOpen(true);
   };
 
-  const submit = async (v: { name: string; faculty?: string; isActive?: boolean }) => {
+  const submit = async (v: { code: string; name: string; faculty?: string }) => {
     setSaving(true);
     try {
-      const payload = { name: String(v.name || "").trim(), faculty: String(v.faculty || "").trim() };
+      const payload = {
+        code: String(v.code || "").trim().toUpperCase(),
+        name: String(v.name || "").trim(),
+        faculty: String(v.faculty || "").trim(),
+      };
+      if (!payload.code) {
+        message.error("Vui lòng nhập mã ngành");
+        return;
+      }
       if (!payload.name) {
         message.error("Vui lòng nhập tên ngành");
         return;
       }
       if (editing?._id) {
-        await majorsApi.update(editing._id, { ...payload, isActive: v.isActive !== false });
+        await majorsApi.update(editing._id, payload);
         message.success("Đã cập nhật ngành");
       } else {
         await majorsApi.create(payload);
@@ -72,7 +91,10 @@ const MajorsPage: React.FC = () => {
       setEditing(null);
       void load();
     } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không lưu được ngành");
+      message.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+          "Không lưu được ngành"
+      );
     } finally {
       setSaving(false);
     }
@@ -81,7 +103,7 @@ const MajorsPage: React.FC = () => {
   const remove = async (r: MajorRow) => {
     Modal.confirm({
       title: "Xóa ngành?",
-      content: `Bạn có chắc muốn xóa ngành “${r.name}” không?`,
+      content: `Bạn có chắc muốn xóa ngành “${r.name}” (${r.code || "—"})?`,
       okText: "Xóa",
       okButtonProps: { danger: true },
       cancelText: "Hủy",
@@ -91,7 +113,10 @@ const MajorsPage: React.FC = () => {
           message.success("Đã xóa ngành");
           void load();
         } catch (err: unknown) {
-          message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không xóa được ngành");
+          message.error(
+            (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+              "Không xóa được ngành"
+          );
         }
       },
     });
@@ -100,20 +125,27 @@ const MajorsPage: React.FC = () => {
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return rows;
-    return rows.filter((r) => String(r.name || "").toLowerCase().includes(s) || String(r.faculty || "").toLowerCase().includes(s));
+    return rows.filter(
+      (r) =>
+        String(r.name || "").toLowerCase().includes(s) ||
+        String(r.code || "").toLowerCase().includes(s) ||
+        String(r.faculty || "").toLowerCase().includes(s)
+    );
   }, [rows, q]);
 
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
         <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Quản lý ngành</h2>
-        <div style={{ color: "#6b7280" }}>Danh sách ngành dùng chung cho dropdown hồ sơ sinh viên.</div>
+        <div style={{ color: "#6b7280" }}>
+          Ngành chỉ là tham chiếu cho hồ sơ sinh viên nội trú — thống kê số SV đang có hợp đồng KTX hiệu lực.
+        </div>
       </div>
 
       <Card style={{ borderRadius: 12, marginBottom: 12 }}>
         <Space wrap>
           <Input
-            placeholder="Tìm ngành / khoa…"
+            placeholder="Tìm mã / tên ngành / khóa…"
             allowClear
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -133,24 +165,38 @@ const MajorsPage: React.FC = () => {
           rowKey="_id"
           loading={loading}
           dataSource={filtered}
-          pagination={{ pageSize: 20 }}
+          pagination={{ pageSize, current: page, onChange: setPage }}
           columns={[
-            { title: "Tên ngành", dataIndex: "name", key: "name", render: (v: string) => <strong>{v || "-"}</strong> },
-            { title: "Khoa", dataIndex: "faculty", key: "faculty", render: (v: string) => v || "-" },
             {
-              title: "Trạng thái",
-              dataIndex: "isActive",
-              key: "isActive",
-              width: 120,
-              render: (v: boolean) => (v === false ? <Tag color="default">Tắt</Tag> : <Tag color="green">Đang dùng</Tag>),
+              title: "STT",
+              key: "stt",
+              width: 70,
+              render: (_: unknown, __: MajorRow, idx: number) => (page - 1) * pageSize + idx + 1,
+            },
+            {
+              title: "Mã ngành",
+              dataIndex: "code",
+              key: "code",
+              width: 110,
+              render: (v: string) => <strong style={{ fontFamily: "monospace" }}>{v?.trim() ? v : "—"}</strong>,
+            },
+            { title: "Khoa/nhóm ngành", dataIndex: "name", key: "name", render: (v: string) => v || "—" },
+            { title: "Ngành", dataIndex: "faculty", key: "faculty", render: (v: string) => v || "—" },
+            {
+              title: "Số SV đang ở KTX",
+              dataIndex: "residentsInDorm",
+              key: "residentsInDorm",
+              width: 160,
+              align: "right" as const,
+              render: (n: number | undefined) => (typeof n === "number" ? n : 0),
             },
             {
               title: "Thao tác",
               key: "action",
-              width: 180,
+              width: 200,
               render: (_: unknown, r: MajorRow) => (
                 <Space>
-                  <Button size="small" onClick={() => openEdit(r)}>
+                  <Button size="small" type="primary" ghost onClick={() => openEdit(r)}>
                     Sửa
                   </Button>
                   <Button size="small" danger onClick={() => void remove(r)}>
@@ -174,15 +220,22 @@ const MajorsPage: React.FC = () => {
         width={520}
       >
         <Form form={form} layout="vertical" onFinish={submit}>
-          <Form.Item name="name" label="Tên ngành" rules={[{ required: true, message: "Nhập tên ngành" }]}>
-            <Input placeholder="VD: Công nghệ thông tin" />
+          <Form.Item
+            name="code"
+            label="Mã ngành"
+            rules={[{ required: true, message: "Nhập mã ngành (VD: CNTT, KT)" }]}
+          >
+            <Input placeholder="VD: CNTT" style={{ textTransform: "uppercase" }} />
           </Form.Item>
-          <Form.Item name="faculty" label="Khoa (tuỳ chọn)">
-            <Input placeholder="VD: Khoa CNTT" />
+          <Form.Item name="name" label="Khoa/nhóm ngành" rules={[{ required: true, message: "Nhập khoa/nhóm ngành" }]}>
+            <Input placeholder="VD: Công nghệ thông tin — phải khớp giá trị lưu ở hồ sơ SV" />
           </Form.Item>
-          <Form.Item name="isActive" label="Đang sử dụng" valuePropName="checked">
-            <Switch />
+          <Form.Item name="faculty" label="Ngành (tuỳ chọn)">
+            <Input placeholder="VD: Hệ thống thông tin / An toàn thông tin..." />
           </Form.Item>
+          <p style={{ margin: "0 0 16px 0", color: "#6b7280", fontSize: 13 }}>
+            Tên ngành cần trùng với chuỗi &quot;Ngành&quot; trên user để thống kê &quot;Số SV đang ở KTX&quot; đúng.
+          </p>
           <Form.Item>
             <Button type="primary" htmlType="submit" loading={saving} block>
               Lưu
@@ -195,4 +248,3 @@ const MajorsPage: React.FC = () => {
 };
 
 export default MajorsPage;
-
