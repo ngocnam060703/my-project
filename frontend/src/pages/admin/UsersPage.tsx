@@ -802,6 +802,28 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
         typeof c.room === "object" && c.room ? `${c.room.roomNumber}` : "—",
     },
     {
+      title: "Giá phòng (nền)",
+      key: "roomFee",
+      width: 150,
+      render: (_: unknown, c: Contract) => {
+        const r = typeof c.room === "object" ? c.room : null;
+        if (!r || r.price == null) return "—";
+        const slots = Math.max(1, Number(r.capacity) || 1);
+        const full = Math.round(Number(r.price));
+        const per = Math.round(full / slots);
+        return (
+          <div style={{ fontSize: 12, lineHeight: 1.4 }}>
+            <div>
+              Tổng: <strong>{full.toLocaleString("vi-VN")}</strong>đ/th
+            </div>
+            <div>
+              {slots} slot → <strong>{per.toLocaleString("vi-VN")}</strong>đ
+            </div>
+          </div>
+        );
+      },
+    },
+    {
       title: "Mã giường",
       key: "bedSlot",
       width: 110,
@@ -1232,9 +1254,14 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                         ? contractBedEquipment(detailPayload.currentContract as Contract)
                         : "—"}
                     </Descriptions.Item>
-                    <Descriptions.Item label="Giá slot / tháng">
+                    <Descriptions.Item label="Tổng tiền phòng (tháng)">
                       {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object"
-                        ? `${slotPriceVnd(detailPayload.currentRoom).toLocaleString("vi-VN")}đ`
+                        ? `${Math.round(Number(detailPayload.currentRoom.price || 0)).toLocaleString("vi-VN")}đ (cả phòng, theo bảng giá)`
+                        : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Giá slot / tháng (01 chỗ)">
+                      {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object"
+                        ? `${slotPriceVnd(detailPayload.currentRoom).toLocaleString("vi-VN")}đ (= tổng phòng ÷ ${Math.max(1, Number(detailPayload.currentRoom.capacity) || 1)} slot)`
                         : "—"}
                     </Descriptions.Item>
                     <Descriptions.Item label="Ngày check-in thực tế">

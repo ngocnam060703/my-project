@@ -118,6 +118,10 @@ exports.getAll = async (req, res) => {
                   room: {
                     _id: "$room._id",
                     roomNumber: "$room.roomNumber",
+                    floor: "$room.floor",
+                    capacity: "$room.capacity",
+                    currentOccupancy: "$room.currentOccupancy",
+                    price: "$room.price",
                     area: { _id: "$roomArea._id", name: "$roomArea.name" },
                   },
                 },
@@ -170,6 +174,7 @@ exports.getAll = async (req, res) => {
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth faculty major")
       .populate({
         path: "room",
+        select: "roomNumber floor area capacity price currentOccupancy status",
         populate: [
           { path: "area", select: "name" },
           { path: "roomLeader", select: "_id fullName" },
@@ -190,6 +195,7 @@ exports.getMyContracts = async (req, res) => {
     const contracts = await Contract.find({ user: req.user._id })
       .populate({
         path: "room",
+        select: "roomNumber floor area capacity price currentOccupancy status",
         populate: [
           { path: "area", select: "name" },
           { path: "roomLeader", select: "_id fullName" },
@@ -251,6 +257,7 @@ exports.create = async (req, res) => {
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
         path: "room",
+        select: "roomNumber floor area capacity price currentOccupancy status",
         populate: [{ path: "area", select: "name" }, { path: "roomLeader", select: "_id fullName" }],
       });
     res.status(201).json(populated);
@@ -302,6 +309,7 @@ exports.update = async (req, res) => {
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
         path: "room",
+        select: "roomNumber floor area capacity price currentOccupancy status",
         populate: [{ path: "area", select: "name" }, { path: "roomLeader", select: "_id fullName" }],
       });
     res.json(populated);
@@ -317,6 +325,7 @@ exports.getById = async (req, res) => {
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
         path: "room",
+        select: "roomNumber floor area capacity price currentOccupancy status",
         populate: [
           { path: "area", select: "name" },
           { path: "roomLeader", select: "_id fullName" },
@@ -348,6 +357,7 @@ exports.get360 = async (req, res) => {
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth avatar className major faculty enrollmentDate homeroomTeacher addressNative addressPermanent addressTemporary addressAbsent address familyFatherName familyFatherPhone familyMotherName familyMotherPhone familyEmergencyPhone")
       .populate({
         path: "room",
+        select: "roomNumber floor area capacity price currentOccupancy status",
         populate: [{ path: "area", select: "name genderPolicy" }, { path: "roomLeader", select: "_id fullName studentId" }],
       })
       .lean();
@@ -591,6 +601,7 @@ exports.getMyContractOverview = async (req, res) => {
     const contracts = await Contract.find({ user: req.user._id })
       .populate({
         path: "room",
+        select: "roomNumber floor area capacity price currentOccupancy status",
         populate: [
           { path: "area", select: "name" },
           { path: "roomLeader", select: "_id fullName" },

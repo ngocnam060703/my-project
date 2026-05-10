@@ -15,6 +15,7 @@ import {
   Statistic,
   Select,
   Input,
+  Alert,
 } from "antd";
 import {
   EyeOutlined,
@@ -259,6 +260,28 @@ const ContractsPage: React.FC = () => {
         const room = typeof r.room === "object" ? r.room : null;
         const area = room?.area && typeof room.area === "object" ? room.area.name : "";
         return room ? `${room.roomNumber}${area ? ` (${area})` : ""}` : "-";
+      },
+    },
+    {
+      title: "Giá phòng (nền)",
+      key: "roomPricing",
+      width: 168,
+      render: (_: unknown, r: Contract) => {
+        const room = typeof r.room === "object" ? (r.room as Room) : null;
+        if (!room || room.price == null) return "—";
+        const slots = roomSlots(room);
+        const full = Math.round(Number(room.price));
+        const per = Math.round(full / slots);
+        return (
+          <div style={{ fontSize: 12, lineHeight: 1.45 }}>
+            <div>
+              Tổng phòng: <strong>{full.toLocaleString("vi-VN")}</strong>đ/th
+            </div>
+            <div>
+              {slots} slot → <strong>{per.toLocaleString("vi-VN")}</strong>đ/slot
+            </div>
+          </div>
+        );
       },
     },
     {
@@ -593,6 +616,18 @@ const ContractsPage: React.FC = () => {
                   Khóa: c.user && typeof c.user === "object" ? (c.user as User).faculty || "-" : "-",
                   Ngành: c.user && typeof c.user === "object" ? (c.user as User).major || "-" : "-",
                   "Phòng": c.room && typeof c.room === "object" ? (c.room as { roomNumber?: string }).roomNumber : "-",
+                  "Số slot": c.room && typeof c.room === "object" ? (c.room as Room).capacity ?? "-" : "-",
+                  "Tổng phòng/tháng (đ)":
+                    c.room && typeof c.room === "object" && (c.room as Room).price != null
+                      ? Math.round(Number((c.room as Room).price))
+                      : "-",
+                  "Giá 01 slot/tháng (đ)":
+                    c.room && typeof c.room === "object" && (c.room as Room).price != null
+                      ? Math.round(
+                          Number((c.room as Room).price) /
+                            Math.max(1, Number((c.room as Room).capacity) || 1),
+                        )
+                      : "-",
                   "Từ ngày": c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "-",
                   "Đến ngày": c.endDate ? new Date(c.endDate).toLocaleDateString("vi-VN") : "-",
                   "Trạng thái": statusMap[c.status]?.text || c.status,
@@ -619,7 +654,7 @@ const ContractsPage: React.FC = () => {
             showSizeChanger: false,
             showTotal: (t) => `Tổng ${t} hợp đồng`,
           }}
-          scroll={{ x: 900 }}
+          scroll={{ x: 1080 }}
           size="middle"
         />
       </Card>
@@ -662,6 +697,42 @@ const ContractsPage: React.FC = () => {
               <p style={{ marginBottom: 12, textAlign: "center" }}>
                 <strong>Số hợp đồng:</strong> {detailModal.contractNumber || "-"}
               </p>
+
+              {(() => {
+                const room = typeof detailModal.room === "object" ? (detailModal.room as Room) : null;
+                if (!room) return null;
+                const slots = roomSlots(room);
+                const full = Math.round(Number(room.price || 0));
+                const perSlotTable = Math.round(full / slots);
+                const agreed = detailModal.monthlyRent != null && Number(detailModal.monthlyRent) > 0;
+                return (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 14 }}
+                    message="Thông tin phòng — Bên lập hợp đồng cần nắm để ghi Điều 2"
+                    description={
+                      <div style={{ fontSize: 13, lineHeight: 1.55 }}>
+                        <div>
+                          <strong>Phòng:</strong> {room.roomNumber} — <strong>Số chỗ (slot):</strong> {slots}
+                        </div>
+                        <div>
+                          <strong>Tổng tiền thuê phòng (VNĐ/tháng):</strong> {full.toLocaleString("vi-VN")}đ
+                        </div>
+                        <div>
+                          <strong>Giá 01 slot theo bảng giá phòng:</strong> {perSlotTable.toLocaleString("vi-VN")}đ/tháng (= {full.toLocaleString("vi-VN")} ÷ {slots})
+                        </div>
+                        {agreed ? (
+                          <div>
+                            <strong>Giá thỏa thuận trên hợp đồng (01 chỗ/tháng):</strong>{" "}
+                            {Math.round(Number(detailModal.monthlyRent)).toLocaleString("vi-VN")}đ
+                          </div>
+                        ) : null}
+                      </div>
+                    }
+                  />
+                );
+              })()}
 
               <p><strong>BÊN CHO THUÊ (BÊN A):</strong> KÝ TÚC XÁ TRƯỜNG ĐẠI HỌC (ĐH)</p>
               <p><strong>Địa chỉ:</strong> {lessorAddress}</p>
