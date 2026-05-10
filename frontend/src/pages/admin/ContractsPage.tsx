@@ -30,7 +30,7 @@ import {
 import { exportToExcel } from "../../utils/exportExcel";
 import { contractsApi, client, opsContractsApi } from "../../api";
 import { areasApi } from "../../api";
-import type { Area, Contract, ContractExtendRequest, User } from "../../types";
+import type { Area, Contract, ContractExtendRequest, Room, User } from "../../types";
 import dayjs from "dayjs";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -42,6 +42,28 @@ const statusMap: Record<string, { color: string; text: string }> = {
 
 const lessorAddress = "................................................................................................";
 const lessorPhone = ".............................................................................................";
+
+/** Tháng giữa hai ngày (làm tròn xuống theo ngày trong tháng — cùng logic MyContracts). */
+function monthsBetweenStartEnd(start: string | Date, end: string | Date): number {
+  const a = new Date(start);
+  const b = new Date(end);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 12;
+  let m = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  if (b.getDate() < a.getDate()) m -= 1;
+  return Math.max(1, m);
+}
+
+function roomSlots(r: Room | null | undefined): number {
+  const cap = Number(r?.capacity ?? 0);
+  return Number.isFinite(cap) && cap >= 1 ? cap : 1;
+}
+
+/** Giá 01 slot theo bảng giá phòng (trừ khi HĐ có monthlyRent thỏa thuận). */
+function studentMonthlyRentVnd(c: Contract, room: Room | null): number {
+  if (c.monthlyRent != null && Number(c.monthlyRent) > 0) return Math.round(Number(c.monthlyRent));
+  const full = Math.round(Number(room?.price ?? 0));
+  return Math.round(full / roomSlots(room || undefined));
+}
 
 const ContractsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -667,17 +689,38 @@ const ContractsPage: React.FC = () => {
               <p>Bên B được sử dụng trang thiết bị tại phòng theo nội quy của Trường ĐH.</p>
 
               <p style={{ marginTop: 10 }}><strong>ĐIỀU 2: CHI PHÍ VÀ THANH TOÁN</strong></p>
-              <p>
-                Giá thuê:{" "}
-                <strong>
-                  {typeof detailModal.room === "object" ? `${Number(detailModal.room?.price || 0).toLocaleString("vi-VN")} VNĐ/tháng` : "-"}
-                </strong>
-                . Tổng cộng:{" "}
-                <strong>
-                  {typeof detailModal.room === "object" ? `${(Number(detailModal.room?.price || 0) * 12).toLocaleString("vi-VN")} VNĐ` : "-"}
-                </strong>
-                .
-              </p>
+              {(() => {
+                const room = typeof detailModal.room === "object" ? (detailModal.room as Room) : null;
+                if (!room) {
+                  return (
+                    <p>
+                      Giá thuê: <strong>—</strong>
+                    </p>
+                  );
+                }
+                const slots = roomSlots(room);
+                const fullMonthly = Math.round(Number(room.price || 0));
+                const studentMonthly = studentMonthlyRentVnd(detailModal, room);
+                const months = monthsBetweenStartEnd(detailModal.startDate, detailModal.endDate);
+                const totalStudentPeriod = studentMonthly * months;
+                const agreed = detailModal.monthlyRent != null && Number(detailModal.monthlyRent) > 0;
+                return (
+                  <>
+                    <p>
+                      <strong>Giá thuê:</strong> Phòng có <strong>{slots}</strong> chỗ (slot). Tổng tiền thuê{" "}
+                      <strong>toàn phòng</strong>:{" "}
+                      <strong>{fullMonthly.toLocaleString("vi-VN")} VNĐ/tháng</strong>. Giá thuê{" "}
+                      <strong>01 chỗ (01 sinh viên — Bên B)</strong>:{" "}
+                      <strong>{studentMonthly.toLocaleString("vi-VN")} VNĐ/tháng</strong>
+                      {agreed ? " (ghi theo thỏa thuận trong hợp đồng)" : ` (= ${fullMonthly.toLocaleString("vi-VN")} ÷ ${slots})`}.
+                    </p>
+                    <p>
+                      Tổng tiền Bên B thanh toán tiền thuê cho cả thời hạn hợp đồng (theo 01 chỗ, {months} tháng):{" "}
+                      <strong>{totalStudentPeriod.toLocaleString("vi-VN")} VNĐ</strong>.
+                    </p>
+                  </>
+                );
+              })()}
               <p>Tiền thế chấp tài sản: <strong>100.000 VNĐ/sinh viên</strong>.</p>
               <p>
                 Thời hạn thuê: Từ ngày <strong>{new Date(detailModal.startDate).toLocaleDateString("vi-VN")}</strong> đến ngày{" "}

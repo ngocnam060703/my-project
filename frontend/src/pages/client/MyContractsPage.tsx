@@ -429,6 +429,11 @@ const MyContractsPage: React.FC = () => {
                   const gender = String((student as { gender?: string } | null)?.gender || "");
                   const genderLabel = gender.toLowerCase().includes("nam") ? "Nam" : gender.toLowerCase().includes("nữ") || gender.toLowerCase().includes("nu") ? "Nữ" : "—";
                   const fee = roomFeePerSlot(c);
+                  const roomFullMonthly = Math.round(Number(r?.price ?? 0));
+                  const slots = (() => {
+                    const cap = Number(r?.capacity ?? 0);
+                    return Number.isFinite(cap) && cap >= 1 ? cap : 1;
+                  })();
                   const months = monthsBetween(c.startDate, c.endDate) || 12;
                   const total = fee * months;
                   const deposit = c.depositAmount != null ? Number(c.depositAmount) : 100000;
@@ -473,7 +478,8 @@ Bên B được sử dụng trang thiết bị tại phòng theo nội quy của
 
 ĐIỀU 2: CHI PHÍ VÀ THANH TOÁN
 
-Giá thuê: ${Math.round(fee).toLocaleString("vi-VN")} VNĐ/tháng. Tổng cộng: ${Math.round(total).toLocaleString("vi-VN")} VNĐ.
+Giá thuê: Phòng có ${slots} chỗ (slot). Tổng tiền thuê toàn phòng: ${roomFullMonthly.toLocaleString("vi-VN")} VNĐ/tháng. Giá thuê 01 chỗ (01 sinh viên — Bên B): ${Math.round(fee).toLocaleString("vi-VN")} VNĐ/tháng${c.monthlyRent != null && Number(c.monthlyRent) > 0 ? " (theo thỏa thuận trong hợp đồng)" : ` (= ${roomFullMonthly.toLocaleString("vi-VN")} ÷ ${slots})`}.
+Tổng tiền Bên B thanh toán tiền thuê cho cả thời hạn (theo 01 chỗ, ${months} tháng): ${Math.round(total).toLocaleString("vi-VN")} VNĐ.
 
 Tiền thế chấp tài sản: ${Math.round(deposit).toLocaleString("vi-VN")} VNĐ/sinh viên.
 
