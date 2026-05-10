@@ -151,20 +151,24 @@ async function buildPersonalFeeForUser({ userId, month, year }) {
   return { total, breakdown };
 }
 
-/** Ghi điện/nước đã dùng khi lập HĐ vào RoomMonthlyCost để màn phòng & sinh hàng loạt luôn khớp. */
-async function syncRoomMonthlyUtilityCost({ roomId, month, year, electricityFee, waterFee, userId }) {
+/** Ghi điện/nước (+ tuỳ chọn Wi‑Fi gói phòng) vào RoomMonthlyCost — dùng cho “Tạo theo tháng”. */
+async function syncRoomMonthlyUtilityCost({ roomId, month, year, electricityFee, waterFee, wifiMonthlyFee, userId }) {
   const m = Number(month);
   const y = Number(year);
   const elec = Math.max(0, Number(electricityFee || 0));
   const water = Math.max(0, Number(waterFee || 0));
+  const $set = {
+    electricityFee: elec,
+    waterFee: water,
+    enteredBy: userId,
+  };
+  if (wifiMonthlyFee !== undefined && wifiMonthlyFee !== null && wifiMonthlyFee !== "") {
+    $set.wifiMonthlyFee = Math.max(0, Math.round(Number(wifiMonthlyFee)));
+  }
   await RoomMonthlyCost.findOneAndUpdate(
     { room: roomId, month: m, year: y },
     {
-      $set: {
-        electricityFee: elec,
-        waterFee: water,
-        enteredBy: userId,
-      },
+      $set,
       $setOnInsert: {
         room: roomId,
         month: m,
@@ -266,11 +270,21 @@ exports.create = async (req, res) => {
       const waterTotal = waterFee != null ? Number(waterFee) : Number(roomCost?.waterFee || 0);
       const fixedOther = Math.max(0, Number(otherFee || 0));
 
+      const bodyWifiNum = Number(wifiRoomFromForm);
+      const storedWifiNum = Number(roomCost?.wifiMonthlyFee || 0);
+      /** Ưu tiên Wi‑Fi nhập form; không nhập thì dùng đã lưu theo phòng/tháng (cho “Tạo theo tháng” / lần trước). */
+      const wifiRoomTotalForBill =
+        Number.isFinite(bodyWifiNum) && bodyWifiNum > 0
+          ? Math.round(bodyWifiNum)
+          : storedWifiNum > 0
+            ? Math.round(storedWifiNum)
+            : null;
+
       const commonServices = await Service.find({ type: "common", isActive: true });
       const { breakdown: commonBreakdown, commonPerStudent: commonFeeShare } = resolveCommonFeesForRoom(
         room,
         commonServices,
-        wifiRoomFromForm
+        wifiRoomTotalForBill
       );
 
       await syncRoomMonthlyUtilityCost({
@@ -279,6 +293,7 @@ exports.create = async (req, res) => {
         year: y,
         electricityFee: electricityTotal,
         waterFee: waterTotal,
+        wifiMonthlyFee: Number.isFinite(bodyWifiNum) && bodyWifiNum > 0 ? Math.round(bodyWifiNum) : undefined,
         userId: req.user._id,
       });
 
@@ -482,7 +497,12 @@ exports.generateByMonth = async (req, res) => {
       const electricityTotal = Number(roomCost?.electricityFee || 0);
       const waterTotal = Number(roomCost?.waterFee || 0);
 
-      const { breakdown: commonBreakdown, commonPerStudent: commonFeeShare } = buildCommonServicesPerStudent(commonServices, room);
+      const wifiStored = Number(roomCost?.wifiMonthlyFee || 0);
+      const { breakdown: commonBreakdown, commonPerStudent: commonFeeShare } = resolveCommonFeesForRoom(
+        room,
+        commonServices,
+        wifiStored > 0 ? Math.round(wifiStored) : null
+      );
 
       const electShare = electricityTotal / occupants;
       const waterShare = waterTotal / occupants;

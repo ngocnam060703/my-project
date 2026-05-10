@@ -90,12 +90,19 @@ const BillsPage: React.FC = () => {
   const fetchRoomCosts = useCallback(async (roomId: string, month: number, year: number) => {
     try {
       const costRes = await roomCostsApi.getAll({ month, year });
-      const costs = (costRes.data as { roomCosts?: { roomId: string; electricityFee: number; waterFee: number }[] })?.roomCosts || [];
-      const roomCost = costs.find((c) => c.roomId === roomId);
+      const raw = costRes.data as unknown;
+      const list = Array.isArray(raw) ? raw : ((raw as { roomCosts?: unknown[] })?.roomCosts ?? []);
+      const rid = String(roomId);
+      type CostRow = { room?: string | { _id?: string }; electricityFee?: number; waterFee?: number; wifiMonthlyFee?: number };
+      const roomCost = (list as CostRow[]).find((c) => {
+        const id = typeof c.room === "object" && c.room ? String(c.room._id ?? "") : String(c.room ?? "");
+        return id === rid;
+      });
       if (roomCost) {
         form.setFieldsValue({
-          electricityFee: roomCost.electricityFee || 0,
-          waterFee: roomCost.waterFee || 0,
+          electricityFee: roomCost.electricityFee ?? 0,
+          waterFee: roomCost.waterFee ?? 0,
+          sharedCommonFee: roomCost.wifiMonthlyFee ?? 0,
         });
         return;
       }
@@ -113,12 +120,14 @@ const BillsPage: React.FC = () => {
       form.setFieldsValue({
         electricityFee,
         waterFee,
+        sharedCommonFee: 0,
       });
     } catch (err) {
       console.error("Không lấy được chi phí phòng:", err);
       form.setFieldsValue({
         electricityFee: 0,
         waterFee: 0,
+        sharedCommonFee: 0,
       });
     }
   }, [form]);

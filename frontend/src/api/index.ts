@@ -537,8 +537,15 @@ export const serviceUsageApi = {
 
 export const roomCostsApi = {
   getAll: (params?: { month?: number; year?: number }) => client.get("/room-costs", { params }),
-  upsert: (data: { roomId: string; month: number; year: number; electricityFee: number; waterFee: number; note?: string }) =>
-    client.post("/room-costs", data),
+  upsert: (data: {
+    roomId: string;
+    month: number;
+    year: number;
+    electricityFee: number;
+    waterFee: number;
+    wifiMonthlyFee?: number;
+    note?: string;
+  }) => client.post("/room-costs", data),
 };
 
 export const violationsApi = {

@@ -7,6 +7,8 @@ const roomMonthlyCostSchema = new mongoose.Schema(
     year: { type: Number, required: true, min: 2000 },
     electricityFee: { type: Number, default: 0, min: 0 },
     waterFee: { type: Number, default: 0, min: 0 },
+    /** Wi‑Fi / DV phòng gói cố định — tổng theo phòng/tháng; hóa đơn chia ÷ capacity slot */
+    wifiMonthlyFee: { type: Number, default: 0, min: 0 },
     enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     note: { type: String, default: "" },
   },
