@@ -5,6 +5,9 @@ const { auth, requireRole } = require("../middleware/auth");
 const router = express.Router();
 const admin = requireRole("admin", "manager");
 
+/** VNPay redirect về backend (không yêu cầu auth vì đi qua cổng thanh toán). */
+router.get("/vnpay-return", billController.handleVnpayReturn);
+
 /** Sinh viên: danh sách của tôi */
 router.get("/my", auth, billController.getMyBills);
 

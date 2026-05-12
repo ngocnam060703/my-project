@@ -3,7 +3,7 @@ import { getToken, clearSessionAuth, clearLegacyLocalAuth, hasToken } from "../u
 
 /** Chuẩn hóa base URL: nhiều người cấu hình thiếu /api → mọi request 404. */
 function normalizeApiBaseUrl(raw: string | undefined): string {
-  const fallback = "http://localhost:5000/api";
+  const fallback = "http://localhost:5001/api";
   const v = (raw || fallback).trim().replace(/\/+$/, "");
   if (/\/api$/i.test(v)) return v;
   try {

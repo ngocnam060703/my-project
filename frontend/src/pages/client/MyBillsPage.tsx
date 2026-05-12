@@ -138,9 +138,14 @@ const MyBillsPage: React.FC = () => {
     setPayingOnlineId(id);
     setErr(null);
     try {
-      await billsApi.payOnline(id);
-      await load();
-      if (detailId === id) await openDetail(id);
+      const response = await billsApi.payOnline(id);
+      const paymentUrl = response?.data?.paymentUrl;
+      if (paymentUrl) {
+        // Redirect to VNPay payment URL
+        window.location.href = paymentUrl;
+      } else {
+        setErr("Không thể tạo URL thanh toán");
+      }
     } catch (e) {
       setErr(errText(e));
     } finally {

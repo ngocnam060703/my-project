@@ -10,6 +10,12 @@ const User = require("../models/User");
 const { getIO } = require("../socket");
 const { dueDateForBillingMonth } = require("../services/billingDueDate");
 const { refreshOverdueMonthlyBills } = require("../services/billingOverdue");
+const {
+  buildBillPaymentUrl,
+  verifyReturnQuery,
+  parseBillIdFromTxnRef,
+  getClientReturnBaseUrl,
+} = require("../services/vnpayGateway");
 /** Trạng thái coi là chưa thanh toán (tương thích pending cũ + unpaid mới) */
 const UNPAID_STATUSES = ["unpaid", "pending"];
 
@@ -616,7 +622,7 @@ exports.markPaid = async (req, res) => {
   }
 };
 
-/** Thanh toán online (demo — mô phỏng cổng thanh toán thành công). */
+/** Tạo URL thanh toán online qua VNPay. */
 exports.payOnline = async (req, res) => {
   try {
     const bill = await Bill.findById(req.params.id).populate("contract");
@@ -634,27 +640,60 @@ exports.payOnline = async (req, res) => {
     if (bill.contract && isContractExpired(bill.contract.endDate, new Date())) {
       return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể thanh toán" });
     }
-    const ref = `ONL-${Date.now()}-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
-    bill.status = "paid";
-    bill.paidAt = new Date();
-    bill.paymentMethod = "online";
-    bill.paymentReference = ref;
-    bill.paymentHistory = bill.paymentHistory || [];
-    bill.paymentHistory.push({
-      at: new Date(),
-      action: "paid",
-      method: "online",
-      reference: ref,
-      amount: Math.round(Number(bill.total || 0)),
-      performedBy: req.user._id,
-      note: "Thanh toán online (mô phỏng)",
+    const paymentUrl = await buildBillPaymentUrl({
+      req,
+      billId: String(bill._id),
+      amount: bill.total,
+      orderInfo: `Thanh toan hoa don ${bill.month}/${bill.year}`,
     });
-    await bill.save();
-    const io = getIO();
-    io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
-    res.json(bill);
+    res.json({ paymentUrl });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+/** VNPay return URL: xác minh chữ ký và cập nhật trạng thái hóa đơn. */
+exports.handleVnpayReturn = async (req, res) => {
+  const clientReturnBase = getClientReturnBaseUrl();
+  try {
+    const verifyResult = verifyReturnQuery(req.query);
+    const isValid = Boolean(verifyResult?.isVerified ?? verifyResult?.isValid ?? verifyResult?.success);
+    if (!isValid) {
+      return res.redirect(`${clientReturnBase}?vnpay=invalid-signature`);
+    }
+    const responseCode = String(req.query?.vnp_ResponseCode || "");
+    const txnRef = String(req.query?.vnp_TxnRef || "");
+    const billId = parseBillIdFromTxnRef(txnRef);
+    if (!billId || !mongoose.isValidObjectId(billId)) {
+      return res.redirect(`${clientReturnBase}?vnpay=invalid-ref`);
+    }
+    const bill = await Bill.findById(billId);
+    if (!bill) return res.redirect(`${clientReturnBase}?vnpay=bill-not-found`);
+    if (responseCode !== "00") {
+      return res.redirect(`${clientReturnBase}?vnpay=failed&code=${encodeURIComponent(responseCode)}&billId=${encodeURIComponent(String(bill._id))}`);
+    }
+    if (bill.status !== "paid") {
+      bill.status = "paid";
+      bill.paidAt = new Date();
+      bill.paymentMethod = "online";
+      bill.paymentReference = txnRef;
+      bill.paymentHistory = bill.paymentHistory || [];
+      bill.paymentHistory.push({
+        at: new Date(),
+        action: "paid",
+        method: "online",
+        reference: txnRef,
+        amount: Math.round(Number(bill.total || 0)),
+        performedBy: bill.user || null,
+        note: "Thanh toán online qua VNPay",
+      });
+      await bill.save();
+      const io = getIO();
+      io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
+    }
+    return res.redirect(`${clientReturnBase}?vnpay=success&billId=${encodeURIComponent(String(bill._id))}`);
+  } catch (error) {
+    return res.redirect(`${clientReturnBase}?vnpay=error`);
   }
 };
 
