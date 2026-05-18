@@ -31,17 +31,6 @@ const { Title, Text, Paragraph } = Typography;
 
 const brand = { primary: "#0d9488", primaryDark: "#0f766e", softBg: "rgba(13, 148, 136, 0.06)", border: "rgba(13, 148, 136, 0.15)" };
 
-function FormSectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <Flex align="center" gap={12} style={{ marginTop: 8, marginBottom: 16 }}>
-      <Text strong style={{ color: brand.primaryDark, fontSize: 15, whiteSpace: "nowrap" }}>
-        {children}
-      </Text>
-      <div style={{ flex: 1, minWidth: 0, height: 1, background: brand.border }} aria-hidden />
-    </Flex>
-  );
-}
-
 function ProfileTabPanel({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -55,6 +44,43 @@ function ProfileTabPanel({ children }: { children: React.ReactNode }) {
     >
       {children}
     </div>
+  );
+}
+
+function StudentFormBlock({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card
+      size="small"
+      variant="borderless"
+      style={{
+        borderRadius: 12,
+        border: `1px solid ${brand.border}`,
+        background: "#fff",
+      }}
+      styles={{ body: { padding: 16 } }}
+      title={
+        <Flex vertical gap={2}>
+          <Text strong style={{ color: brand.primaryDark, fontSize: 15 }}>
+            {title}
+          </Text>
+          {hint && (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {hint}
+            </Text>
+          )}
+        </Flex>
+      }
+    >
+      {children}
+    </Card>
   );
 }
 
@@ -434,148 +460,190 @@ const ProfilePage: React.FC = () => {
           message="Cập nhật hồ sơ sinh viên đầy đủ"
           description="Bạn có thể tự cập nhật đầy đủ thông tin cá nhân, học tập, gia đình và địa chỉ trên biểu mẫu này."
         />
-        <FormSectionTitle>Thông tin cơ bản</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Họ tên" name="fullName" rules={[{ required: true, message: "Nhập họ tên" }]}>
+        <Space direction="vertical" size={14} style={{ width: "100%" }}>
+          <StudentFormBlock
+            title="Khối 1 — Thông tin cá nhân"
+            hint="Thông tin định danh cơ bản của sinh viên."
+          >
+            <Row gutter={[20, 0]}>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Họ tên" name="fullName" rules={[{ required: true, message: "Nhập họ tên" }]}>
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Email đăng nhập">
+                  <Input size="large" value={profile.email} disabled />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Mã sinh viên" name="studentId" rules={[{ required: true, message: "Nhập mã sinh viên" }]}>
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Số điện thoại" name="phone" rules={[{ required: true, message: "Nhập SĐT" }, { pattern: /^(0|\+84)\d{9,10}$/, message: "SĐT không hợp lệ" }]}>
+                  <Input size="large" placeholder="0387079343" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Giới tính" name="gender">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item name="dateOfBirth" label="Ngày sinh">
+                  <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item name="citizenId" label="CCCD/CMND" rules={[{ pattern: /^\d{9,12}$/, message: "CCCD phải gồm 9-12 chữ số" }]}>
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item
+                  name="avatar"
+                  label="Ảnh đại diện (URL)"
+                  rules={[
+                    {
+                      validator: (_, value) => {
+                        const s = value != null ? String(value).trim() : "";
+                        if (!s) return Promise.resolve();
+                        try {
+                          const u = new URL(s);
+                          if (u.protocol !== "http:" && u.protocol !== "https:") {
+                            return Promise.reject(new Error("Avatar phải là URL http(s) hợp lệ"));
+                          }
+                          return Promise.resolve();
+                        } catch {
+                          return Promise.reject(new Error("Avatar phải là URL hợp lệ"));
+                        }
+                      },
+                    },
+                  ]}
+                >
+                  <Input size="large" placeholder="https://..." allowClear />
+                </Form.Item>
+              </Col>
+            </Row>
+          </StudentFormBlock>
+
+          <StudentFormBlock
+            title="Khối 2 — Thông tin học tập"
+            hint="Dữ liệu học tập phục vụ xét duyệt và quản lý lưu trú."
+          >
+            <Row gutter={[20, 0]}>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Khoa" name="faculty">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Lớp" name="className">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Chuyên ngành" name="major">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item name="enrollmentDate" label="Ngày nhập học">
+                  <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày nhập học" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item label="Giáo viên chủ nhiệm" name="homeroomTeacher">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+            </Row>
+          </StudentFormBlock>
+
+          <StudentFormBlock
+            title="Khối 3 — Thông tin cư trú"
+            hint="Địa chỉ hiện tại, quê quán và thông tin tạm trú/tạm vắng."
+          >
+            <Form.Item name="address" label="Địa chỉ liên hệ">
+              <Input.TextArea rows={2} showCount maxLength={500} />
+            </Form.Item>
+            <Form.Item name="addressNative" label="Quê quán">
+              <Input.TextArea rows={2} showCount maxLength={500} />
+            </Form.Item>
+            <Form.Item name="addressPermanent" label="Thường trú">
+              <Input.TextArea rows={2} showCount maxLength={500} />
+            </Form.Item>
+            <Form.Item name="addressTemporary" label="Tạm trú">
+              <Input.TextArea rows={2} showCount maxLength={500} />
+            </Form.Item>
+            <Form.Item name="addressAbsent" label="Tạm vắng" style={{ marginBottom: 0 }}>
+              <Input.TextArea rows={2} showCount maxLength={500} />
+            </Form.Item>
+          </StudentFormBlock>
+
+          <StudentFormBlock
+            title="Khối 4 — Liên hệ khẩn cấp"
+            hint="Thông tin người thân để liên hệ khi có sự cố."
+          >
+            <Row gutter={[20, 0]}>
+              <Col xs={24} lg={12}>
+                <Form.Item name="familyFatherName" label="Họ tên bố">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item name="familyFatherPhone" label="SĐT bố">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item name="familyMotherName" label="Họ tên mẹ">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+              <Col xs={24} lg={12}>
+                <Form.Item name="familyMotherPhone" label="SĐT mẹ">
+                  <Input size="large" allowClear />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item name="familyEmergencyPhone" label="SĐT gia đình khi khẩn cấp" style={{ marginBottom: 0 }}>
               <Input size="large" allowClear />
             </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Email đăng nhập">
-              <Input size="large" value={profile.email} disabled />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Mã sinh viên" name="studentId" rules={[{ required: true, message: "Nhập mã sinh viên" }]}>
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Lớp" name="className">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Chuyên ngành" name="major">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Giới tính" name="gender">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="citizenId" label="CCCD/CMND" rules={[{ pattern: /^\d{9,12}$/, message: "CCCD phải gồm 9-12 chữ số" }]}>
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="dateOfBirth" label="Ngày sinh">
-              <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
-            </Form.Item>
-          </Col>
-        </Row>
-        <FormSectionTitle>Thông tin học tập</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Khoa" name="faculty">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="enrollmentDate" label="Ngày nhập học">
-              <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày nhập học" />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Giáo viên chủ nhiệm" name="homeroomTeacher">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-        </Row>
-        <FormSectionTitle>Avatar</FormSectionTitle>
-        <Form.Item
-          name="avatar"
-          label="Ảnh đại diện (URL)"
-          rules={[
-            {
-              validator: (_, value) => {
-                const s = value != null ? String(value).trim() : "";
-                if (!s) return Promise.resolve();
-                try {
-                  const u = new URL(s);
-                  if (u.protocol !== "http:" && u.protocol !== "https:") {
-                    return Promise.reject(new Error("Avatar phải là URL http(s) hợp lệ"));
-                  }
-                  return Promise.resolve();
-                } catch {
-                  return Promise.reject(new Error("Avatar phải là URL hợp lệ"));
-                }
-              },
-            },
-          ]}
-        >
-          <Input size="large" placeholder="https://..." allowClear />
-        </Form.Item>
-        <FormSectionTitle>Liên hệ</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item
-              label="Số điện thoại"
-              name="phone"
-              rules={[
-                { required: true, message: "Nhập SĐT" },
-                { pattern: /^(0|\+84)\d{9,10}$/, message: "SĐT không hợp lệ" },
-              ]}
-            >
-              <Input size="large" placeholder="0387079343" allowClear />
-            </Form.Item>
-          </Col>
-        </Row>
-        <FormSectionTitle>Địa chỉ</FormSectionTitle>
-        <Form.Item name="address" label="Địa chỉ liên hệ">
-          <Input.TextArea rows={2} showCount maxLength={500} />
-        </Form.Item>
-        <Form.Item name="addressNative" label="Quê quán">
-          <Input.TextArea rows={2} showCount maxLength={500} />
-        </Form.Item>
-        <Form.Item name="addressPermanent" label="Thường trú">
-          <Input.TextArea rows={2} showCount maxLength={500} />
-        </Form.Item>
-        <Form.Item name="addressTemporary" label="Tạm trú">
-          <Input.TextArea rows={2} showCount maxLength={500} />
-        </Form.Item>
-        <Form.Item name="addressAbsent" label="Tạm vắng">
-          <Input.TextArea rows={2} showCount maxLength={500} />
-        </Form.Item>
-        <FormSectionTitle>Liên hệ khẩn</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item name="familyFatherName" label="Họ tên bố">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="familyFatherPhone" label="SĐT bố">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="familyMotherName" label="Họ tên mẹ">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="familyMotherPhone" label="SĐT mẹ">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-        </Row>
-        <Form.Item name="familyEmergencyPhone" label="SĐT gia đình khi khẩn cấp">
-          <Input size="large" allowClear />
-        </Form.Item>
+          </StudentFormBlock>
+
+          <StudentFormBlock
+            title="Khối 5 — Thông tin KTX (chỉ xem)"
+            hint="Dữ liệu phòng hiện tại được đồng bộ từ hệ thống, sinh viên không chỉnh sửa tại đây."
+          >
+            {room ? (
+              <Descriptions
+                size="small"
+                column={1}
+                styles={{
+                  label: { color: "#6b7280", fontWeight: 600 },
+                  content: { color: "var(--text-primary, #111827)" },
+                }}
+              >
+                <Descriptions.Item label="Khu / ký túc xá">{formatRoomArea(room.area)}</Descriptions.Item>
+                <Descriptions.Item label="Phòng">{room.roomNumber || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Tầng">{room.floor ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Loại phòng">{room.roomType ?? "—"}</Descriptions.Item>
+                <Descriptions.Item label="Trạng thái cư trú">{dashMeta.memberStatusLabel || "—"}</Descriptions.Item>
+              </Descriptions>
+            ) : (
+              <Alert
+                type="info"
+                showIcon
+                message="Chưa có dữ liệu phòng ở"
+                description="Sau khi được duyệt nội trú và xếp phòng, thông tin KTX sẽ hiển thị tại đây."
+                style={{ borderRadius: 10 }}
+              />
+            )}
+          </StudentFormBlock>
+        </Space>
         <Divider style={{ margin: "8px 0 20px" }} />
         <Form.Item style={{ marginBottom: 0 }}>
           <Flex gap="middle" wrap="wrap">

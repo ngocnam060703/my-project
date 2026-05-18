@@ -36,7 +36,7 @@ function statusBadge(status: string): { cls: string; label: string } {
     case "active":
       return { cls: "text-bg-success", label: "Đang hiệu lực" };
     case "pending_payment":
-      return { cls: "text-bg-warning text-dark", label: "Chờ thanh toán / chờ hiệu lực" };
+      return { cls: "text-bg-warning text-dark", label: "Chờ xác nhận (chưa hiệu lực)" };
     case "expired":
       return { cls: "text-bg-secondary", label: "Hết hạn" };
     case "terminated":
@@ -280,7 +280,7 @@ const MyContractsPage: React.FC = () => {
                   </p>
                   {primary.status === "pending_payment" && !primary.signedAt && (
                     <button type="button" className="btn btn-warning btn-sm w-100" onClick={() => void signContract(primary)}>
-                      Ký xác nhận (chờ BQL xác nhận thanh toán)
+                      Ký xác nhận hợp đồng
                     </button>
                   )}
                   {primary.status === "active" && Boolean(data?.extensionEnabled) && (

@@ -14,7 +14,7 @@ router.get("/revenue/summary", auth, admin, billController.revenueSummary);
 /** Thanh toán (sinh viên + admin) */
 router.put("/:id/paid", auth, billController.markPaid);
 router.patch("/:id/pay", auth, billController.markPaid);
-router.put("/:id/pay-online", auth, billController.payOnline);
+router.put("/:id/pay-online", auth, requireRole("user"), billController.payOnline);
 
 /** Admin: danh sách / tạo / sinh hàng loạt — GET / đặt trước GET /:id để tránh nhầm path */
 router.get("/", auth, admin, billController.getAll);

@@ -222,7 +222,7 @@ const BillingManagementPage: React.FC = () => {
                         </button>
                         {canPay(r.status) && (
                           <button type="button" className="btn btn-success" onClick={() => confirmPay(r._id)}>
-                            Pay
+                            Xác nhận thu
                           </button>
                         )}
                       </div>
@@ -303,7 +303,7 @@ const BillingManagementPage: React.FC = () => {
                 </button>
                 {canPay(detail.status) && (
                   <button type="button" className="btn btn-success" onClick={() => confirmPay(detail._id).then(() => setDetail(null))}>
-                    Xác nhận Pay
+                    Xác nhận thu
                   </button>
                 )}
               </div>

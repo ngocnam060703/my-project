@@ -56,7 +56,6 @@ const MyBillsPage: React.FC = () => {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Bill | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [payingId, setPayingId] = useState<string | null>(null);
   const [payingOnlineId, setPayingOnlineId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -120,20 +119,6 @@ const MyBillsPage: React.FC = () => {
     setDetailLoading(false);
   };
 
-  const payDemo = async (id: string) => {
-    setPayingId(id);
-    setErr(null);
-    try {
-      await billsApi.patchPay(id);
-      await load();
-      if (detailId === id) await openDetail(id);
-    } catch (e) {
-      setErr(errText(e));
-    } finally {
-      setPayingId(null);
-    }
-  };
-
   const payOnlineDemo = async (id: string) => {
     setPayingOnlineId(id);
     setErr(null);
@@ -167,7 +152,7 @@ const MyBillsPage: React.FC = () => {
   return (
     <div className="container pb-5" style={{ maxWidth: 1100 }}>
       <h4 className="mb-1">Hóa đơn của tôi</h4>
-      <p className="text-muted small mb-3">Theo dõi hạn thanh toán, trạng thái và thanh toán (xác nhận demo / online mô phỏng).</p>
+      <p className="text-muted small mb-3">Theo dõi hạn thanh toán, trạng thái và thanh toán online.</p>
 
       {err && <div className="alert alert-danger py-2">{err}</div>}
 
@@ -219,9 +204,7 @@ const MyBillsPage: React.FC = () => {
                     key={b._id}
                     b={b}
                     onView={() => void openDetail(b._id)}
-                    onPay={() => void payDemo(b._id)}
                     onPayOnline={() => void payOnlineDemo(b._id)}
-                    paying={payingId === b._id}
                     payingOnline={payingOnlineId === b._id}
                   />
                 ))}
@@ -250,9 +233,7 @@ const MyBillsPage: React.FC = () => {
                   key={b._id}
                   b={b}
                   onView={() => void openDetail(b._id)}
-                  onPay={() => void payDemo(b._id)}
                   onPayOnline={() => void payOnlineDemo(b._id)}
-                  paying={payingId === b._id}
                   payingOnline={payingOnlineId === b._id}
                 />
               ))}
@@ -287,16 +268,13 @@ const MyBillsPage: React.FC = () => {
               <div className="modal-footer flex-wrap gap-2">
                 {detail && canPay(detail.status) && (
                   <>
-                    <button type="button" className="btn btn-primary" disabled={!!payingId} onClick={() => void payDemo(detail._id)}>
-                      {payingId === detail._id ? "Đang xử lý…" : "Thanh toán (xác nhận)"}
-                    </button>
                     <button
                       type="button"
-                      className="btn btn-outline-primary"
+                      className="btn btn-primary"
                       disabled={!!payingOnlineId}
                       onClick={() => void payOnlineDemo(detail._id)}
                     >
-                      {payingOnlineId === detail._id ? "Đang xử lý…" : "Thanh toán online (demo)"}
+                      {payingOnlineId === detail._id ? "Đang xử lý…" : "Thanh toán online"}
                     </button>
                   </>
                 )}
@@ -315,16 +293,12 @@ const MyBillsPage: React.FC = () => {
 function BillRow({
   b,
   onView,
-  onPay,
   onPayOnline,
-  paying,
   payingOnline,
 }: {
   b: Bill;
   onView: () => void;
-  onPay: () => void;
   onPayOnline: () => void;
-  paying: boolean;
   payingOnline: boolean;
 }) {
   const st = statusUi(b.status);
@@ -344,14 +318,9 @@ function BillRow({
           Xem
         </button>
         {canPay(b.status) && (
-          <>
-            <button type="button" className="btn btn-success btn-sm me-1" disabled={paying} onClick={onPay}>
-              {paying ? "…" : "Pay"}
-            </button>
-            <button type="button" className="btn btn-outline-success btn-sm" disabled={payingOnline} onClick={onPayOnline}>
-              {payingOnline ? "…" : "Online"}
-            </button>
-          </>
+          <button type="button" className="btn btn-success btn-sm" disabled={payingOnline} onClick={onPayOnline}>
+            {payingOnline ? "…" : "Thanh toán"}
+          </button>
         )}
       </td>
     </tr>

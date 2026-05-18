@@ -270,6 +270,7 @@ export const contractsApi = {
   update: (id: string, data: Record<string, unknown>) => client.put(`/contracts/${encodeURIComponent(String(id))}`, data),
   extend: (id: string, endDate: string) => client.put(`/contracts/${id}/extend`, { endDate }),
   terminate: (id: string) => client.put(`/contracts/${id}/terminate`),
+  uploadSignedPdf: (id: string, signedPdfUrl: string) => client.put(`/contracts/${id}/upload-signed-pdf`, { signedPdfUrl }),
   sign: (id: string) => client.put(`/contracts/${id}/sign`),
   confirmPayment: (id: string) => client.put(`/contracts/${id}/confirm-payment`),
   /** Sinh viên: gửi yêu cầu gia hạn (chỉ hợp đồng active) */
@@ -345,7 +346,19 @@ export const studentsApi = {
 };
 
 export const dashboardApi = {
-  getStats: () => client.get("/dashboard/stats"),
+  getStats: (params?: {
+    range?: "7d" | "14d" | "month";
+    area?: string;
+    roomStatus?: "all" | "available" | "full" | "maintenance";
+    billStatus?: "all" | "unpaid" | "pending" | "overdue" | "paid";
+    billPeriodType?: "month" | "quarter" | "year";
+    billYear?: number;
+    billMonth?: number;
+    billQuarter?: number;
+    maintenanceType?: "all" | "electricity" | "water" | "equipment" | "other";
+    maintenanceStatus?: "all" | "pending" | "processing" | "resolved";
+    violationSeverity?: "all" | "light" | "medium" | "heavy";
+  }) => client.get("/dashboard/stats", { params }),
   getContractExtensionSetting: () => client.get("/dashboard/contract-extension-setting"),
   setContractExtensionSetting: (data: { enable_contract_extension: boolean }) =>
     client.put("/dashboard/contract-extension-setting", data),
