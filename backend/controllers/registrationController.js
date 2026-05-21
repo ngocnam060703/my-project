@@ -63,11 +63,19 @@ async function notifyAdminsNewRegistration({ registration, roomDoc, student, typ
 
 exports.getAll = async (req, res) => {
   try {
-    const { status, user, room, page = 1, limit = 20 } = req.query;
-    const filter = {};
+    const { status, user, room, days, page = 1, limit = 20 } = req.query;
+    const filter = { registrationType: "transfer" };
     if (status) filter.status = status;
     if (user) filter.user = user;
     if (room) filter.room = room;
+    if (days) {
+      const d = parseInt(String(days), 10);
+      if (!Number.isNaN(d) && d > 0) {
+        const now = new Date();
+        const from = new Date(now.getTime() - (d - 1) * 86400000);
+        filter.createdAt = { $gte: from };
+      }
+    }
     if (req.user.role === "manager" && req.user.managedArea) {
       const rooms = await Room.find({ area: req.user.managedArea }).select("_id");
       filter.room = { $in: rooms.map((r) => r._id) };
@@ -81,8 +89,17 @@ exports.getAll = async (req, res) => {
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
       .sort({ createdAt: -1 });
-    const total = await Registration.countDocuments(filter);
-    res.json({ registrations: registrations.map((r) => normalizeRegistrationSemesterYear(r)), total });
+    const [total, pendingCount, approvedCount, rejectedCount] = await Promise.all([
+      Registration.countDocuments(filter),
+      Registration.countDocuments({ ...filter, status: "pending" }),
+      Registration.countDocuments({ ...filter, status: "approved" }),
+      Registration.countDocuments({ ...filter, status: "rejected" }),
+    ]);
+    res.json({
+      registrations: registrations.map((r) => normalizeRegistrationSemesterYear(r)),
+      total,
+      stats: { pending: pendingCount, approved: approvedCount, rejected: rejectedCount },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -90,7 +107,7 @@ exports.getAll = async (req, res) => {
 
 exports.getMyRegistrations = async (req, res) => {
   try {
-    const registrations = await Registration.find({ user: req.user._id })
+    const registrations = await Registration.find({ user: req.user._id, registrationType: "transfer" })
       .populate({ path: "room", populate: { path: "area", select: "name" } })
       .populate({ path: "fromRoom", populate: { path: "area", select: "name" } })
       .populate({ path: "currentContract", select: "contractNumber status registration", populate: { path: "registration", select: "semester schoolYear" } })
@@ -116,15 +133,14 @@ exports.create = async (req, res) => {
     })
       .populate({ path: "room", select: "roomNumber area", populate: { path: "area", select: "name" } })
       .populate("registration", "semester schoolYear");
-    let roomDoc =
-      registrationType === "dorm"
-        ? await assignRoomForStudent(req.user)
-        : await Room.findById(room).populate("area", "name");
-    if (registrationType === "dorm" && !roomDoc) {
+    if (registrationType === "dorm") {
       return res.status(400).json({
-        message: "Không còn phòng trống phù hợp (giới tính / khu). Vui lòng liên hệ ban quản lý KTX.",
+        message:
+          "Đăng ký ở KTX đã chuyển sang mục Đơn KTX. Bạn không chọn phòng; admin sẽ xếp phòng khi duyệt. Vui lòng gửi đơn tại /applications.",
       });
     }
+
+    const roomDoc = await Room.findById(room).populate("area", "name");
     if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng" });
     if (registrationType === "transfer") {
       if (!activeContract) {

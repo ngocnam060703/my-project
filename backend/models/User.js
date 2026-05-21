@@ -13,13 +13,15 @@ const userSchema = new mongoose.Schema(
     className: { type: String, default: "" },
     /** Chuyên ngành */
     major: { type: String, default: "" },
+    /** Khoa/nhóm ngành (tham chiếu từ danh mục ngành) */
+    facultyGroup: { type: String, default: "" },
     /** Nam / Nữ */
     gender: { type: String, default: "" },
     /** Số CCCD / CMND */
     citizenId: { type: String, default: "" },
     dateOfBirth: { type: Date, default: null },
     address: { type: String, default: "" },
-    /** Khoa */
+    /** Khóa (VD: K26) */
     faculty: { type: String, default: "" },
     /** Ngày nhập học */
     enrollmentDate: { type: Date, default: null },

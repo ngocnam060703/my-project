@@ -179,6 +179,14 @@ export const zonesApi = {
       return fetchZoneDetailViaAreaAndRooms(id);
     }
   },
+  getResidents: async (id: string) => {
+    try {
+      return await client.get(`/zones/${id}/residents`);
+    } catch (e) {
+      if (!isZonesEndpointMissing(e)) throw e;
+      return await client.get(`/areas/${id}/residents`);
+    }
+  },
   create: (data: Record<string, unknown>) => client.post("/zones", data),
   update: (id: string, data: Record<string, unknown>) => client.patch(`/zones/${id}`, data),
   delete: (id: string) => client.delete(`/zones/${id}`),
@@ -189,10 +197,28 @@ export const roomsApi = {
     client.get("/rooms", { params }),
   getById: (id: string) => client.get(`/rooms/${id}`),
   getResidents: (id: string) => client.get(`/rooms/${id}/residents`),
+  getResidencyHistory: (id: string) => client.get(`/rooms/${id}/residency-history`),
+  getBeds: (id: string) => client.get(`/rooms/${id}/beds`),
+  assignBed: (roomId: string, payload: { bedId: string; contractId: string }) => client.post(`/rooms/${roomId}/beds/assign`, payload),
+  checkInBed: (roomId: string, bedId: string) => client.post(`/rooms/${roomId}/beds/check-in/${encodeURIComponent(bedId)}`),
+  transferBed: (roomId: string, payload: { contractId: string; targetBedId: string; reason?: string }) =>
+    client.post(`/rooms/${roomId}/beds/transfer`, payload),
   setRoomLeader: (id: string, userId: string) => client.put(`/rooms/${id}/room-leader`, { userId }),
   create: (data: Record<string, unknown>) => client.post("/rooms", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/rooms/${id}`, data),
   delete: (id: string) => client.delete(`/rooms/${id}`),
+};
+
+export const bedsApi = {
+  checkout: (bedId: string, body?: { note?: string }) =>
+    client.post(`/beds/${encodeURIComponent(bedId)}/checkout`, body || {}),
+};
+
+export const majorsApi = {
+  getAll: (params?: { q?: string; faculty?: string; active?: boolean }) => client.get("/majors", { params }),
+  create: (data: { name: string; faculty?: string }) => client.post("/majors", data),
+  update: (id: string, data: { name?: string; faculty?: string; isActive?: boolean }) => client.patch(`/majors/${id}`, data),
+  delete: (id: string) => client.delete(`/majors/${id}`),
 };
 
 export const registrationsApi = {
@@ -240,19 +266,33 @@ export const applicationsApi = {
     schoolYear: string;
     startDate: string;
     preferenceArea?: string;
+    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
   }) => client.post<DormApplication>("/applications", data),
   getAll: (params?: {
     status?: string;
     search?: string;
+    faculty?: string;
+    enrollmentYear?: number;
+    area?: string;
+    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
+    days?: number;
     sortOrder?: "asc" | "desc";
     page?: number;
     limit?: number;
-  }) => client.get<{ applications: DormApplication[]; total: number; page: number; limit: number }>("/applications", { params }),
+  }) =>
+    client.get<{
+      applications: DormApplication[];
+      total: number;
+      page: number;
+      limit: number;
+      stats?: { pending: number; approved: number; total: number };
+    }>("/applications", { params }),
   getById: (id: string) => client.get<DormApplication>(`/applications/${id}`),
   /** Sinh viên: hủy đơn chỉ khi pending */
   cancel: (id: string) => client.delete(`/applications/${encodeURIComponent(id)}`),
   getSuggestedRoom: (id: string) => client.get<{ room: Room; rules: string[] }>(`/applications/${id}/suggested-room`),
-  approve: (id: string) => client.patch(`/applications/${id}/approve`),
+  getCandidateRooms: (id: string) => client.get<{ rooms: Room[] }>(`/applications/${id}/candidate-rooms`),
+  approve: (id: string, data?: { roomId?: string }) => client.patch(`/applications/${id}/approve`, data || {}),
   reject: (id: string, note: string) => client.patch(`/applications/${id}/reject`, { note }),
   statsByDay: (params?: { days?: number }) =>
     client.get<{ days: number; series: { date: string; count: number }[] }>("/applications/stats/by-day", { params }),
@@ -263,8 +303,9 @@ export const contractsApi = {
   /** GET /api/my-contract — sinh viên: hợp đồng + lịch sử gia hạn */
   getMyContractOverview: () => client.get<MyContractOverview>("/my-contract"),
   getById: (id: string) => client.get(`/contracts/${id}`),
-  getAll: (params?: { status?: string; user?: string; room?: string; page?: number; limit?: number }) =>
+  getAll: (params?: { status?: string; user?: string; room?: string; search?: string; faculty?: string; major?: string; area?: string; hasDebt?: boolean; page?: number; limit?: number }) =>
     client.get("/contracts", { params }),
+  get360: (id: string) => client.get(`/contracts/${encodeURIComponent(id)}/360`),
   /** CRUD — giao diện admin có thể ẩn; gọi khi cần (Postman / tích hợp). */
   create: (data: Record<string, unknown>) => client.post("/contracts", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/contracts/${encodeURIComponent(String(id))}`, data),
@@ -273,6 +314,8 @@ export const contractsApi = {
   uploadSignedPdf: (id: string, signedPdfUrl: string) => client.put(`/contracts/${id}/upload-signed-pdf`, { signedPdfUrl }),
   sign: (id: string) => client.put(`/contracts/${id}/sign`),
   confirmPayment: (id: string) => client.put(`/contracts/${id}/confirm-payment`),
+  /** Admin: tạo slot giường nếu thiếu + gán giường trống cho hợp đồng */
+  ensureBed: (id: string) => client.put(`/contracts/${encodeURIComponent(id)}/ensure-bed`),
   /** Sinh viên: gửi yêu cầu gia hạn (chỉ hợp đồng active) */
   requestExtend: (contractId: string, months: number) =>
     client.post(`/contracts/${encodeURIComponent(contractId)}/request-extend`, { months }),
@@ -282,6 +325,10 @@ export const contractsApi = {
   approveExtendRequest: (requestId: string) => client.patch(`/contracts/extend-requests/${encodeURIComponent(requestId)}/approve`),
   rejectExtendRequest: (requestId: string, note: string) =>
     client.patch(`/contracts/extend-requests/${encodeURIComponent(requestId)}/reject`, { note }),
+};
+
+export const opsContractsApi = {
+  dashboard: () => client.get("/ops/contracts/dashboard"),
 };
 
 export const billsApi = {
@@ -306,7 +353,7 @@ export const billsApi = {
     page?: number;
     limit?: number;
   }) => client.get("/bills", { params }),
-  create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; otherFee?: number; dueDate?: string }) =>
+  create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; sharedCommonFee?: number; otherFee?: number; dueDate?: string }) =>
     client.post("/bills", data),
   generate: (data: { month: number; year: number; dueDate?: string }) => client.post("/bills/generate", data),
   update: (id: string, data: Record<string, unknown>) => client.patch(`/bills/${id}`, data),
@@ -323,6 +370,7 @@ export const usersApi = {
     status?: "active" | "locked" | "";
     sortBy?: "id" | "fullName" | "createdAt";
     sortOrder?: "asc" | "desc";
+    includeDorm?: 1 | 0;
   }) => client.get("/users", { params }),
   getById: (id: string) => client.get(`/users/${id}`),
   create: (data: Record<string, unknown>) => client.post("/users", data),
@@ -502,8 +550,15 @@ export const serviceUsageApi = {
 
 export const roomCostsApi = {
   getAll: (params?: { month?: number; year?: number }) => client.get("/room-costs", { params }),
-  upsert: (data: { roomId: string; month: number; year: number; electricityFee: number; waterFee: number; note?: string }) =>
-    client.post("/room-costs", data),
+  upsert: (data: {
+    roomId: string;
+    month: number;
+    year: number;
+    electricityFee: number;
+    waterFee: number;
+    wifiMonthlyFee?: number;
+    note?: string;
+  }) => client.post("/room-costs", data),
 };
 
 export const violationsApi = {

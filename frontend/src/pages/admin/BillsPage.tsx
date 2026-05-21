@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
-import { Table, Button, Modal, Form, Select, InputNumber, message, Tag, Space, Card, Row, Col, Statistic, Input } from "antd";
+import React, { useState, useEffect, useCallback } from "react";
+import { Table, Button, Modal, Form, Select, InputNumber, message, Tag, Space, Card, Row, Col, Statistic, Input, Popover } from "antd";
 import { PlusOutlined, CheckOutlined, DownloadOutlined, FilterOutlined, EyeOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { billsApi, client } from "../../api";
+import { billsApi, client, roomCostsApi, serviceUsageApi } from "../../api";
 import type { Bill } from "../../types";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -31,20 +31,27 @@ const formatPersonalServiceLine = (it: PersonalLine) => {
 };
 
 const BillsPage: React.FC = () => {
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+
   const [data, setData] = useState<Bill[]>([]);
   const [total, setTotal] = useState(0);
-  const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { _id?: string; name?: string }; capacity?: number; price?: number }[]>([]);
+  const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { _id?: string; name?: string }; capacity?: number; price?: number; pricePerPerson?: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [detailModal, setDetailModal] = useState<Bill | null>(null);
   const [form] = Form.useForm();
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<{ status?: string; room?: string; month?: number; year?: number; billType?: string }>({});
+  const [filters, setFilters] = useState<{ status?: string; room?: string; month?: number; year?: number; billType?: string }>({
+    month: currentMonth,
+    year: currentYear,
+  });
   const [genMonth, setGenMonth] = useState(new Date().getMonth() + 1);
   const [genYear, setGenYear] = useState(new Date().getFullYear());
   const [payModal, setPayModal] = useState<{ bill: Bill; method: "counter" | "manual"; reference: string } | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const params: Record<string, unknown> = { page, limit: 10 };
@@ -77,28 +84,96 @@ const BillsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, filters.status, filters.room, filters.month, filters.year, filters.billType]);
 
-  useEffect(() => { load(); }, [page, filters.status, filters.room, filters.month, filters.year, filters.billType]);
+  useEffect(() => { load(); }, [load]);
+
+  const fetchRoomCosts = useCallback(async (roomId: string, month: number, year: number) => {
+    try {
+      const costRes = await roomCostsApi.getAll({ month, year });
+      const raw = costRes.data as unknown;
+      const list = Array.isArray(raw) ? raw : ((raw as { roomCosts?: unknown[] })?.roomCosts ?? []);
+      const rid = String(roomId);
+      type CostRow = { room?: string | { _id?: string }; electricityFee?: number; waterFee?: number; wifiMonthlyFee?: number };
+      const roomCost = (list as CostRow[]).find((c) => {
+        const id = typeof c.room === "object" && c.room ? String(c.room._id ?? "") : String(c.room ?? "");
+        return id === rid;
+      });
+      if (roomCost) {
+        form.setFieldsValue({
+          electricityFee: roomCost.electricityFee ?? 0,
+          waterFee: roomCost.waterFee ?? 0,
+          sharedCommonFee: roomCost.wifiMonthlyFee ?? 0,
+        });
+        return;
+      }
+      const usageRes = await serviceUsageApi.list({ room: roomId, month, year, limit: 100 });
+      const usages = (usageRes.data as { items?: { _id: string; room?: { _id: string }; service?: { measureUnit: string }; month: number; year: number; amount: number }[] })?.items || [];
+      let electricityFee = 0;
+      let waterFee = 0;
+      usages.forEach((u) => {
+        if (u.service?.measureUnit === "kwh") {
+          electricityFee += u.amount || 0;
+        } else if (u.service?.measureUnit === "m3") {
+          waterFee += u.amount || 0;
+        }
+      });
+      form.setFieldsValue({
+        electricityFee,
+        waterFee,
+        sharedCommonFee: 0,
+      });
+    } catch (err) {
+      console.error("Không lấy được chi phí phòng:", err);
+      form.setFieldsValue({
+        electricityFee: 0,
+        waterFee: 0,
+        sharedCommonFee: 0,
+      });
+    }
+  }, [form]);
+
+  useEffect(() => {
+    if (modalOpen) {
+      const values = form.getFieldsValue();
+      if (typeof values.roomId === 'string' && typeof values.month === 'number' && typeof values.year === 'number') {
+        fetchRoomCosts(values.roomId, values.month, values.year);
+      }
+    }
+  }, [modalOpen, form, fetchRoomCosts]);
+
+  const getRoomPricePerPerson = (room: { capacity?: number; price?: number; pricePerPerson?: number } | undefined) => {
+    if (!room) return 0;
+    if (room.pricePerPerson != null && room.pricePerPerson > 0) return room.pricePerPerson;
+    if (room.capacity && room.capacity > 0) return Math.round((room.price || 0) / room.capacity);
+    return room.price || 0;
+  };
 
   const handleCreate = async (v: Record<string, unknown>) => {
     try {
       const electricityFee = (v.electricityFee as number) ?? 0;
       const waterFee = (v.waterFee as number) ?? 0;
+      const sharedCommonFee = (v.sharedCommonFee as number) ?? 0; // Wi-Fi
       const otherFee = (v.otherFee as number) ?? 0;
+      const roomId = v.roomId as string;
+      const room = rooms.find((r) => r._id === roomId);
+      const roomFee = getRoomPricePerPerson(room);
       const res = await billsApi.create({
-        roomId: v.roomId as string,
+        roomId,
         month: v.month as number,
         year: v.year as number,
+        roomFee: roomFee > 0 ? roomFee : undefined,
         electricityFee,
         waterFee,
+        sharedCommonFee,
         otherFee,
         dueDate: v.dueDate ? new Date(v.dueDate as string).toISOString().split("T")[0] : undefined,
       });
       const created = (res.data as { created?: number })?.created;
       const skipped = (res.data as { skipped?: number })?.skipped;
-      if (created != null || skipped != null) {
-        message.success(`Tạo theo phòng xong: ${created || 0}, bỏ qua: ${skipped || 0}`);
+      const updated = (res.data as { updated?: number })?.updated;
+      if (created != null || updated != null || skipped != null) {
+        message.success(`Tạo theo phòng xong: ${created || 0}, cập nhật: ${updated || 0}, bỏ qua: ${skipped || 0}`);
       } else {
         message.success("Tạo hóa đơn thành công");
       }
@@ -111,7 +186,57 @@ const BillsPage: React.FC = () => {
   };
 
   const handleMarkPaid = (r: Bill) => {
-    setPayModal({ bill: r, method: "counter", reference: "" });
+    let method: "manual" | "counter" = "counter";
+    let ref = "";
+    Modal.confirm({
+      title: "Xác nhận thanh toán",
+      width: 520,
+      content: (
+        <div>
+          <div style={{ marginBottom: 8 }}>
+            Xác nhận sinh viên <strong>{(r.user as { fullName?: string })?.fullName || "—"}</strong> đã thanh toán{" "}
+            <strong>{formatMoney(r.total)}</strong>
+            {r.billType === "penalty" ? " (hóa đơn phạt)" : ` (hóa đơn ${r.month}/${r.year})`}.
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 200, flex: 1 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Hình thức</div>
+              <Select
+                defaultValue="counter"
+                style={{ width: "100%" }}
+                onChange={(v) => {
+                  method = v as "manual" | "counter";
+                }}
+                options={[
+                  { value: "counter", label: "Thu tại quầy" },
+                  { value: "manual", label: "Xác nhận / chuyển khoản" },
+                ]}
+              />
+            </div>
+            <div style={{ minWidth: 240, flex: 2 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Mã giao dịch / ghi chú (tuỳ chọn)</div>
+              <Input
+                placeholder="VD: CK-09052026-001"
+                onChange={(e) => {
+                  ref = e.target.value;
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      ),
+      okText: "Xác nhận",
+      cancelText: "Hủy",
+      onOk: async () => {
+        try {
+          await billsApi.markPaid(r._id, { paymentMethod: method, paymentReference: ref?.trim() || undefined });
+          message.success("Đã cập nhật");
+          load();
+        } catch {
+          message.error("Lỗi");
+        }
+      },
+    });
   };
 
   const unpaidTotal = data.filter((b) => b.status === "pending" || b.status === "unpaid" || b.status === "overdue").reduce((s, b) => s + (b.total || 0), 0);
@@ -135,6 +260,8 @@ const BillsPage: React.FC = () => {
       title: "Sinh viên",
       dataIndex: ["user", "fullName"],
       key: "user",
+      width: 200,
+      fixed: "left" as const,
       ellipsis: true,
     },
     {
@@ -144,51 +271,52 @@ const BillsPage: React.FC = () => {
       width: 80,
     },
     {
-      title: "Tiền phòng",
-      dataIndex: "roomFee",
-      key: "roomFee",
-      width: 110,
-      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : <span style={{ color: "#0d9488" }}>{formatMoney(v)}</span>),
-    },
-    {
-      title: "Điện",
-      dataIndex: "electricityFee",
-      key: "electricityFee",
-      width: 90,
-      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : formatMoney(v)),
-    },
-    {
-      title: "Nước",
-      dataIndex: "waterFee",
-      key: "waterFee",
-      width: 90,
-      render: (v: number, r: Bill) => (r.billType === "penalty" ? "-" : formatMoney(v)),
-    },
-    {
-      title: "Dịch vụ cá nhân / Phạt",
-      dataIndex: "personalServiceFee",
-      key: "personalServiceFee",
-      width: 260,
-      render: (_: number, r: Bill) => {
-        if (r.billType === "penalty") {
-          const lines = r.penaltyBreakdown || [];
-          if (!lines.length) return "-";
-          return (
-            <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55, fontSize: 13 }}>
-              {lines.map((line, idx) => (
-                <li key={idx}>{line.label}: {formatMoney(line.amount)}</li>
-              ))}
-            </ul>
+      title: "Chi tiết phí",
+      key: "fees",
+      width: 150,
+      render: (_: unknown, r: Bill) => {
+        const content =
+          r.billType === "penalty" ? (
+            <div style={{ minWidth: 260 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết phạt</div>
+              {(r.penaltyBreakdown || []).length ? (
+                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                  {(r.penaltyBreakdown || []).map((line, idx) => (
+                    <li key={idx}>
+                      {line.label}: <strong>{formatMoney(line.amount)}</strong>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div>—</div>
+              )}
+            </div>
+          ) : (
+            <div style={{ minWidth: 280 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết phí</div>
+              <div>Tiền phòng: <strong>{formatMoney(r.roomFee)}</strong></div>
+              <div>Điện: <strong>{formatMoney(r.electricityFee)}</strong></div>
+              <div>Nước: <strong>{formatMoney(r.waterFee)}</strong></div>
+              <div>Wi‑Fi: <strong>{formatMoney(r.sharedCommonFee)}</strong></div>
+              {r.otherFee ? <div>Phí khác: <strong>{formatMoney(r.otherFee)}</strong></div> : <div>Phí khác: —</div>}
+              {(r.personalServiceBreakdown || []).length ? (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ fontWeight: 600 }}>Dịch vụ cá nhân</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                    {(r.personalServiceBreakdown || []).map((it, idx) => (
+                      <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div style={{ marginTop: 8 }}>Dịch vụ cá nhân: —</div>
+              )}
+            </div>
           );
-        }
-        const items = r.personalServiceBreakdown || [];
-        if (!items.length) return "-";
         return (
-          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55, fontSize: 13 }}>
-            {items.map((it, idx) => (
-              <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
-            ))}
-          </ul>
+          <Popover content={content} title={null} trigger="hover">
+            <Button size="small">Xem</Button>
+          </Popover>
         );
       },
     },
@@ -229,10 +357,6 @@ const BillsPage: React.FC = () => {
     },
   ];
 
-  const now = new Date();
-  const currentMonth = now.getMonth() + 1;
-  const currentYear = now.getFullYear();
-
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
@@ -240,7 +364,7 @@ const BillsPage: React.FC = () => {
         <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>Tạo, xem và quản lý hóa đơn tiền phòng, điện nước</p>
       </div>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={24} sm={8}>
           <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
             <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Tổng chưa thu</span>} value={unpaidTotal} formatter={(v) => formatMoney(Number(v))} valueStyle={{ color: "#fff", fontSize: 20 }} />
@@ -286,7 +410,7 @@ const BillsPage: React.FC = () => {
           <InputNumber placeholder="Tháng" min={1} max={12} style={{ width: 90 }} value={filters.month} onChange={(v) => { setFilters((f) => ({ ...f, month: v || undefined })); setPage(1); }} />
           <InputNumber placeholder="Năm" min={2020} style={{ width: 100 }} value={filters.year} onChange={(v) => { setFilters((f) => ({ ...f, year: v || undefined })); setPage(1); }} />
           <Input placeholder="Lọc phòng" style={{ width: 120 }} value={filters.room} onChange={(e) => { setFilters((f) => ({ ...f, room: e.target.value || undefined })); setPage(1); }} />
-          <Button onClick={() => { setFilters({}); setPage(1); }}>Xóa bộ lọc</Button>
+          <Button onClick={() => { setFilters({ month: currentMonth, year: currentYear }); setPage(1); }}>Xóa bộ lọc</Button>
           <div style={{ flex: 1 }} />
           <Space>
             <Button icon={<DownloadOutlined />} onClick={() => exportToExcel(data.map((b) => ({
@@ -297,10 +421,12 @@ const BillsPage: React.FC = () => {
               "Tiền phòng": b.billType === "penalty" ? "" : b.roomFee,
               "Điện": b.billType === "penalty" ? "" : b.electricityFee,
               "Nước": b.billType === "penalty" ? "" : b.waterFee,
+              "Wifi": b.billType === "penalty" ? "" : b.sharedCommonFee,
               "Dịch vụ cá nhân / Phạt": b.billType === "penalty"
                 ? (b.penaltyBreakdown || []).map((x) => `${x.label || "Mục"}: ${x.amount ?? 0}`).join("; ")
                 : (b.personalServiceBreakdown || []).map((x) => formatPersonalServiceLine(x)).join("; "),
               "Phí dịch vụ cá nhân": b.personalServiceFee || 0,
+              "Phí khác": b.billType === "penalty" ? "" : b.otherFee,
               "Tổng": b.total,
               "Hạn": new Date(b.dueDate).toLocaleDateString("vi-VN"),
               "Trạng thái": statusMap[b.status]?.text || b.status,
@@ -326,13 +452,20 @@ const BillsPage: React.FC = () => {
           rowKey="_id"
           loading={loading}
           pagination={{ total, current: page, pageSize: 10, onChange: setPage, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hóa đơn` }}
-          scroll={{ x: 1220 }}
+          scroll={{ x: 980 }}
           size="middle"
         />
       </Card>
 
       <Modal title="Tạo hóa đơn" open={modalOpen} onCancel={() => setModalOpen(false)} footer={null} width={500}>
-        <Form form={form} onFinish={handleCreate} layout="vertical" initialValues={{ month: currentMonth, year: currentYear }}>
+        <Form form={form} onFinish={handleCreate} layout="vertical" initialValues={{ month: currentMonth, year: currentYear }} onValuesChange={(changedValues, allValues) => {
+          if (changedValues.roomId || changedValues.month || changedValues.year) {
+            const { roomId, month, year } = allValues;
+            if (typeof roomId === 'string' && typeof month === 'number' && typeof year === 'number') {
+              fetchRoomCosts(roomId, month, year);
+            }
+          }
+        }}>
           <Form.Item name="areaId" label="Khu (lọc phòng)">
             <Select allowClear placeholder="Chọn khu để lọc phòng">
               {Array.from(new Map(rooms.filter((r) => r.area?._id).map((r) => [String(r.area?._id), r.area])).values()).map((a) => (
@@ -354,7 +487,7 @@ const BillsPage: React.FC = () => {
                     optionFilterProp="children"
                     onChange={(rid) => {
                       const room = rooms.find((r) => r._id === rid);
-                      form.setFieldsValue({ roomFeePreview: room?.price || 0 });
+                      form.setFieldsValue({ roomFeePreview: getRoomPricePerPerson(room) });
                     }}
                   >
                     {filteredRooms.map((r) => (
@@ -375,14 +508,24 @@ const BillsPage: React.FC = () => {
               <Form.Item name="year" label="Năm" rules={[{ required: true }]}><InputNumber min={2020} style={{ width: "100%" }} /></Form.Item>
             </Col>
           </Row>
-          <Form.Item name="roomFeePreview" label="Tiền phòng (đ) — tự lấy theo loại phòng">
+          <Form.Item name="roomFeePreview" label="Tiền phòng (đ) — tự lấy theo giá đầu người">
             <InputNumber min={0} style={{ width: "100%" }} disabled />
           </Form.Item>
           <Form.Item name="electricityFee" label="Tiền điện (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="waterFee" label="Tiền nước (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-          <Form.Item name="otherFee" label="Phí khác (Wifi, gửi xe...)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
+          <Form.Item
+            name="sharedCommonFee"
+            label="Tiền Wi‑Fi — tổng gói phòng / tháng (đ)"
+            extra="Nhập tổng tiền Wi‑Fi của cả phòng (vd 200.000đ). Mỗi sinh viên trả = số này ÷ số slot (capacity). Để 0 thì chỉ dùng các dịch vụ chung trong danh mục Dịch vụ."
+            initialValue={0}
+          >
+            <InputNumber min={0} style={{ width: "100%" }} />
+          </Form.Item>
+          <Form.Item name="otherFee" label="Phí khác (gửi xe...)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="dueDate" label="Hạn thanh toán"><Input type="date" /></Form.Item>
-          <Form.Item><Button type="primary" htmlType="submit" block>Tạo hóa đơn</Button></Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit" block>Tạo hóa đơn</Button>
+          </Form.Item>
         </Form>
       </Modal>
 

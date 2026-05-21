@@ -39,14 +39,27 @@ const StudentBillingPage: React.FC = () => {
   };
 
   useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const vnpay = q.get("vnpay");
+    if (vnpay === "success") {
+      setErr(null);
+    } else if (vnpay === "failed") {
+      setErr("Thanh toán VNPay không thành công. Vui lòng thử lại.");
+    } else if (vnpay === "invalid-signature") {
+      setErr("Giao dịch không hợp lệ (sai chữ ký).");
+    } else if (vnpay === "error") {
+      setErr("Có lỗi khi xử lý thanh toán VNPay.");
+    }
     load();
   }, []);
 
   const payOnline = async (id: string) => {
     setBusy(id);
     try {
-      await billsApi.payOnline(id);
-      load();
+      const res = await billsApi.payOnline(id);
+      const paymentUrl = (res.data as { paymentUrl?: string })?.paymentUrl;
+      if (!paymentUrl) throw new Error("Không nhận được link thanh toán");
+      window.location.href = paymentUrl;
     } catch (e: unknown) {
       setErr((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Thanh toán thất bại");
     } finally {

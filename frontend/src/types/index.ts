@@ -11,12 +11,17 @@ export interface User {
   updatedAt?: string;
   phone?: string;
   studentId?: string;
+  /** Lớp hành chính */
+  className?: string;
+  /** Khoa/nhóm ngành */
+  facultyGroup?: string;
   major?: string;
   gender?: string;
   citizenId?: string;
   dateOfBirth?: string;
   address?: string;
   isSuperAdmin?: boolean;
+  /** Khóa (VD: K26) */
   faculty?: string;
   enrollmentDate?: string;
   homeroomTeacher?: string;
@@ -29,6 +34,38 @@ export interface User {
   familyMotherName?: string;
   familyMotherPhone?: string;
   familyEmergencyPhone?: string;
+  /** Khu KTX được gán cho tài khoản quản lý (ref Area) */
+  managedArea?: Area | string | null;
+}
+
+/** Một dòng lịch sử cư trú theo hợp đồng (+ BedHistory: check-in/out, ghi chú) */
+export interface StayHistoryRow {
+  contractId: string;
+  contractNumber?: string;
+  status: string;
+  startDate?: string;
+  endDate?: string;
+  areaName?: string;
+  roomNumber?: string;
+  bedCode?: string;
+  /** VD: A101-01 */
+  bedSlotDisplay?: string;
+  /** Ngày check-in thực tế (sự kiện checked_in hoặc snapshot giường) */
+  checkInAt?: string | Date | null;
+  /** Ngày check-out thực tế (sự kiện checked_out) */
+  checkOutAt?: string | Date | null;
+  /** Theo kỳ HĐ hiện hành / đã kết thúc */
+  residencyStayStatus?:
+    | "pending_checkin"
+    | "staying"
+    | "checked_out"
+    | "pending_bed"
+    | "not_started"
+    | string;
+  /** Ghi chú từ lịch sử giường (chuyển phòng, checkout, …) */
+  note?: string;
+  studentName?: string;
+  studentId?: string;
 }
 
 /** GET /users/:id — payload đầy đủ cho admin */
@@ -37,6 +74,27 @@ export interface AdminUserDetailResponse {
   currentRoom: Room | null;
   currentContract: Contract | null;
   contracts: Contract[];
+  /** Chỉ có khi user.role === "manager" — danh sách khu phụ trách */
+  managedAreas?: Area[];
+  /** Sinh viên: các kỳ ở theo từng hợp đồng */
+  stayHistory?: StayHistoryRow[];
+  /** Sinh viên: công nợ & hóa đơn chưa thanh toán */
+  financialSummary?: {
+    debtTotal: number;
+    unpaidCount: number;
+    unpaidBills: Bill[];
+  } | null;
+  /** Sinh viên: vi phạm gần đây */
+  violationsRecent?: Violation[];
+  /** Sinh viên: trạng thái vận hành cư trú theo giường/HĐ */
+  residencyOperationalStatus?:
+    | "no_active_contract"
+    | "contract_no_bed"
+    | "no_bed_assigned"
+    | "assigned_pending_checkin"
+    | "checked_in_staying"
+    | string
+    | null;
 }
 
 export interface StudentProfileResponse {
@@ -101,6 +159,7 @@ export interface DormApplication {
   semester: string;
   schoolYear: string;
   startDate?: string;
+  priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
   status: "pending" | "approved" | "rejected";
   assignedRoom?: Room | null;
   note?: string;
@@ -145,6 +204,51 @@ export interface Contract {
   monthlyRent?: number | null;
   /** VNĐ — nếu null hiển thị “theo quy định” */
   depositAmount?: number | null;
+  /** Giường hiện tại (nếu hệ thống quản lý theo giường) */
+  bed?: string | Bed | null;
+}
+
+export interface Bed {
+  _id: string;
+  room: string | Room;
+  code: string; // A1, A2, B1...
+  status: "available" | "occupied" | "reserved" | "maintenance" | "locked" | string;
+  currentUser?: string | User | null;
+  currentContract?: string | Contract | null;
+  assignedAt?: string | null;
+  checkInAt?: string | null;
+  /** Server enrich (GET /rooms/:id/beds) */
+  residencyPhase?: string;
+  equipmentStatus?: string;
+  note?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Thống kê slot giường theo phòng */
+export interface RoomSlotStats {
+  totalSlots: number;
+  occupiedSlots: number;
+  reservedSlots: number;
+  emptySlots: number;
+  fillRatePercent: number;
+}
+
+export interface BedHistory {
+  _id: string;
+  bed: string | Bed;
+  room: string | Room;
+  user?: string | User | null;
+  contract?: string | Contract | null;
+  action: "assigned" | "transferred_in" | "transferred_out" | "checked_out" | "status_changed" | "note_updated" | string;
+  fromBedCode?: string;
+  toBedCode?: string;
+  fromStatus?: string;
+  toStatus?: string;
+  note?: string;
+  performedBy?: string | User | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /** Yêu cầu gia hạn hợp đồng (sinh viên → admin duyệt) */

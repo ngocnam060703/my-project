@@ -169,6 +169,7 @@ exports.updateProfile = async (req, res) => {
     assignIfDefined("phone", req.body.phone);
     assignIfDefined("address", req.body.address);
     assignIfDefined("className", req.body.className);
+    assignIfDefined("facultyGroup", req.body.facultyGroup);
     assignIfDefined("major", req.body.major);
     assignIfDefined("gender", req.body.gender);
     assignIfDefined("citizenId", req.body.citizenId);

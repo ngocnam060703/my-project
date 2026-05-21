@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Table,
   Button,
@@ -14,6 +15,7 @@ import {
   Statistic,
   Select,
   Input,
+  Alert,
 } from "antd";
 import {
   EyeOutlined,
@@ -21,10 +23,15 @@ import {
   DownloadOutlined,
   FilterOutlined,
   CalendarOutlined,
+  FileDoneOutlined,
+  ClockCircleOutlined,
+  WarningOutlined,
+  DollarOutlined,
 } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { contractsApi, client } from "../../api";
-import type { Contract, ContractExtendRequest, User } from "../../types";
+import { contractsApi, client, opsContractsApi } from "../../api";
+import { areasApi } from "../../api";
+import type { Area, Contract, ContractExtendRequest, Room, User } from "../../types";
 import dayjs from "dayjs";
 
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -37,7 +44,32 @@ const statusMap: Record<string, { color: string; text: string }> = {
 const lessorAddress = "................................................................................................";
 const lessorPhone = ".............................................................................................";
 
+/** Tháng giữa hai ngày (làm tròn xuống theo ngày trong tháng — cùng logic MyContracts). */
+function monthsBetweenStartEnd(start: string | Date, end: string | Date): number {
+  const a = new Date(start);
+  const b = new Date(end);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 12;
+  let m = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  if (b.getDate() < a.getDate()) m -= 1;
+  return Math.max(1, m);
+}
+
+function roomSlots(r: Room | null | undefined): number {
+  const cap = Number(r?.capacity ?? 0);
+  return Number.isFinite(cap) && cap >= 1 ? cap : 1;
+}
+
+/** Giá 01 slot theo bảng giá phòng (trừ khi HĐ có monthlyRent thỏa thuận). */
+function studentMonthlyRentVnd(c: Contract, room: Room | null): number {
+  if (c.monthlyRent != null && Number(c.monthlyRent) > 0) return Math.round(Number(c.monthlyRent));
+  const full = Math.round(Number(room?.price ?? 0));
+  return Math.round(full / roomSlots(room || undefined));
+}
+
 const ContractsPage: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const openContractId = searchParams.get("openContract")?.trim() || "";
+
   const [data, setData] = useState<Contract[]>([]);
   const [total, setTotal] = useState(0);
   const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { name: string } }[]>([]);
@@ -46,10 +78,26 @@ const ContractsPage: React.FC = () => {
   const [extendModal, setExtendModal] = useState<Contract | null>(null);
   const [form] = Form.useForm();
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<{ status?: string; room?: string }>({});
+  const [filters, setFilters] = useState<{ status?: string; room?: string; area?: string }>({});
+  const [quick, setQuick] = useState<{ hasDebt?: boolean }>({});
+  const [search, setSearch] = useState("");
+  const [faculty, setFaculty] = useState("");
+  const [major, setMajor] = useState("");
+  const [areas, setAreas] = useState<Array<Pick<Area, "_id" | "name">>>([]);
   const [extendReqs, setExtendReqs] = useState<ContractExtendRequest[]>([]);
   const [rejectExt, setRejectExt] = useState<{ id: string; note: string } | null>(null);
-  const [confirmModal, setConfirmModal] = useState<{ contract: Contract; signedPdfUrl: string } | null>(null);
+  const [ops, setOps] = useState<{
+    activeContracts: number;
+    expiringSoonContracts: number;
+    studentsWithDebt: number;
+    pendingViolations: number;
+    pendingRenewalRequests: number;
+    pendingTransferRequests: number;
+    occupancyRate: number;
+    roomsOverCapacity: number;
+    roomsMaintenance: number;
+    pendingMaintenanceReports: number;
+  } | null>(null);
 
   const loadExtendRequests = async () => {
     try {
@@ -66,6 +114,11 @@ const ContractsPage: React.FC = () => {
       const params: Record<string, unknown> = { page, limit: 10 };
       if (filters.status) params.status = filters.status;
       if (filters.room) params.room = filters.room;
+      if (filters.area) params.area = filters.area;
+      if (quick.hasDebt) params.hasDebt = 1;
+      if (search.trim()) params.search = search.trim();
+      if (faculty.trim()) params.faculty = faculty.trim();
+      if (major.trim()) params.major = major.trim();
       const [res, roomsRes] = await Promise.all([
         client.get("/contracts", { params }),
         client.get("/rooms"),
@@ -86,7 +139,49 @@ const ContractsPage: React.FC = () => {
 
   useEffect(() => {
     void load();
-  }, [page, filters.status, filters.room]);
+  }, [page, filters.status, filters.room, filters.area, quick.hasDebt, search, faculty, major]);
+
+  useEffect(() => {
+    if (!openContractId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await contractsApi.getById(openContractId);
+        if (cancelled || !res.data) return;
+        setDetailModal(res.data as Contract);
+      } catch {
+        message.error("Không mở được hợp đồng từ liên kết");
+      } finally {
+        if (!cancelled) {
+          setSearchParams(
+            (prev) => {
+              const next = new URLSearchParams(prev);
+              next.delete("openContract");
+              return next;
+            },
+            { replace: true }
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [openContractId, setSearchParams]);
+
+  useEffect(() => {
+    areasApi
+      .getAll()
+      .then((res) => setAreas((res.data?.areas ?? res.data ?? []) as Array<Pick<Area, "_id" | "name">>))
+      .catch(() => setAreas([]));
+  }, []);
+
+  useEffect(() => {
+    opsContractsApi
+      .dashboard()
+      .then((res) => setOps(res.data?.cards || null))
+      .catch(() => setOps(null));
+  }, []);
 
   const handleTerminate = (c: Contract) => {
     Modal.confirm({
@@ -121,9 +216,14 @@ const ContractsPage: React.FC = () => {
   };
 
   const activeCount = data.filter((c) => c.status === "active").length;
-  const terminatedCount = data.filter((c) => c.status === "terminated").length;
 
   const columns = [
+    {
+      title: "STT",
+      key: "stt",
+      width: 70,
+      render: (_: unknown, __: Contract, idx: number) => (page - 1) * 10 + idx + 1,
+    },
     {
       title: "Số HĐ",
       dataIndex: "contractNumber",
@@ -138,6 +238,20 @@ const ContractsPage: React.FC = () => {
       render: (_: unknown, r: Contract) => (r.user ? (typeof r.user === "object" ? (r.user as { fullName?: string }).fullName : r.user) : "-"),
     },
     {
+      title: "MSSV",
+      key: "studentId",
+      width: 100,
+      render: (_: unknown, r: Contract) =>
+        r.user && typeof r.user === "object" ? String((r.user as User).studentId || "-") : "-",
+    },
+    {
+      title: "Giới tính",
+      key: "gender",
+      width: 90,
+      render: (_: unknown, r: Contract) =>
+        r.user && typeof r.user === "object" ? String((r.user as User).gender || "-") : "-",
+    },
+    {
       title: "Phòng",
       key: "room",
       width: 100,
@@ -146,6 +260,28 @@ const ContractsPage: React.FC = () => {
         const room = typeof r.room === "object" ? r.room : null;
         const area = room?.area && typeof room.area === "object" ? room.area.name : "";
         return room ? `${room.roomNumber}${area ? ` (${area})` : ""}` : "-";
+      },
+    },
+    {
+      title: "Giá phòng (nền)",
+      key: "roomPricing",
+      width: 168,
+      render: (_: unknown, r: Contract) => {
+        const room = typeof r.room === "object" ? (r.room as Room) : null;
+        if (!room || room.price == null) return "—";
+        const slots = roomSlots(room);
+        const full = Math.round(Number(room.price));
+        const per = Math.round(full / slots);
+        return (
+          <div style={{ fontSize: 12, lineHeight: 1.45 }}>
+            <div>
+              Tổng phòng: <strong>{full.toLocaleString("vi-VN")}</strong>đ/th
+            </div>
+            <div>
+              {slots} slot → <strong>{per.toLocaleString("vi-VN")}</strong>đ/slot
+            </div>
+          </div>
+        );
       },
     },
     {
@@ -219,11 +355,27 @@ const ContractsPage: React.FC = () => {
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
-        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Quản lý hợp đồng</h2>
+        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Dorm Operations Center — Hợp đồng lưu trú</h2>
         <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
-          Xem, gia hạn, chấm dứt và xác nhận hợp đồng
+          Trung tâm vận hành lưu trú: hợp đồng, công nợ, vi phạm, gia hạn, chuyển phòng.
         </p>
       </div>
+
+      <Card style={{ borderRadius: 12, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <Input.Search
+            placeholder="Tìm kiếm theo tên hoặc MSSV"
+            allowClear
+            style={{ width: 420, maxWidth: "100%" }}
+            value={search}
+            onChange={(e) => {
+              setPage(1);
+              setSearch(e.target.value);
+            }}
+            onSearch={() => void load()}
+          />
+        </div>
+      </Card>
 
       {extendReqs.length > 0 && (
         <Card title="Yêu cầu gia hạn từ sinh viên (chờ duyệt)" style={{ marginBottom: 24, borderRadius: 12 }} size="small">
@@ -315,31 +467,93 @@ const ContractsPage: React.FC = () => {
       </Modal>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} md={6}>
           <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
-            <Statistic
-              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Hợp đồng đang hiệu lực</span>}
-              value={activeCount}
-              suffix="hợp đồng"
-              valueStyle={{ color: "#fff", fontSize: 20 }}
-            />
+            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}><FileDoneOutlined /> HĐ hiệu lực</span>} value={ops?.activeContracts ?? activeCount} suffix="hđ" valueStyle={{ color: "#fff", fontSize: 20 }} />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} md={6}>
           <Card>
-            <Statistic title="Đã chấm dứt" value={terminatedCount} suffix="hợp đồng" />
+            <Statistic title={<span><ClockCircleOutlined /> Sắp hết hạn (≤30 ngày)</span>} value={ops?.expiringSoonContracts ?? 0} suffix="hđ" />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} md={6}>
+          <Card
+            hoverable
+            onClick={() => {
+              setPage(1);
+              setQuick({ hasDebt: true });
+              void load();
+            }}
+          >
+            <Statistic title={<span><DollarOutlined /> SV còn nợ phí</span>} value={ops?.studentsWithDebt ?? 0} suffix="sv" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={6}>
           <Card>
-            <Statistic title="Tổng hợp đồng" value={total} suffix="hợp đồng" />
+            <Statistic title={<span><WarningOutlined /> Vi phạm chờ xử lý</span>} value={ops?.pendingViolations ?? 0} suffix="vụ" />
           </Card>
         </Col>
+
+        <Col xs={24} sm={12} md={6}>
+          <Card>
+            <Statistic title={<span><CalendarOutlined /> Yêu cầu gia hạn</span>} value={ops?.pendingRenewalRequests ?? extendReqs.length} suffix="y/c" />
+          </Card>
+        </Col>
+        <Col xs={0} md={18} />
       </Row>
+
+      {quick.hasDebt ? (
+        <div style={{ margin: "-8px 0 16px 0" }}>
+          <Tag closable color="red" onClose={() => setQuick({})}>
+            Đang lọc: Sinh viên còn nợ phí
+          </Tag>
+        </div>
+      ) : null}
 
       <Card style={{ borderRadius: 12 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20, alignItems: "center" }}>
           <FilterOutlined style={{ color: "#6b7280" }} />
+          <Input
+            placeholder="Lọc theo khóa"
+            allowClear
+            style={{ width: 160 }}
+            value={faculty}
+            onChange={(e) => {
+              setPage(1);
+              setFaculty(e.target.value);
+            }}
+            onPressEnter={() => void load()}
+          />
+          <Input
+            placeholder="Lọc theo ngành"
+            allowClear
+            style={{ width: 160 }}
+            value={major}
+            onChange={(e) => {
+              setPage(1);
+              setMajor(e.target.value);
+            }}
+            onPressEnter={() => void load()}
+          />
+          <Select
+            placeholder="Lọc theo khu"
+            allowClear
+            style={{ width: 180 }}
+            value={filters.area}
+            onChange={(v) => {
+              setFilters((f) => ({ ...f, area: v }));
+              setPage(1);
+            }}
+            showSearch
+            optionFilterProp="children"
+          >
+            {areas.map((a) => (
+              <Select.Option key={a._id} value={a._id}>
+                {a.name}
+              </Select.Option>
+            ))}
+          </Select>
           <Select
             placeholder="Trạng thái"
             allowClear
@@ -376,6 +590,10 @@ const ContractsPage: React.FC = () => {
           <Button
             onClick={() => {
               setFilters({});
+              setSearch("");
+              setFaculty("");
+              setMajor("");
+              setQuick({});
               setPage(1);
             }}
           >
@@ -386,10 +604,27 @@ const ContractsPage: React.FC = () => {
             icon={<DownloadOutlined />}
             onClick={() =>
               exportToExcel(
-                data.map((c) => ({
+                data.map((c, idx) => ({
+                  STT: (page - 1) * 10 + idx + 1,
                   "Số HĐ": c.contractNumber,
                   "Sinh viên": c.user && typeof c.user === "object" ? (c.user as { fullName?: string }).fullName : "-",
+                  MSSV: c.user && typeof c.user === "object" ? (c.user as User).studentId || "-" : "-",
+                  "Giới tính": c.user && typeof c.user === "object" ? (c.user as User).gender || "-" : "-",
+                  Khóa: c.user && typeof c.user === "object" ? (c.user as User).faculty || "-" : "-",
+                  Ngành: c.user && typeof c.user === "object" ? (c.user as User).major || "-" : "-",
                   "Phòng": c.room && typeof c.room === "object" ? (c.room as { roomNumber?: string }).roomNumber : "-",
+                  "Số slot": c.room && typeof c.room === "object" ? (c.room as Room).capacity ?? "-" : "-",
+                  "Tổng phòng/tháng (đ)":
+                    c.room && typeof c.room === "object" && (c.room as Room).price != null
+                      ? Math.round(Number((c.room as Room).price))
+                      : "-",
+                  "Giá 01 slot/tháng (đ)":
+                    c.room && typeof c.room === "object" && (c.room as Room).price != null
+                      ? Math.round(
+                          Number((c.room as Room).price) /
+                            Math.max(1, Number((c.room as Room).capacity) || 1),
+                        )
+                      : "-",
                   "Từ ngày": c.startDate ? new Date(c.startDate).toLocaleDateString("vi-VN") : "-",
                   "Đến ngày": c.endDate ? new Date(c.endDate).toLocaleDateString("vi-VN") : "-",
                   "Trạng thái": statusMap[c.status]?.text || c.status,
@@ -416,7 +651,7 @@ const ContractsPage: React.FC = () => {
             showSizeChanger: false,
             showTotal: (t) => `Tổng ${t} hợp đồng`,
           }}
-          scroll={{ x: 900 }}
+          scroll={{ x: 1080 }}
           size="middle"
         />
       </Card>
@@ -494,6 +729,42 @@ const ContractsPage: React.FC = () => {
                 <strong>Số hợp đồng:</strong> {detailModal.contractNumber || "-"}
               </p>
 
+              {(() => {
+                const room = typeof detailModal.room === "object" ? (detailModal.room as Room) : null;
+                if (!room) return null;
+                const slots = roomSlots(room);
+                const full = Math.round(Number(room.price || 0));
+                const perSlotTable = Math.round(full / slots);
+                const agreed = detailModal.monthlyRent != null && Number(detailModal.monthlyRent) > 0;
+                return (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 14 }}
+                    message="Thông tin phòng — Bên lập hợp đồng cần nắm để ghi Điều 2"
+                    description={
+                      <div style={{ fontSize: 13, lineHeight: 1.55 }}>
+                        <div>
+                          <strong>Phòng:</strong> {room.roomNumber} — <strong>Số chỗ (slot):</strong> {slots}
+                        </div>
+                        <div>
+                          <strong>Tổng tiền thuê phòng (VNĐ/tháng):</strong> {full.toLocaleString("vi-VN")}đ
+                        </div>
+                        <div>
+                          <strong>Giá 01 slot theo bảng giá phòng:</strong> {perSlotTable.toLocaleString("vi-VN")}đ/tháng (= {full.toLocaleString("vi-VN")} ÷ {slots})
+                        </div>
+                        {agreed ? (
+                          <div>
+                            <strong>Giá thỏa thuận trên hợp đồng (01 chỗ/tháng):</strong>{" "}
+                            {Math.round(Number(detailModal.monthlyRent)).toLocaleString("vi-VN")}đ
+                          </div>
+                        ) : null}
+                      </div>
+                    }
+                  />
+                );
+              })()}
+
               <p><strong>BÊN CHO THUÊ (BÊN A):</strong> KÝ TÚC XÁ TRƯỜNG ĐẠI HỌC (ĐH)</p>
               <p><strong>Địa chỉ:</strong> {lessorAddress}</p>
               <p><strong>Điện thoại:</strong> {lessorPhone}</p>
@@ -520,17 +791,38 @@ const ContractsPage: React.FC = () => {
               <p>Bên B được sử dụng trang thiết bị tại phòng theo nội quy của Trường ĐH.</p>
 
               <p style={{ marginTop: 10 }}><strong>ĐIỀU 2: CHI PHÍ VÀ THANH TOÁN</strong></p>
-              <p>
-                Giá thuê:{" "}
-                <strong>
-                  {typeof detailModal.room === "object" ? `${Number(detailModal.room?.price || 0).toLocaleString("vi-VN")} VNĐ/tháng` : "-"}
-                </strong>
-                . Tổng cộng:{" "}
-                <strong>
-                  {typeof detailModal.room === "object" ? `${(Number(detailModal.room?.price || 0) * 12).toLocaleString("vi-VN")} VNĐ` : "-"}
-                </strong>
-                .
-              </p>
+              {(() => {
+                const room = typeof detailModal.room === "object" ? (detailModal.room as Room) : null;
+                if (!room) {
+                  return (
+                    <p>
+                      Giá thuê: <strong>—</strong>
+                    </p>
+                  );
+                }
+                const slots = roomSlots(room);
+                const fullMonthly = Math.round(Number(room.price || 0));
+                const studentMonthly = studentMonthlyRentVnd(detailModal, room);
+                const months = monthsBetweenStartEnd(detailModal.startDate, detailModal.endDate);
+                const totalStudentPeriod = studentMonthly * months;
+                const agreed = detailModal.monthlyRent != null && Number(detailModal.monthlyRent) > 0;
+                return (
+                  <>
+                    <p>
+                      <strong>Giá thuê:</strong> Phòng có <strong>{slots}</strong> chỗ (slot). Tổng tiền thuê{" "}
+                      <strong>toàn phòng</strong>:{" "}
+                      <strong>{fullMonthly.toLocaleString("vi-VN")} VNĐ/tháng</strong>. Giá thuê{" "}
+                      <strong>01 chỗ (01 sinh viên — Bên B)</strong>:{" "}
+                      <strong>{studentMonthly.toLocaleString("vi-VN")} VNĐ/tháng</strong>
+                      {agreed ? " (ghi theo thỏa thuận trong hợp đồng)" : ` (= ${fullMonthly.toLocaleString("vi-VN")} ÷ ${slots})`}.
+                    </p>
+                    <p>
+                      Tổng tiền Bên B thanh toán tiền thuê cho cả thời hạn hợp đồng (theo 01 chỗ, {months} tháng):{" "}
+                      <strong>{totalStudentPeriod.toLocaleString("vi-VN")} VNĐ</strong>.
+                    </p>
+                  </>
+                );
+              })()}
               <p>Tiền thế chấp tài sản: <strong>100.000 VNĐ/sinh viên</strong>.</p>
               <p>
                 Thời hạn thuê: Từ ngày <strong>{new Date(detailModal.startDate).toLocaleDateString("vi-VN")}</strong> đến ngày{" "}

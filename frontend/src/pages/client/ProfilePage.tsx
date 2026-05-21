@@ -19,10 +19,11 @@ import {
   Grid,
   Divider,
   Flex,
+  Select,
 } from "antd";
 import dayjs from "dayjs";
 import { EditOutlined, HomeOutlined, UserOutlined, IdcardOutlined, BookOutlined, PhoneOutlined } from "@ant-design/icons";
-import { authApi, studentsApi } from "../../api";
+import { authApi, majorsApi, studentsApi } from "../../api";
 import type { StudentProfileResponse } from "../../types";
 import { useAuth } from "../../contexts/AuthContext";
 import { setUserString } from "../../utils/authStorage";
@@ -135,12 +136,14 @@ interface ProfilePayload {
   studentId?: string;
   className?: string;
   major?: string;
+  facultyGroup?: string;
   dateOfBirth?: string | null;
   gender?: string;
   phone?: string;
   address?: string;
   citizenId?: string;
   profileComplete?: boolean;
+  /** Khóa (VD: K26) */
   faculty?: string;
   enrollmentDate?: string | null;
   homeroomTeacher?: string;
@@ -156,6 +159,8 @@ interface ProfilePayload {
   avatar?: string;
 }
 
+type MajorOption = { _id: string; code?: string; name: string; faculty?: string; isActive?: boolean };
+
 const ProfilePage: React.FC = () => {
   const screens = Grid.useBreakpoint();
   const { setUser } = useAuth();
@@ -167,6 +172,7 @@ const ProfilePage: React.FC = () => {
   const [dashMeta, setDashMeta] = useState<{ studentStatus?: string; memberStatusLabel?: string }>({});
   /** Sinh viên đã đủ hồ sơ: bật form khi bấm «Chỉnh sửa hồ sơ» */
   const [editingProfile, setEditingProfile] = useState(false);
+  const [majorOptions, setMajorOptions] = useState<MajorOption[]>([]);
 
   const syncAuthUser = useCallback((p: ProfilePayload) => {
     setUser((prev) => {
@@ -217,6 +223,7 @@ const ProfilePage: React.FC = () => {
         studentId: activeProfile.studentId,
         className: activeProfile.className,
         major: activeProfile.major,
+        facultyGroup: activeProfile.facultyGroup,
         gender: activeProfile.gender,
         citizenId: activeProfile.citizenId,
         dateOfBirth: activeProfile.dateOfBirth ? dayjs(activeProfile.dateOfBirth) : null,
@@ -246,6 +253,17 @@ const ProfilePage: React.FC = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await majorsApi.getAll({ active: true });
+        setMajorOptions(((res.data?.items || []) as MajorOption[]).filter((m) => m && m.isActive !== false));
+      } catch {
+        setMajorOptions([]);
+      }
+    })();
+  }, []);
 
   const onFinishStudent = async (v: Record<string, unknown>) => {
     setSaving(true);
@@ -330,6 +348,7 @@ const ProfilePage: React.FC = () => {
       studentId: profile.studentId,
       className: profile.className,
       major: profile.major,
+      facultyGroup: profile.facultyGroup,
       gender: profile.gender,
       citizenId: profile.citizenId,
       dateOfBirth: profile.dateOfBirth ? dayjs(profile.dateOfBirth) : null,
@@ -460,117 +479,86 @@ const ProfilePage: React.FC = () => {
           message="Cập nhật hồ sơ sinh viên đầy đủ"
           description="Bạn có thể tự cập nhật đầy đủ thông tin cá nhân, học tập, gia đình và địa chỉ trên biểu mẫu này."
         />
-        <Space direction="vertical" size={14} style={{ width: "100%" }}>
-          <StudentFormBlock
-            title="Khối 1 — Thông tin cá nhân"
-            hint="Thông tin định danh cơ bản của sinh viên."
-          >
-            <Row gutter={[20, 0]}>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Họ tên" name="fullName" rules={[{ required: true, message: "Nhập họ tên" }]}>
-                  <Input size="large" allowClear />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Email đăng nhập">
-                  <Input size="large" value={profile.email} disabled />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Mã sinh viên" name="studentId" rules={[{ required: true, message: "Nhập mã sinh viên" }]}>
-                  <Input size="large" allowClear />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Số điện thoại" name="phone" rules={[{ required: true, message: "Nhập SĐT" }, { pattern: /^(0|\+84)\d{9,10}$/, message: "SĐT không hợp lệ" }]}>
-                  <Input size="large" placeholder="0387079343" allowClear />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Giới tính" name="gender">
-                  <Input size="large" allowClear />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item name="dateOfBirth" label="Ngày sinh">
-                  <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item name="citizenId" label="CCCD/CMND" rules={[{ pattern: /^\d{9,12}$/, message: "CCCD phải gồm 9-12 chữ số" }]}>
-                  <Input size="large" allowClear />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item
-                  name="avatar"
-                  label="Ảnh đại diện (URL)"
-                  rules={[
-                    {
-                      validator: (_, value) => {
-                        const s = value != null ? String(value).trim() : "";
-                        if (!s) return Promise.resolve();
-                        try {
-                          const u = new URL(s);
-                          if (u.protocol !== "http:" && u.protocol !== "https:") {
-                            return Promise.reject(new Error("Avatar phải là URL http(s) hợp lệ"));
-                          }
-                          return Promise.resolve();
-                        } catch {
-                          return Promise.reject(new Error("Avatar phải là URL hợp lệ"));
-                        }
-                      },
-                    },
-                  ]}
-                >
-                  <Input size="large" placeholder="https://..." allowClear />
-                </Form.Item>
-              </Col>
-            </Row>
-          </StudentFormBlock>
-
-          <StudentFormBlock
-            title="Khối 2 — Thông tin học tập"
-            hint="Dữ liệu học tập phục vụ xét duyệt và quản lý lưu trú."
-          >
-            <Row gutter={[20, 0]}>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Khoa" name="faculty">
-                  <Input size="large" allowClear />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Lớp" name="className">
-                  <Input size="large" allowClear />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Chuyên ngành" name="major">
-                  <Input size="large" allowClear />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item name="enrollmentDate" label="Ngày nhập học">
-                  <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày nhập học" />
-                </Form.Item>
-              </Col>
-              <Col xs={24} lg={12}>
-                <Form.Item label="Giáo viên chủ nhiệm" name="homeroomTeacher">
-                  <Input size="large" allowClear />
-                </Form.Item>
-              </Col>
-            </Row>
-          </StudentFormBlock>
-
-          <StudentFormBlock
-            title="Khối 3 — Thông tin cư trú"
-            hint="Địa chỉ hiện tại, quê quán và thông tin tạm trú/tạm vắng."
-          >
-            <Form.Item name="address" label="Địa chỉ liên hệ">
-              <Input.TextArea rows={2} showCount maxLength={500} />
+        <FormSectionTitle>Thông tin cơ bản</FormSectionTitle>
+        <Row gutter={[20, 0]}>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Họ tên" name="fullName" rules={[{ required: true, message: "Nhập họ tên" }]}>
+              <Input size="large" allowClear />
             </Form.Item>
-            <Form.Item name="addressNative" label="Quê quán">
-              <Input.TextArea rows={2} showCount maxLength={500} />
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Email đăng nhập">
+              <Input size="large" value={profile.email} disabled />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Mã sinh viên" name="studentId" rules={[{ required: true, message: "Nhập mã sinh viên" }]}>
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Lớp" name="className">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Ngành" name="major">
+              {majorOptions.length ? (
+                <Select
+                  size="large"
+                  allowClear
+                  showSearch
+                  placeholder="Chọn ngành (từ danh mục)"
+                  optionFilterProp="label"
+                  onChange={(v) => {
+                    const vv = String(v || "").trim();
+                    const picked = majorOptions.find((m) => String(m.faculty || "").trim() === vv);
+                    if (picked) {
+                      form.setFieldsValue({
+                        // Major.name = Khoa/nhóm ngành, Major.faculty = Ngành
+                        major: String(picked.faculty || "").trim(),
+                        facultyGroup: String(picked.name || "").trim(),
+                      });
+                    }
+                  }}
+                  options={majorOptions.map((m) => ({
+                    value: String(m.faculty || "").trim(),
+                    label: m.code
+                      ? `${m.code} — ${String(m.faculty || "").trim()}`
+                      : String(m.faculty || "").trim(),
+                  }))}
+                />
+              ) : (
+                <Input size="large" allowClear placeholder="Nhập ngành" />
+              )}
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Giới tính" name="gender">
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="citizenId" label="CCCD/CMND" rules={[{ pattern: /^\d{9,12}$/, message: "CCCD phải gồm 9-12 chữ số" }]}>
+              <Input size="large" allowClear />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item name="dateOfBirth" label="Ngày sinh">
+              <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
+            </Form.Item>
+          </Col>
+        </Row>
+        <FormSectionTitle>Thông tin học tập</FormSectionTitle>
+        <Row gutter={[20, 0]}>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Khoa/nhóm ngành" name="facultyGroup">
+              <Input size="large" allowClear disabled={majorOptions.length > 0} placeholder={majorOptions.length ? "Tự điền theo ngành" : ""} />
+            </Form.Item>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Form.Item label="Khóa" name="faculty">
+              <Input size="large" allowClear placeholder="VD: K26" />
             </Form.Item>
             <Form.Item name="addressPermanent" label="Thường trú">
               <Input.TextArea rows={2} showCount maxLength={500} />
@@ -730,8 +718,9 @@ const ProfilePage: React.FC = () => {
               <ProfileTabPanel>
                 <Descriptions {...tabDescProps}>
                   <Descriptions.Item label="Lớp">{profile.className || "—"}</Descriptions.Item>
-                  <Descriptions.Item label="Chuyên ngành">{profile.major || "—"}</Descriptions.Item>
-                  <Descriptions.Item label="Khoa">{profile.faculty || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khoa/nhóm ngành">{profile.facultyGroup || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Ngành">{profile.major || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khóa">{profile.faculty || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Ngày nhập học">{formatDateVi(profile.enrollmentDate)}</Descriptions.Item>
                   <Descriptions.Item label="GVCN">{profile.homeroomTeacher || "—"}</Descriptions.Item>
                 </Descriptions>
@@ -756,7 +745,8 @@ const ProfilePage: React.FC = () => {
             children: (
               <ProfileTabPanel>
                 <Descriptions {...tabDescProps}>
-                  <Descriptions.Item label="Khoa">{profile.faculty || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khoa/nhóm ngành">{profile.facultyGroup || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Khóa">{profile.faculty || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Ngày nhập học">{formatDateVi(profile.enrollmentDate)}</Descriptions.Item>
                   <Descriptions.Item label="GVCN">{profile.homeroomTeacher || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Quê quán">{profile.addressNative || "—"}</Descriptions.Item>

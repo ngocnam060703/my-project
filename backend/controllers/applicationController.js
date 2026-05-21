@@ -13,6 +13,8 @@ const {
   pickBestRoomForApplication,
   assignRoomWithRetry,
   areaAllowsGender,
+  findCandidateRooms,
+  tryIncrementRoomOccupancy,
 } = require("../services/applicationRoomAssignment");
 
 function inferSemesterSchoolYearFromDate(date = new Date()) {
@@ -60,6 +62,11 @@ exports.list = async (req, res) => {
     const {
       status,
       search,
+      faculty,
+      enrollmentYear,
+      area,
+      priorityCategory,
+      days,
       sortOrder = "desc",
       page = 1,
       limit = 10,
@@ -69,10 +76,68 @@ exports.list = async (req, res) => {
       filter.status = status;
     }
     if (search && String(search).trim()) {
+      // handled in unified user filter below
+    }
+
+    if (priorityCategory && ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"].includes(String(priorityCategory))) {
+      filter.priorityCategory = String(priorityCategory);
+    }
+
+    if (days) {
+      const d = parseInt(String(days), 10);
+      if (!Number.isNaN(d) && d > 0) {
+        const now = new Date();
+        const from = new Date(now.getTime() - (d - 1) * 86400000);
+        filter.createdAt = { $gte: from };
+      }
+    }
+
+    // Unified user filter for search + faculty + enrollmentYear
+    const userFilter = { role: "user", isDeleted: { $ne: true } };
+    const and = [];
+    if (search && String(search).trim()) {
       const rx = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      const users = await User.find({ fullName: rx, role: "user", isDeleted: { $ne: true } }).select("_id");
+      and.push({ fullName: rx });
+    }
+    if (faculty && String(faculty).trim()) {
+      and.push({ faculty: String(faculty).trim() });
+    }
+    if (enrollmentYear) {
+      const y = parseInt(String(enrollmentYear), 10);
+      if (!Number.isNaN(y)) {
+        const from = new Date(Date.UTC(y, 0, 1));
+        const to = new Date(Date.UTC(y + 1, 0, 1));
+        and.push({ enrollmentDate: { $gte: from, $lt: to } });
+      }
+    }
+    if (and.length > 0) {
+      const users = await User.find({ ...userFilter, $and: and }).select("_id").lean();
       filter.user = { $in: users.map((u) => u._id) };
     }
+
+    /** Lọc khu — cho danh sách theo trạng thái; cho thống kê luôn dùng $or */
+    let areaOrFilter = null;
+    let areaIdTrimmed = null;
+    let roomIdsInArea = null;
+    if (area && String(area).trim()) {
+      areaIdTrimmed = String(area).trim();
+      const roomInArea = await Room.find({ area: areaIdTrimmed }).select("_id").lean();
+      roomIdsInArea = roomInArea.map((r) => r._id);
+      areaOrFilter = { $or: [{ preferenceArea: areaIdTrimmed }, { assignedRoom: { $in: roomIdsInArea } }] };
+      if (filter.status === "pending") {
+        filter.preferenceArea = areaIdTrimmed;
+      } else if (filter.status === "approved" || filter.status === "rejected") {
+        filter.assignedRoom = { $in: roomIdsInArea };
+      } else {
+        Object.assign(filter, areaOrFilter);
+      }
+    }
+
+    const statsFilter = {};
+    if (filter.priorityCategory) statsFilter.priorityCategory = filter.priorityCategory;
+    if (filter.createdAt) statsFilter.createdAt = filter.createdAt;
+    if (filter.user) statsFilter.user = filter.user;
+    if (areaOrFilter) Object.assign(statsFilter, areaOrFilter);
 
     const order = String(sortOrder).toLowerCase() === "asc" ? 1 : -1;
     const pageNum = Math.max(1, parseInt(page, 10));
@@ -92,7 +157,18 @@ exports.list = async (req, res) => {
         .limit(lim)
         .lean();
       const total = await Application.countDocuments(filter);
-      return res.json({ applications: rows, total, page: pageNum, limit: lim });
+      const [pendingCount, approvedCount, totalAll] = await Promise.all([
+        Application.countDocuments({ ...statsFilter, status: "pending" }),
+        Application.countDocuments({ ...statsFilter, status: "approved" }),
+        Application.countDocuments(statsFilter),
+      ]);
+      return res.json({
+        applications: rows,
+        total,
+        page: pageNum,
+        limit: lim,
+        stats: { pending: pendingCount, approved: approvedCount, total: totalAll },
+      });
     }
 
     const managed = req.user.managedArea;
@@ -121,7 +197,30 @@ exports.list = async (req, res) => {
 
     const total = filtered.length;
     const slice = filtered.slice((pageNum - 1) * lim, (pageNum - 1) * lim + lim);
-    return res.json({ applications: slice, total, page: pageNum, limit: lim });
+
+    const allStats = await Application.find(statsFilter)
+      .populate("preferenceArea", "name genderPolicy")
+      .populate({ path: "assignedRoom", select: "roomNumber area capacity currentOccupancy status", populate: { path: "area", select: "name" } })
+      .sort({ createdAt: order })
+      .lean();
+    const statsFiltered = allStats.filter((app) => {
+      if (app.status === "pending") {
+        const pref = app.preferenceArea ? String(app.preferenceArea._id || app.preferenceArea) : "";
+        return pref === String(managed);
+      }
+      const ar = app.assignedRoom;
+      const rid = ar ? String(ar._id || ar) : "";
+      const aid = ar && ar.area ? String(ar.area._id || ar.area) : "";
+      if (rid && roomIdSet.has(rid)) return true;
+      return aid === String(managed);
+    });
+    const stats = {
+      pending: statsFiltered.filter((a) => a.status === "pending").length,
+      approved: statsFiltered.filter((a) => a.status === "approved").length,
+      total: statsFiltered.length,
+    };
+
+    return res.json({ applications: slice, total, page: pageNum, limit: lim, stats });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -227,6 +326,9 @@ exports.create = async (req, res) => {
       semester: sem,
       schoolYear: sy,
       startDate: startN,
+      priorityCategory: ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"].includes(String(req.body?.priorityCategory || ""))
+        ? String(req.body.priorityCategory)
+        : "none",
       status: "pending",
     });
     const populated = await Application.findById(doc._id).populate("preferenceArea", "name").populate("user", "fullName");
@@ -262,6 +364,43 @@ exports.getSuggestedRoom = async (req, res) => {
   }
 };
 
+exports.getCandidateRooms = async (req, res) => {
+  try {
+    const app = await Application.findById(req.params.id).lean();
+    if (!app) return res.status(404).json({ message: "Không tìm thấy đơn" });
+    if (app.status !== "pending") {
+      return res.status(400).json({ message: "Chỉ chọn phòng cho đơn đang chờ duyệt" });
+    }
+
+    if (req.user.role === "manager" && req.user.managedArea) {
+      if (!app.preferenceArea || String(app.preferenceArea) !== String(req.user.managedArea)) {
+        return res.status(403).json({ message: "Chỉ xem danh sách phòng cho đơn thuộc khu bạn phụ trách." });
+      }
+    }
+
+    const rooms = await findCandidateRooms(
+      { genderNorm: normalizeGender(app.genderSnapshot) || app.genderSnapshot, preferenceAreaId: app.preferenceArea || null },
+      null
+    );
+
+    const managed = req.user.role === "manager" ? req.user.managedArea : null;
+    const filtered = managed ? rooms.filter((r) => String(r.area?._id || r.area) === String(managed)) : rooms;
+
+    res.json({
+      rooms: filtered.map((r) => ({
+        _id: r._id,
+        roomNumber: r.roomNumber,
+        capacity: r.capacity,
+        currentOccupancy: r.currentOccupancy,
+        status: r.status,
+        area: r.area,
+      })),
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
 exports.statsByDay = async (req, res) => {
   try {
     const days = Math.min(90, Math.max(1, parseInt(req.query.days || "14", 10)));
@@ -284,37 +423,50 @@ exports.statsByDay = async (req, res) => {
 };
 
 exports.approve = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
   try {
-    const app = await Application.findById(req.params.id).session(session);
-    if (!app) {
-      await session.abortTransaction();
-      return res.status(404).json({ message: "Không tìm thấy đơn" });
-    }
-    if (app.status !== "pending") {
-      await session.abortTransaction();
-      return res.status(400).json({ message: "Đơn đã được xử lý, không thể duyệt lại" });
-    }
+    const app = await Application.findById(req.params.id);
+    if (!app) return res.status(404).json({ message: "Không tìm thấy đơn" });
+    if (app.status !== "pending") return res.status(400).json({ message: "Đơn đã được xử lý, không thể duyệt lại" });
     if (req.user.role === "manager" && req.user.managedArea) {
       if (!app.preferenceArea || String(app.preferenceArea) !== String(req.user.managedArea)) {
-        await session.abortTransaction();
-        return res.status(403).json({
-          message: "Ban quản lý khu chỉ duyệt đơn có nguyện vọng đúng khu mình phụ trách.",
-        });
+        return res.status(403).json({ message: "Ban quản lý khu chỉ duyệt đơn có nguyện vọng đúng khu mình phụ trách." });
       }
     }
     if (await userHasActiveResidence(app.user)) {
-      await session.abortTransaction();
       return res.status(400).json({ message: "Sinh viên đã có hợp đồng KTX hiệu lực — không thể duyệt đơn mới" });
     }
 
-    const { error, room } = await assignRoomWithRetry(app, session);
-    if (error === "NO_ROOM" || !room) {
-      await session.abortTransaction();
-      return res.status(400).json({
-        message: "Không còn phòng phù hợp (giới tính / khu / chỗ trống). Vui lòng điều chỉnh khu hoặc sức chứa.",
-      });
+    const requestedRoomId = req.body?.roomId ? String(req.body.roomId) : "";
+    let room = null;
+    if (requestedRoomId) {
+      if (!mongoose.isValidObjectId(requestedRoomId)) return res.status(400).json({ message: "roomId không hợp lệ" });
+      const roomDoc = await Room.findById(requestedRoomId).populate("area", "name genderPolicy isActive isDeleted");
+      if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng đã chọn" });
+      if (roomDoc.status === "maintenance") return res.status(400).json({ message: "Phòng đang bảo trì, không thể xếp" });
+      if (req.user.role === "manager" && req.user.managedArea) {
+        if (String(roomDoc.area?._id || roomDoc.area) !== String(req.user.managedArea)) {
+          return res.status(403).json({ message: "Bạn chỉ được xếp phòng trong khu bạn phụ trách" });
+        }
+      }
+      const genderNorm = normalizeGender(app.genderSnapshot) || app.genderSnapshot;
+      const areaDoc = roomDoc.area && typeof roomDoc.area === "object" ? roomDoc.area : null;
+      if (!areaDoc || areaDoc.isDeleted || areaDoc.isActive === false) {
+        return res.status(400).json({ message: "Khu của phòng không hợp lệ hoặc đã bị khóa" });
+      }
+      if (!areaAllowsGender(areaDoc, genderNorm)) {
+        return res.status(400).json({ message: "Phòng không phù hợp theo giới tính / quy định khu" });
+      }
+      const updated = await tryIncrementRoomOccupancy(roomDoc._id, null);
+      if (!updated) return res.status(400).json({ message: "Phòng đã đầy hoặc không còn trống" });
+      room = updated;
+    } else {
+      const { error, room: autoRoom } = await assignRoomWithRetry(app, null);
+      if (error === "NO_ROOM" || !autoRoom) {
+        return res.status(400).json({
+          message: "Không còn phòng phù hợp (giới tính / khu / chỗ trống). Vui lòng điều chỉnh khu hoặc sức chứa.",
+        });
+      }
+      room = autoRoom;
     }
 
     app.status = "approved";
@@ -322,11 +474,11 @@ exports.approve = async (req, res) => {
     app.reviewedBy = req.user._id;
     app.reviewedAt = new Date();
     app.note = "";
-    await app.save({ session });
+    await app.save();
 
     const startDate = app.startDate ? new Date(app.startDate) : new Date();
-    const contract = await Contract.create(
-      [
+    const c0 = (
+      await Contract.create([
         {
           application: app._id,
           registration: null,
@@ -339,18 +491,15 @@ exports.approve = async (req, res) => {
           signedAt: null,
           createdBy: req.user._id,
         },
-      ],
-      { session }
-    );
-    const c0 = contract[0];
+      ])
+    )[0];
+
     app.linkedContract = c0._id;
     if (!room.roomLeader) {
       room.roomLeader = app.user;
-      await room.save({ session });
+      await room.save();
     }
-    await app.save({ session });
-
-    await session.commitTransaction();
+    await app.save();
 
     const io = getIO();
     io.emit("application:approved", { userId: String(app.user), message: "Đơn đăng ký KTX của bạn đã được duyệt" });
@@ -368,10 +517,7 @@ exports.approve = async (req, res) => {
       .populate("linkedContract");
     res.json({ application: out, contract: c0 });
   } catch (e) {
-    await session.abortTransaction();
     res.status(500).json({ message: e.message });
-  } finally {
-    session.endSession();
   }
 };
 

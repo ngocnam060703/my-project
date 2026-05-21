@@ -33,12 +33,142 @@ import {
   LockOutlined,
   UnlockOutlined,
   KeyOutlined,
+  WarningOutlined,
+  HomeOutlined,
+  FileTextOutlined,
+  LoginOutlined,
+  LogoutOutlined,
+  SwapOutlined,
 } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { usersApi } from "../../api";
-import type { User, AdminUserDetailResponse, Contract } from "../../types";
+import { majorsApi, usersApi, contractsApi, roomsApi, bedsApi } from "../../api";
+import type {
+  User,
+  AdminUserDetailResponse,
+  Contract,
+  Area,
+  Bed,
+  Bill,
+  Violation,
+  Room,
+  StayHistoryRow,
+} from "../../types";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import dayjs from "dayjs";
+
+/** Ưu tiên pricePerPerson; không có thì chia đều phòng/capacity */
+function slotPriceVnd(room: Room | null | undefined): number {
+  if (!room) return 0;
+  if (typeof room.pricePerPerson === "number" && room.pricePerPerson > 0) return Math.round(room.pricePerPerson);
+  const cap = Number(room.capacity || 0);
+  const price = Number(room.price || 0);
+  return cap > 0 ? Math.round(price / cap) : 0;
+}
+
+/** Chuẩn hoá equipmentStatus → nhãn tiếng Việt (tình trạng giường / slot) */
+function formatBedEquipmentVi(raw: string | undefined | null): string {
+  const k = String(raw || "").trim().toLowerCase();
+  if (!k) return "—";
+  const map: Record<string, string> = {
+    good: "Hoạt động tốt",
+    ok: "Hoạt động tốt",
+    excellent: "Hoạt động tốt",
+    maintenance: "Đang bảo trì",
+    maintaining: "Đang bảo trì",
+    repair: "Đang bảo trì",
+    broken: "Hỏng",
+    damaged: "Hỏng",
+    bad: "Hỏng",
+    poor: "Hỏng",
+  };
+  return map[k] || String(raw ?? "").trim();
+}
+
+function contractIdsWithOverdueBills(bills: Bill[] | undefined): Set<string> {
+  const s = new Set<string>();
+  for (const b of bills || []) {
+    if (String(b.status) !== "overdue") continue;
+    const c = b.contract;
+    const id =
+      c && typeof c === "object" && "_id" in c ? String((c as Contract)._id) : c ? String(c) : "";
+    if (id) s.add(id);
+  }
+  return s;
+}
+
+/** Trạng thái HĐ tổng quát: đang hiệu lực / hết hạn / quá hạn thanh toán */
+function contractEnterpriseBadge(
+  c: Pick<Contract, "status" | "endDate" | "_id">,
+  overdueContractIds: Set<string>
+): { color: string; text: string } {
+  const now = dayjs();
+  const end = c.endDate ? dayjs(c.endDate) : null;
+  const st = String(c.status || "");
+  const cid = c._id ? String(c._id) : "";
+  const expiredByDate = !!(end && end.isBefore(now, "day"));
+  const expiredLike = st === "expired" || st === "terminated" || expiredByDate;
+
+  if (
+    cid &&
+    overdueContractIds.has(cid) &&
+    !expiredLike &&
+    (st === "active" || st === "pending_payment")
+  ) {
+    return { color: "red", text: "Quá hạn thanh toán" };
+  }
+  if (st === "terminated") return { color: "default", text: "Đã chấm dứt" };
+  if (st === "expired" || expiredLike) return { color: "default", text: "Hết hạn" };
+  if (st === "pending_payment") return { color: "green", text: "Đang hiệu lực (chờ TT)" };
+  if (st === "active") return { color: "green", text: "Đang hiệu lực" };
+  return { color: "blue", text: st || "—" };
+}
+
+type OccupancyBadgeUi = { bg: string; border: string; text: string };
+
+/** Hiển thị trạng thái cư trú theo dòng lịch sử (đồng bộ BA: chờ check-in / đang ở / đã check-out) */
+function residencyStayStatusDisplay(status?: string | null): { color: string; text: string; emoji?: string } {
+  switch (String(status || "")) {
+    case "pending_checkin":
+      return { color: "gold", text: "Chờ check-in", emoji: "🟡" };
+    case "staying":
+      return { color: "success", text: "Đang ở", emoji: "🟢" };
+    case "checked_out":
+      return { color: "default", text: "Đã check-out", emoji: "⚪" };
+    case "pending_bed":
+      return { color: "processing", text: "Chờ phân giường" };
+    case "not_started":
+      return { color: "blue", text: "Chưa bắt đầu kỳ" };
+    default:
+      return { color: "default", text: status || "—" };
+  }
+}
+
+function occupancyOperationalBadgeLarge(
+  status: string | null | undefined,
+  stayHistoryLen: number
+): OccupancyBadgeUi | null {
+  if (!status) return null;
+  if (status === "checked_in_staying") {
+    return { bg: "#ecfdf5", border: "#10b981", text: "Đang ở" };
+  }
+  if (status === "assigned_pending_checkin") {
+    return { bg: "#fffbeb", border: "#f59e0b", text: "Chờ check-in" };
+  }
+  if (status === "no_active_contract" && stayHistoryLen > 0) {
+    return { bg: "#f3f4f6", border: "#9ca3af", text: "Đã check-out / không HĐ hiện hành" };
+  }
+  if (status === "no_active_contract") {
+    return { bg: "#f9fafb", border: "#d1d5db", text: "Không có HĐ hiện hành" };
+  }
+  if (status === "contract_no_bed") {
+    return { bg: "#eff6ff", border: "#3b82f6", text: "Đã phân phòng — chờ giường" };
+  }
+  if (status === "no_bed_assigned") {
+    return { bg: "#fffbeb", border: "#f59e0b", text: "Chưa phân giường" };
+  }
+  return { bg: "#f0f9ff", border: "#0ea5e9", text: status };
+}
 
 const roleDisplay: Record<string, { color: string; text: string }> = {
   user: { color: "success", text: "Sinh viên" },
@@ -46,7 +176,41 @@ const roleDisplay: Record<string, { color: string; text: string }> = {
   admin: { color: "error", text: "Admin" },
 };
 
+const genderPolicyLabels: Record<string, string> = {
+  male: "Khu nam",
+  female: "Khu nữ",
+  mixed: "Hỗn hợp",
+};
+
+function formatParentLine(name?: string, phone?: string) {
+  const n = String(name || "").trim();
+  const p = String(phone || "").trim();
+  if (!n && !p) return "—";
+  if (!n) return `SĐT: ${p}`;
+  if (!p) return n;
+  return `${n} — SĐT: ${p}`;
+}
+
+function formatStayHistoryDateVi(v?: string | Date | null): string {
+  if (!v) return "—";
+  const d = dayjs(v);
+  return d.isValid() ? d.format("DD/MM/YYYY") : "—";
+}
+
+function inferFacultyGroupFromMajor(
+  major: string | undefined,
+  majorOptions: Array<{ name: string; faculty?: string }>
+): string {
+  const m = String(major || "").trim();
+  if (!m) return "";
+  // Quy ước danh mục: Major.name = Khoa/nhóm ngành, Major.faculty = Ngành
+  const hit = majorOptions.find((x) => String(x.faculty || "").trim() === m);
+  return hit ? String(hit.name || "").trim() : "";
+}
+
 const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { user: authUser } = useAuth();
   const authId = authUser?._id || authUser?.id;
   const isAdmin = authUser?.role === "admin";
@@ -58,8 +222,12 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [detailPayload, setDetailPayload] = useState<AdminUserDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [ensureBedLoading, setEnsureBedLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
+  const [majorOptions, setMajorOptions] = useState<
+    Array<{ _id: string; code?: string; name: string; faculty?: string; isActive?: boolean }>
+  >([]);
   const [resetPwdOpen, setResetPwdOpen] = useState(false);
   const [resetPwdUserId, setResetPwdUserId] = useState<string | null>(null);
   const [resetForm] = Form.useForm();
@@ -87,6 +255,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
         status: statusFilter || undefined,
         sortBy,
         sortOrder,
+        includeDorm: studentOnly ? 1 : undefined,
       });
       setData(res.data.users || []);
       setTotal(res.data.total || 0);
@@ -109,6 +278,21 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   useEffect(() => {
     void load();
   }, [load, studentOnly]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await majorsApi.getAll({ active: true });
+        setMajorOptions(
+          ((res.data?.items || []) as Array<{ _id: string; code?: string; name: string; faculty?: string; isActive?: boolean }>).filter(
+            (m) => m && m.isActive !== false
+          )
+        );
+      } catch {
+        setMajorOptions([]);
+      }
+    })();
+  }, []);
 
   const avatarRules = [
     {
@@ -176,8 +360,48 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
     }
   };
 
+  const openUserFromQuery = searchParams.get("openUser");
+
+  useEffect(() => {
+    if (!openUserFromQuery?.trim()) return;
+    const uid = openUserFromQuery.trim();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await usersApi.getById(uid);
+        if (cancelled || !res.data?.user) return;
+        setDetailPayload(res.data as AdminUserDetailResponse);
+      } catch {
+        message.error("Không mở được hồ sơ từ liên kết phòng");
+      } finally {
+        if (!cancelled) {
+          setSearchParams(
+            (prev) => {
+              const next = new URLSearchParams(prev);
+              next.delete("openUser");
+              return next;
+            },
+            { replace: true }
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [openUserFromQuery, setSearchParams]);
+
   const openDetail = async (u: User) => {
-    setDetailPayload({ user: u, currentRoom: null, currentContract: null, contracts: [] });
+    setDetailPayload({
+      user: u,
+      currentRoom: null,
+      currentContract: null,
+      contracts: [],
+      managedAreas: [],
+      stayHistory: [],
+      financialSummary: null,
+      violationsRecent: [],
+    });
     setDetailLoading(true);
     try {
       const res = await usersApi.getById(u._id);
@@ -187,6 +411,72 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
     } finally {
       setDetailLoading(false);
     }
+  };
+
+  const handleEnsureBed = async () => {
+    const u = detailPayload?.user;
+    const cc = detailPayload?.currentContract as Contract | undefined;
+    const cid = cc?._id ? String(cc._id) : "";
+    if (!u || !cid) return;
+    setEnsureBedLoading(true);
+    try {
+      await contractsApi.ensureBed(cid);
+      message.success("Đã đồng bộ giường");
+      await openDetail(u);
+    } catch (err: unknown) {
+      message.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+          "Không gán được giường (kiểm tra sức chứa phòng hoặc quyền)"
+      );
+    } finally {
+      setEnsureBedLoading(false);
+    }
+  };
+
+  const handleQuickCheckIn = async () => {
+    const u = detailPayload?.user;
+    const room = detailPayload?.currentRoom;
+    const cc = detailPayload?.currentContract as Contract | undefined;
+    const bed = cc?.bed && typeof cc.bed === "object" ? cc.bed : null;
+    const roomId = room && typeof room === "object" ? room._id : "";
+    const bedId = bed && "_id" in bed && bed._id ? String(bed._id) : "";
+    if (!u || !roomId || !bedId) return;
+    try {
+      await roomsApi.checkInBed(roomId, bedId);
+      message.success("Đã check-in");
+      await openDetail(u);
+    } catch (err: unknown) {
+      message.error(
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+          "Không check-in được"
+      );
+    }
+  };
+
+  const handleQuickCheckout = () => {
+    const u = detailPayload?.user;
+    const cc = detailPayload?.currentContract as Contract | undefined;
+    const bed = cc?.bed && typeof cc.bed === "object" ? cc.bed : null;
+    const bedId = bed && "_id" in bed && bed._id ? String(bed._id) : "";
+    if (!u || !bedId) return;
+    Modal.confirm({
+      title: "Check-out & giải phóng giường?",
+      content: "Giường trở về trống; liên kết giường trên HĐ được gỡ.",
+      okText: "Check-out",
+      cancelText: "Hủy",
+      onOk: async () => {
+        try {
+          await bedsApi.checkout(bedId);
+          message.success("Đã check-out");
+          await openDetail(u);
+        } catch (err: unknown) {
+          message.error(
+            (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+              "Không check-out được"
+          );
+        }
+      },
+    });
   };
 
   const handleEdit = (u: User) => {
@@ -200,6 +490,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
       gender: u.gender,
       citizenId: u.citizenId,
       dateOfBirth: u.dateOfBirth ? dayjs(u.dateOfBirth) : undefined,
+      facultyGroup: (u as unknown as { facultyGroup?: string })?.facultyGroup,
       faculty: u.faculty,
       homeroomTeacher: u.homeroomTeacher,
       enrollmentDate: u.enrollmentDate ? dayjs(u.enrollmentDate) : undefined,
@@ -295,11 +586,22 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   };
 
   const columns = [
+    ...(studentOnly
+      ? ([
+          {
+            title: "STT",
+            key: "stt",
+            width: 70,
+            fixed: "left" as const,
+            render: (_: unknown, __: User, idx: number) => (page - 1) * 10 + idx + 1,
+          },
+        ] as const)
+      : []),
     {
       title: "ID",
       dataIndex: "_id",
       key: "_id",
-      width: 100,
+      width: 96,
       sorter: true,
       sortOrder:
         sortBy === "id" ? (sortOrder === "asc" ? ("ascend" as const) : ("descend" as const)) : undefined,
@@ -321,16 +623,47 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
       title: "Họ tên",
       dataIndex: "fullName",
       key: "fullName",
+      width: studentOnly ? 180 : undefined,
+      ellipsis: true,
       sorter: true,
       sortOrder:
         sortBy === "fullName" ? (sortOrder === "asc" ? ("ascend" as const) : ("descend" as const)) : undefined,
       render: (v: string) => <strong>{v || "—"}</strong>,
     },
-    { title: "Email", dataIndex: "email", key: "email", ellipsis: true },
+    { title: "Email", dataIndex: "email", key: "email", width: studentOnly ? 200 : undefined, ellipsis: true },
     ...(studentOnly
       ? ([
           { title: "MSSV", dataIndex: "studentId", key: "studentId", width: 110 },
-          { title: "Khoa", dataIndex: "faculty", key: "faculty", width: 140, ellipsis: true, render: (v: string) => v || "—" },
+          { title: "SĐT", dataIndex: "phone", key: "phone", width: 120, ellipsis: true, render: (v: string) => v || "—" },
+          { title: "Giới tính", dataIndex: "gender", key: "gender", width: 90, render: (v: string) => v || "—" },
+          {
+            title: "Khoa/nhóm ngành",
+            dataIndex: "facultyGroup",
+            key: "facultyGroup",
+            width: 180,
+            ellipsis: true,
+            render: (_: unknown, r: User) => {
+              const direct = String((r as unknown as { facultyGroup?: string })?.facultyGroup || "").trim();
+              if (direct) return direct;
+              const inferred = inferFacultyGroupFromMajor(r.major, majorOptions);
+              return inferred || "—";
+            },
+          },
+          { title: "Ngành", dataIndex: "major", key: "major", width: 220, ellipsis: true, render: (v: string) => v || "—" },
+          { title: "Khóa", dataIndex: "faculty", key: "faculty", width: 110, ellipsis: true, render: (v: string) => v || "—" },
+          {
+            title: "Khu",
+            key: "area",
+            width: 140,
+            ellipsis: true,
+            render: (_: unknown, r: User) => (r as unknown as { currentAreaName?: string })?.currentAreaName || "—",
+          },
+          {
+            title: "Phòng",
+            key: "room",
+            width: 90,
+            render: (_: unknown, r: User) => (r as unknown as { currentRoomNumber?: string })?.currentRoomNumber || "—",
+          },
         ] as const)
       : [
           {
@@ -370,7 +703,8 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
         const self = authId && String(r._id) === String(authId);
         const cannotDelete = r.isSuperAdmin || self || !isAdmin;
         const showResetPwd =
-          isAdmin && (canGrantElevated || (r.role !== "admin" && r.role !== "manager"));
+          !studentOnly && isAdmin && (canGrantElevated || (r.role !== "admin" && r.role !== "manager"));
+        const isStudentList = !!studentOnly;
         return (
           <Space size={0} wrap>
             <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r)}>
@@ -379,23 +713,34 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(r)}>
               Sửa
             </Button>
-            <Button
-              type="link"
-              size="small"
-              icon={r.isActive === false ? <UnlockOutlined /> : <LockOutlined />}
-              disabled={self || (r.isSuperAdmin && !canGrantElevated)}
-              onClick={() => void toggleLock(r)}
-            >
-              {r.isActive === false ? "Mở khóa" : "Khóa"}
-            </Button>
+            {!isStudentList ? (
+              <Button
+                type="link"
+                size="small"
+                icon={r.isActive === false ? <UnlockOutlined /> : <LockOutlined />}
+                disabled={self || (r.isSuperAdmin && !canGrantElevated)}
+                onClick={() => void toggleLock(r)}
+              >
+                {r.isActive === false ? "Mở khóa" : "Khóa"}
+              </Button>
+            ) : null}
             {showResetPwd && (
               <Button type="link" size="small" icon={<KeyOutlined />} onClick={() => openResetPassword(r._id)}>
                 Đặt lại MK
               </Button>
             )}
-            <Button type="link" danger size="small" icon={<DeleteOutlined />} disabled={cannotDelete} onClick={() => handleDelete(r)}>
-              Xóa
-            </Button>
+            {!isStudentList ? (
+              <Button
+                type="link"
+                danger
+                size="small"
+                icon={<DeleteOutlined />}
+                disabled={cannotDelete}
+                onClick={() => handleDelete(r)}
+              >
+                Xóa
+              </Button>
+            ) : null}
           </Space>
         );
       },
@@ -403,20 +748,107 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   ];
 
   const du = detailPayload?.user;
+  const detailIsStudent = du?.role === "user";
+  const detailIsManager = du?.role === "manager";
+  const detailIsAdmin = du?.role === "admin";
+
+  const contractAreaName = (c: Contract) => {
+    const r = c.room;
+    if (!r || typeof r !== "object") return "—";
+    const a = r.area;
+    if (a && typeof a === "object" && "name" in a) return String((a as { name?: string }).name || "") || "—";
+    return "—";
+  };
+
+  const contractBedCode = (c: Contract) => {
+    const b = c.bed;
+    if (!b) return "—";
+    if (typeof b === "object" && b !== null && "code" in b) return String((b as Bed).code || "") || "—";
+    return "—";
+  };
+
+  const contractBedComposite = (c: Contract) => {
+    const rn = String((typeof c.room === "object" && c.room ? c.room.roomNumber : "") || "").trim();
+    const bc = contractBedCode(c);
+    if (bc === "—") return "—";
+    if (rn && bc.startsWith(`${rn}-`)) return bc;
+    if (rn) return `${rn}-${bc}`;
+    return bc;
+  };
+
+  const contractBedEquipment = (c: Contract) => {
+    const b = c.bed;
+    if (b && typeof b === "object" && "equipmentStatus" in b)
+      return formatBedEquipmentVi(String((b as Bed).equipmentStatus || ""));
+    return "—";
+  };
+
+  const overdueContractIds = contractIdsWithOverdueBills(detailPayload?.financialSummary?.unpaidBills);
 
   const contractColumns = [
     { title: "Số HĐ", dataIndex: "contractNumber", key: "cn", render: (v: string) => v || "—" },
     {
+      title: "Khu",
+      key: "area",
+      width: 160,
+      ellipsis: true,
+      render: (_: unknown, c: Contract) => contractAreaName(c),
+    },
+    {
       title: "Phòng",
       key: "room",
+      width: 90,
       render: (_: unknown, c: Contract) =>
         typeof c.room === "object" && c.room ? `${c.room.roomNumber}` : "—",
     },
     {
+      title: "Giá phòng (nền)",
+      key: "roomFee",
+      width: 150,
+      render: (_: unknown, c: Contract) => {
+        const r = typeof c.room === "object" ? c.room : null;
+        if (!r || r.price == null) return "—";
+        const slots = Math.max(1, Number(r.capacity) || 1);
+        const full = Math.round(Number(r.price));
+        const per = Math.round(full / slots);
+        return (
+          <div style={{ fontSize: 12, lineHeight: 1.4 }}>
+            <div>
+              Tổng: <strong>{full.toLocaleString("vi-VN")}</strong>đ/th
+            </div>
+            <div>
+              {slots} slot → <strong>{per.toLocaleString("vi-VN")}</strong>đ
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      title: "Mã giường",
+      key: "bedSlot",
+      width: 110,
+      ellipsis: true,
+      render: (_: unknown, c: Contract) => contractBedCode(c),
+    },
+    {
+      title: "Tình trạng giường",
+      key: "bedEq",
+      width: 130,
+      ellipsis: true,
+      render: (_: unknown, c: Contract) => contractBedEquipment(c),
+    },
+    {
       title: "Trạng thái",
-      dataIndex: "status",
       key: "st",
-      render: (s: string) => <Tag>{s}</Tag>,
+      width: 160,
+      render: (_: unknown, c: Contract) => {
+        const { color, text } = contractEnterpriseBadge(c, overdueContractIds);
+        return (
+          <Tag color={color} style={{ fontWeight: 600 }}>
+            {text}
+          </Tag>
+        );
+      },
     },
     {
       title: "Bắt đầu",
@@ -581,7 +1013,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
           }}
           onChange={tableOnChange}
           size="middle"
-          scroll={{ x: 1100 }}
+          scroll={{ x: studentOnly ? 1700 : 1100 }}
         />
       </Card>
 
@@ -623,9 +1055,46 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                   </Row>
                   <Form.Item name="citizenId" label="CCCD" rules={[req]}><Input /></Form.Item>
                   <Form.Item name="studentId" label="MSSV" rules={[req]}><Input /></Form.Item>
-                  <Form.Item name="major" label="Ngành" rules={[req]}><Input /></Form.Item>
+                  <Form.Item name="major" label="Ngành" rules={[req]}>
+                    {majorOptions.length ? (
+                      <Select
+                        allowClear
+                        showSearch
+                        placeholder="Chọn ngành (từ danh mục)"
+                        optionFilterProp="label"
+                        onChange={(v) => {
+                          const vv = String(v || "").trim();
+                          // Major.name = Khoa/nhóm ngành, Major.faculty = Ngành
+                          const picked = majorOptions.find((m) => String(m.faculty || "").trim() === vv);
+                          if (picked) {
+                            form.setFieldsValue({
+                              major: String(picked.faculty || "").trim(),
+                              facultyGroup: String(picked.name || "").trim(),
+                            });
+                          }
+                        }}
+                        options={majorOptions.map((m) => ({
+                          value: String(m.faculty || "").trim(),
+                          label: m.code
+                            ? `${m.code} — ${String(m.faculty || "").trim()}`
+                            : String(m.faculty || "").trim(),
+                        }))}
+                      />
+                    ) : (
+                      <Input placeholder="Nhập ngành" />
+                    )}
+                  </Form.Item>
                   <Row gutter={8}>
-                    <Col span={12}><Form.Item name="faculty" label="Khoa" rules={[req]}><Input /></Form.Item></Col>
+                    <Col span={12}>
+                      <Form.Item
+                        name="facultyGroup"
+                        label="Khoa/nhóm ngành"
+                        rules={[req]}
+                      >
+                        <Input disabled={majorOptions.length > 0} placeholder={majorOptions.length ? "Tự điền theo ngành" : "Nhập khoa/nhóm ngành"} />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}><Form.Item name="faculty" label="Khóa" rules={[req]}><Input placeholder="VD: K26" /></Form.Item></Col>
                     <Col span={12}><Form.Item name="homeroomTeacher" label="Giáo viên chủ nhiệm" rules={[req]}><Input /></Form.Item></Col>
                   </Row>
                   <Form.Item name="enrollmentDate" label="Ngày nhập học" rules={[req]}><DatePicker style={{ width: "100%" }} format="DD/MM/YYYY" /></Form.Item>
@@ -670,7 +1139,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
         title={`Chi tiết — ${du?.fullName || ""}`}
         open={!!detailPayload}
         onCancel={() => setDetailPayload(null)}
-        width={720}
+        width={980}
         footer={[
           <Button key="close" onClick={() => setDetailPayload(null)}>
             Đóng
@@ -710,38 +1179,485 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                 </div>
               </div>
 
-              <Descriptions column={1} size="small" bordered>
-                <Descriptions.Item label="MSSV">{du?.studentId || "—"}</Descriptions.Item>
-                <Descriptions.Item label="SĐT">{du?.phone || "—"}</Descriptions.Item>
-                <Descriptions.Item label="Khoa">{du?.faculty || "—"}</Descriptions.Item>
-                <Descriptions.Item label="Ngày nhập học">
-                  {du?.enrollmentDate ? dayjs(du.enrollmentDate).format("DD/MM/YYYY") : "—"}
-                </Descriptions.Item>
-                <Descriptions.Item label="Phòng đang ở (theo hợp đồng hiện hành)">
-                  {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object" ? (
-                    <span>
-                      Phòng <strong>{detailPayload.currentRoom.roomNumber}</strong>
-                      {typeof detailPayload.currentRoom.area === "object" && detailPayload.currentRoom.area ? (
-                        <span> — {detailPayload.currentRoom.area.name}</span>
-                      ) : null}
-                    </span>
-                  ) : (
-                    "—"
-                  )}
-                </Descriptions.Item>
-              </Descriptions>
+              {detailIsStudent ? (
+                <>
+                  <div style={{ color: "#6b7280", fontSize: 13 }}>
+                    Hồ sơ <strong>sinh viên</strong> và thông tin lưu trú theo hợp đồng KTX.
+                  </div>
+                  <Descriptions column={1} size="small" bordered>
+                    <Descriptions.Item label="MSSV">{du?.studentId || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="SĐT">{du?.phone || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Ngày sinh">
+                      {du?.dateOfBirth ? dayjs(du.dateOfBirth).format("DD/MM/YYYY") : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Giới tính">{du?.gender || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="CCCD / CMND">{du?.citizenId || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Lớp">{du?.className || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Khoa/nhóm ngành">
+                      {(du as unknown as { facultyGroup?: string })?.facultyGroup ||
+                        inferFacultyGroupFromMajor(du?.major, majorOptions) ||
+                        "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Ngành">{du?.major || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Khóa">{du?.faculty || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Giáo viên chủ nhiệm">{du?.homeroomTeacher || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Ngày nhập học">
+                      {du?.enrollmentDate ? dayjs(du.enrollmentDate).format("DD/MM/YYYY") : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Quê quán">{du?.addressNative || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Thường trú">{du?.addressPermanent || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Tạm trú">{du?.addressTemporary || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Tạm vắng">{du?.addressAbsent || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Địa chỉ liên hệ">{du?.address || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Phụ huynh (cha)">{formatParentLine(du?.familyFatherName, du?.familyFatherPhone)}</Descriptions.Item>
+                    <Descriptions.Item label="Phụ huynh (mẹ)">{formatParentLine(du?.familyMotherName, du?.familyMotherPhone)}</Descriptions.Item>
+                    <Descriptions.Item label="SĐT liên hệ khẩn cấp">{du?.familyEmergencyPhone || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Phòng đang ở (theo hợp đồng hiện hành)">
+                      {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object" ? (
+                        <Space direction="vertical" size={4}>
+                          <span>
+                            Phòng <strong>{detailPayload.currentRoom.roomNumber}</strong>
+                            {typeof detailPayload.currentRoom.area === "object" && detailPayload.currentRoom.area ? (
+                              <span> — Khu <strong>{detailPayload.currentRoom.area.name}</strong></span>
+                            ) : null}
+                          </span>
+                          <span style={{ color: "#6b7280", fontSize: 12 }}>
+                            Sức chứa: <strong>{detailPayload.currentRoom.capacity ?? "—"}</strong>
+                            {" · "}
+                            Đang ở: <strong>{detailPayload.currentRoom.currentOccupancy ?? "—"}</strong>
+                            {" · "}
+                            Còn trống:{" "}
+                            <strong>
+                              {typeof detailPayload.currentRoom.capacity === "number" &&
+                              typeof detailPayload.currentRoom.currentOccupancy === "number"
+                                ? Math.max(0, detailPayload.currentRoom.capacity - detailPayload.currentRoom.currentOccupancy)
+                                : "—"}
+                            </strong>
+                          </span>
+                        </Space>
+                      ) : (
+                        "—"
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Giường được phân (mã giường)">
+                      {detailPayload.currentContract
+                        ? contractBedCode(detailPayload.currentContract as Contract)
+                        : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Mã slot (phòng–giường)">
+                      {detailPayload.currentContract
+                        ? contractBedComposite(detailPayload.currentContract as Contract)
+                        : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Trạng thái giường">
+                      {detailPayload.currentContract
+                        ? contractBedEquipment(detailPayload.currentContract as Contract)
+                        : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Tổng tiền phòng (tháng)">
+                      {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object"
+                        ? `${Math.round(Number(detailPayload.currentRoom.price || 0)).toLocaleString("vi-VN")}đ (cả phòng, theo bảng giá)`
+                        : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Giá slot / tháng (01 chỗ)">
+                      {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object"
+                        ? `${slotPriceVnd(detailPayload.currentRoom).toLocaleString("vi-VN")}đ (= tổng phòng ÷ ${Math.max(1, Number(detailPayload.currentRoom.capacity) || 1)} slot)`
+                        : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Ngày check-in thực tế">
+                      {(() => {
+                        const b = (detailPayload.currentContract as Contract | null)?.bed;
+                        const cin = b && typeof b === "object" ? (b as Bed).checkInAt : null;
+                        return cin ? dayjs(cin).format("DD/MM/YYYY HH:mm") : "—";
+                      })()}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Trạng thái cư trú">
+                      {(() => {
+                        const meta = occupancyOperationalBadgeLarge(
+                          detailPayload.residencyOperationalStatus,
+                          detailPayload.stayHistory?.length || 0
+                        );
+                        if (!meta) return detailPayload.residencyOperationalStatus || "—";
+                        return (
+                          <span
+                            style={{
+                              display: "inline-block",
+                              padding: "10px 18px",
+                              borderRadius: 10,
+                              fontWeight: 700,
+                              fontSize: 15,
+                              background: meta.bg,
+                              border: `2px solid ${meta.border}`,
+                              color: "#111827",
+                            }}
+                          >
+                            {meta.text}
+                          </span>
+                        );
+                      })()}
+                    </Descriptions.Item>
+                  </Descriptions>
 
-              <div>
-                <div style={{ marginBottom: 8, fontWeight: 600 }}>Hợp đồng</div>
-                <Table<Contract>
-                  size="small"
-                  rowKey="_id"
-                  columns={contractColumns}
-                  dataSource={detailPayload.contracts || []}
-                  pagination={false}
-                  locale={{ emptyText: "Chưa có hợp đồng" }}
-                />
-              </div>
+                  <div>
+                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Thao tác nhanh</div>
+                    <Space wrap>
+                      <Button
+                        icon={<HomeOutlined />}
+                        disabled={!detailPayload.currentRoom || typeof detailPayload.currentRoom !== "object"}
+                        onClick={() => {
+                          const room = detailPayload.currentRoom as Room | null;
+                          if (!room?._id) return;
+                          navigate(`/admin/housing?tab=rooms&openRoom=${encodeURIComponent(room._id)}`);
+                          setDetailPayload(null);
+                        }}
+                      >
+                        Xem phòng
+                      </Button>
+                      <Button
+                        icon={<FileTextOutlined />}
+                        disabled={!(detailPayload.currentContract as Contract | null)?._id}
+                        onClick={() => {
+                          const id = String((detailPayload.currentContract as Contract)._id || "");
+                          if (!id) return;
+                          navigate(`/admin/contracts?openContract=${encodeURIComponent(id)}`);
+                          setDetailPayload(null);
+                        }}
+                      >
+                        Xem hợp đồng
+                      </Button>
+                      <Button
+                        type="primary"
+                        icon={<LoginOutlined />}
+                        disabled={
+                          detailPayload.residencyOperationalStatus !== "assigned_pending_checkin" ||
+                          !detailPayload.currentRoom ||
+                          typeof detailPayload.currentRoom !== "object" ||
+                          !(detailPayload.currentContract as Contract)?.bed ||
+                          typeof (detailPayload.currentContract as Contract).bed !== "object"
+                        }
+                        onClick={() => void handleQuickCheckIn()}
+                      >
+                        Check-in
+                      </Button>
+                      <Button
+                        danger
+                        icon={<LogoutOutlined />}
+                        disabled={
+                          detailPayload.residencyOperationalStatus !== "checked_in_staying" ||
+                          !(detailPayload.currentContract as Contract)?.bed ||
+                          typeof (detailPayload.currentContract as Contract).bed !== "object"
+                        }
+                        onClick={handleQuickCheckout}
+                      >
+                        Check-out
+                      </Button>
+                      <Button
+                        icon={<SwapOutlined />}
+                        disabled={
+                          !(detailPayload.currentRoom && typeof detailPayload.currentRoom === "object") ||
+                          !(detailPayload.currentContract as Contract)?._id ||
+                          !(detailPayload.currentContract as Contract)?.bed ||
+                          typeof (detailPayload.currentContract as Contract).bed !== "object" ||
+                          !["assigned_pending_checkin", "checked_in_staying"].includes(
+                            String(detailPayload.residencyOperationalStatus || "")
+                          )
+                        }
+                        onClick={() => {
+                          const room = detailPayload.currentRoom as Room;
+                          const cid = String((detailPayload.currentContract as Contract)._id || "");
+                          navigate(
+                            `/admin/housing?tab=rooms&openRoom=${encodeURIComponent(room._id)}&openTransfer=${encodeURIComponent(cid)}`
+                          );
+                          setDetailPayload(null);
+                        }}
+                      >
+                        Chuyển giường
+                      </Button>
+                    </Space>
+                  </div>
+
+                  <Space wrap>
+                    {detailPayload.currentContract &&
+                    ["active", "pending_payment"].includes(
+                      String((detailPayload.currentContract as Contract).status)
+                    ) ? (
+                      <Button type="primary" loading={ensureBedLoading} onClick={() => void handleEnsureBed()}>
+                        Gán giường / đồng bộ giường
+                      </Button>
+                    ) : null}
+                  </Space>
+
+                  <div>
+                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Hợp đồng KTX</div>
+                    <Table<Contract>
+                      size="small"
+                      rowKey="_id"
+                      columns={contractColumns}
+                      dataSource={detailPayload.contracts || []}
+                      pagination={false}
+                      locale={{ emptyText: "Chưa có hợp đồng" }}
+                    />
+                  </div>
+
+                  <div>
+                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Lịch sử cư trú</div>
+                    <p style={{ margin: "0 0 12px 0", color: "#6b7280", fontSize: 13 }}>
+                      Một dòng một hợp đồng; check-in/out theo BedHistory. Chưa check-out → «—».
+                    </p>
+                    <Table<StayHistoryRow>
+                      size="small"
+                      rowKey={(r) => String(r.contractId)}
+                      pagination={false}
+                      scroll={{ x: 1320 }}
+                      dataSource={detailPayload.stayHistory || []}
+                      locale={{
+                        emptyText:
+                          "Chưa có lịch sử — sinh viên chưa có hợp đồng hoặc chưa ghi nhận slot.",
+                      }}
+                      columns={[
+                        {
+                          title: "Sinh viên",
+                          key: "studentName",
+                          width: 150,
+                          ellipsis: true,
+                          fixed: "left",
+                          render: (_: unknown, r: StayHistoryRow) => r.studentName || du?.fullName || "—",
+                        },
+                        {
+                          title: "MSSV",
+                          key: "studentId",
+                          width: 100,
+                          ellipsis: true,
+                          render: (_: unknown, r: StayHistoryRow) => r.studentId || du?.studentId || "—",
+                        },
+                        {
+                          title: "Khu",
+                          dataIndex: "areaName",
+                          key: "areaName",
+                          width: 130,
+                          ellipsis: true,
+                          render: (v?: string) => v || "—",
+                        },
+                        {
+                          title: "Phòng",
+                          dataIndex: "roomNumber",
+                          key: "roomNumber",
+                          width: 88,
+                          render: (v?: string) => v || "—",
+                        },
+                        {
+                          title: "Giường / Slot",
+                          dataIndex: "bedSlotDisplay",
+                          key: "slot",
+                          width: 110,
+                          ellipsis: true,
+                          render: (_: unknown, r: StayHistoryRow) => r.bedSlotDisplay || r.bedCode || "—",
+                        },
+                        {
+                          title: "Ngày check-in",
+                          key: "checkInAt",
+                          width: 118,
+                          render: (_: unknown, r: StayHistoryRow) => formatStayHistoryDateVi(r.checkInAt ?? null),
+                        },
+                        {
+                          title: "Ngày check-out",
+                          key: "checkOutAt",
+                          width: 118,
+                          render: (_: unknown, r: StayHistoryRow) => formatStayHistoryDateVi(r.checkOutAt ?? null),
+                        },
+                        {
+                          title: "Trạng thái cư trú",
+                          key: "staySt",
+                          width: 150,
+                          render: (_: unknown, r: StayHistoryRow) => {
+                            const m = residencyStayStatusDisplay(r.residencyStayStatus);
+                            return (
+                              <Tag color={m.color} style={{ fontWeight: 600 }}>
+                                {m.emoji ? `${m.emoji} ` : ""}
+                                {m.text}
+                              </Tag>
+                            );
+                          },
+                        },
+                        {
+                          title: "Hợp đồng",
+                          dataIndex: "contractNumber",
+                          key: "contractNumber",
+                          width: 140,
+                          ellipsis: true,
+                          render: (v?: string) => v || "—",
+                        },
+                        {
+                          title: "Ghi chú",
+                          dataIndex: "note",
+                          key: "note",
+                          ellipsis: true,
+                          render: (v?: string) => v || "—",
+                        },
+                      ]}
+                    />
+                  </div>
+
+                  {detailPayload.financialSummary ? (
+                    <div>
+                      <div style={{ marginBottom: 8, fontWeight: 600 }}>Công nợ & hóa đơn</div>
+                      <div style={{ marginBottom: 8, color: "#6b7280", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                        <span>
+                          Tổng còn nợ:{" "}
+                          <strong style={{ color: "#b45309" }}>
+                            {(detailPayload.financialSummary.debtTotal || 0).toLocaleString("vi-VN")}đ
+                          </strong>
+                          {" · "}
+                          Chưa thanh toán:{" "}
+                          <strong>{detailPayload.financialSummary.unpaidCount ?? 0}</strong> hóa đơn
+                        </span>
+                        {(detailPayload.financialSummary.unpaidBills || []).some((x) => String(x.status) === "overdue") ? (
+                          <Tag color="red" icon={<WarningOutlined />} style={{ fontWeight: 600 }}>
+                            Có hóa đơn quá hạn
+                          </Tag>
+                        ) : null}
+                      </div>
+                      <Table<Bill>
+                        size="small"
+                        rowKey="_id"
+                        pagination={false}
+                        dataSource={detailPayload.financialSummary.unpaidBills || []}
+                        locale={{ emptyText: "Không có hóa đơn chưa thanh toán" }}
+                        columns={[
+                          {
+                            title: "Tháng",
+                            key: "period",
+                            render: (_: unknown, b: Bill) =>
+                              `${String(b.month).padStart(2, "0")}/${b.year}`,
+                          },
+                          {
+                            title: "Tổng tiền",
+                            dataIndex: "total",
+                            render: (v: number) => `${Number(v || 0).toLocaleString("vi-VN")}đ`,
+                          },
+                          {
+                            title: "Hạn TT",
+                            dataIndex: "dueDate",
+                            render: (d: string) => (d ? dayjs(d).format("DD/MM/YYYY") : "—"),
+                          },
+                          {
+                            title: "Trạng thái",
+                            dataIndex: "status",
+                            render: (s: string) =>
+                              String(s) === "overdue" ? (
+                                <Tag color="red" icon={<WarningOutlined />} style={{ fontWeight: 600 }}>
+                                  Quá hạn
+                                </Tag>
+                              ) : (
+                                <Tag
+                                  color={
+                                    s === "paid" ? "green" : s === "pending" || s === "unpaid" ? "orange" : "default"
+                                  }
+                                >
+                                  {s === "paid"
+                                    ? "Đã thanh toán"
+                                    : s === "unpaid"
+                                      ? "Chưa TT"
+                                      : s === "pending"
+                                        ? "Chờ TT"
+                                        : s}
+                                </Tag>
+                              ),
+                          },
+                        ]}
+                      />
+                    </div>
+                  ) : null}
+
+                  {detailPayload.violationsRecent && detailPayload.violationsRecent.length > 0 ? (
+                    <div>
+                      <div style={{ marginBottom: 8, fontWeight: 600 }}>Lịch sử vi phạm (gần đây)</div>
+                      <Table<Violation>
+                        size="small"
+                        rowKey="_id"
+                        pagination={false}
+                        dataSource={detailPayload.violationsRecent}
+                        columns={[
+                          {
+                            title: "Ngày",
+                            dataIndex: "createdAt",
+                            render: (d?: string) => (d ? dayjs(d).format("DD/MM/YYYY") : "—"),
+                          },
+                          {
+                            title: "Vi phạm",
+                            key: "rule",
+                            render: (_: unknown, r: Violation) => r.ruleName || r.description || "—",
+                          },
+                          {
+                            title: "Mức độ",
+                            dataIndex: "severity",
+                            render: (s: string) => <Tag>{s}</Tag>,
+                          },
+                        ]}
+                      />
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+
+              {detailIsManager ? (
+                <>
+                  <div style={{ color: "#6b7280", fontSize: 13 }}>
+                    Hồ sơ <strong>quản lý khu</strong> — tài khoản vận hành KTX, không dùng mẫu hồ sơ sinh viên.
+                  </div>
+                  <Descriptions column={1} size="small" bordered>
+                    <Descriptions.Item label="Email đăng nhập">{du?.email || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="SĐT">{du?.phone || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Ngày tạo tài khoản">
+                      {du?.createdAt ? dayjs(du.createdAt).format("DD/MM/YYYY HH:mm") : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Cập nhật gần nhất">
+                      {du?.updatedAt ? dayjs(du.updatedAt).format("DD/MM/YYYY HH:mm") : "—"}
+                    </Descriptions.Item>
+                  </Descriptions>
+                  <div>
+                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Khu được phân công phụ trách</div>
+                    <Table<Area>
+                      size="small"
+                      rowKey="_id"
+                      pagination={false}
+                      dataSource={detailPayload.managedAreas || []}
+                      locale={{
+                        emptyText: "Chưa gán khu — cập nhật tại Sửa người dùng hoặc gán quản lý trong Quản lý khu & phòng.",
+                      }}
+                      columns={[
+                        { title: "Tên khu", dataIndex: "name", key: "name", render: (v: string) => v || "—" },
+                        {
+                          title: "Phân loại",
+                          key: "gp",
+                          width: 120,
+                          render: (_: unknown, z: Area) => genderPolicyLabels[String(z.genderPolicy || "mixed")] || "—",
+                        },
+                        { title: "Mô tả", dataIndex: "description", key: "d", ellipsis: true, render: (v: string) => v || "—" },
+                      ]}
+                    />
+                  </div>
+                </>
+              ) : null}
+
+              {detailIsAdmin ? (
+                <>
+                  <div style={{ color: "#6b7280", fontSize: 13 }}>
+                    Hồ sơ <strong>quản trị viên</strong> — quản lý hệ thống, không có hồ sơ lưu trú KTX.
+                  </div>
+                  <Descriptions column={1} size="small" bordered>
+                    <Descriptions.Item label="Email đăng nhập">{du?.email || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="SĐT">{du?.phone || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Quản trị cấp cao">{du?.isSuperAdmin ? <Tag color="magenta">Có</Tag> : <Tag>Không</Tag>}</Descriptions.Item>
+                    <Descriptions.Item label="Ngày tạo tài khoản">
+                      {du?.createdAt ? dayjs(du.createdAt).format("DD/MM/YYYY HH:mm") : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Phạm vi nghiệp vụ">
+                      Toàn hệ thống KTX (người dùng, khu/phòng, đơn, hợp đồng, hóa đơn, cấu hình…). Không áp dụng phòng/giường/hợp đồng nội trú cá nhân.
+                    </Descriptions.Item>
+                  </Descriptions>
+                </>
+              ) : null}
             </Space>
           </Spin>
         )}

@@ -34,6 +34,7 @@ const serviceRoutes = require("./routes/serviceRoutes");
 const roomServiceRoutes = require("./routes/roomServiceRoutes");
 const serviceUsageRoutes = require("./routes/serviceUsageRoutes");
 const roomCostRoutes = require("./routes/roomCostRoutes");
+const majorRoutes = require("./routes/majorRoutes");
 const violationRoutes = require("./routes/violationRoutes");
 const violationController = require("./controllers/violationController");
 const disciplinaryRoutes = require("./routes/disciplinaryRoutes");
@@ -41,6 +42,11 @@ const maintenanceReportController = require("./controllers/maintenanceReportCont
 const maintenanceReportRoutes = require("./routes/maintenanceReportRoutes");
 const maintenanceReportAdminRoutes = require("./routes/maintenanceReportAdminRoutes");
 const scheduleController = require("./controllers/scheduleController");
+const opsContractsRoutes = require("./routes/opsContractsRoutes");
+const bedRoutes = require("./routes/bedRoutes");
+// Register Bed models early to avoid MissingSchemaError in some runtimes
+require("./models/Bed");
+require("./models/BedHistory");
 
 const app = express();
 /** CRA/webpack proxy gửi X-Forwarded-For → express-rate-limit v8 sẽ lỗi nếu không trust proxy */
@@ -107,6 +113,9 @@ app.get("/api/my-reports", auth, requireRole("user"), maintenanceReportControlle
 app.get("/api/student/maintenance-reports", auth, requireRole("user"), maintenanceReportController.listMine);
 app.use("/api/reports", maintenanceReportRoutes);
 app.use("/api/admin/maintenance-reports", maintenanceReportAdminRoutes);
+app.use("/api/ops", opsContractsRoutes);
+app.use("/api/beds", bedRoutes);
+app.use("/api/majors", majorRoutes);
 /** Lịch tổng hợp cho sinh viên (hóa đơn, hợp đồng, bảo trì, kỳ đăng ký) */
 app.get("/api/my-schedule", auth, requireRole("user"), scheduleController.getMySchedule);
 app.get("/api/events/:id", auth, requireRole("user"), scheduleController.getEventById);
@@ -134,7 +143,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ message: err.message || "Lỗi máy chủ" });
 });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 const httpServer = http.createServer(app);
 initSocket(httpServer);
 

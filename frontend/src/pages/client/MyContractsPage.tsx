@@ -15,6 +15,13 @@ function fmtMoney(n: number | null | undefined): string {
   return `${Math.round(Number(n)).toLocaleString("vi-VN")}đ`;
 }
 
+function fmtDateDmy(d?: string | Date | null): string {
+  if (!d) return "—";
+  const x = new Date(d);
+  if (isNaN(x.getTime())) return "—";
+  return `${x.getDate()}/${x.getMonth() + 1}/${x.getFullYear()}`;
+}
+
 function monthsBetween(start: string | Date, end: string | Date): number {
   const a = new Date(start);
   const b = new Date(end);
@@ -36,7 +43,7 @@ function statusBadge(status: string): { cls: string; label: string } {
     case "active":
       return { cls: "text-bg-success", label: "Đang hiệu lực" };
     case "pending_payment":
-      return { cls: "text-bg-warning text-dark", label: "Chờ xác nhận (chưa hiệu lực)" };
+      return { cls: "text-bg-warning text-dark", label: "Chưa hiệu lực (chờ ký + xác nhận)" };
     case "expired":
       return { cls: "text-bg-secondary", label: "Hết hạn" };
     case "terminated":
@@ -46,12 +53,17 @@ function statusBadge(status: string): { cls: string; label: string } {
   }
 }
 
-function monthlyRentDisplay(c: Contract): string {
-  if (c.monthlyRent != null && c.monthlyRent > 0) return fmtMoney(c.monthlyRent);
+function roomFeePerSlot(c: Contract): number {
+  if (c.monthlyRent != null && c.monthlyRent > 0) return Number(c.monthlyRent);
   const r = c.room as Room | undefined;
-  if (r?.pricePerPerson != null && r.pricePerPerson > 0) return fmtMoney(r.pricePerPerson);
-  if (r?.price != null) return fmtMoney(r.price);
-  return "—";
+  const price = Number(r?.price ?? 0);
+  const cap = Number(r?.capacity ?? 0);
+  const slots = Number.isFinite(cap) && cap >= 1 ? cap : 1;
+  return Math.round(price / slots);
+}
+
+function monthlyRentDisplay(c: Contract): string {
+  return fmtMoney(roomFeePerSlot(c));
 }
 
 function depositDisplay(c: Contract): string {
@@ -83,6 +95,7 @@ const MyContractsPage: React.FC = () => {
   const [extendModalContract, setExtendModalContract] = useState<Contract | null>(null);
   const [extendMonths, setExtendMonths] = useState(6);
   const [extendSubmitting, setExtendSubmitting] = useState(false);
+  const [viewModalContract, setViewModalContract] = useState<Contract | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -278,6 +291,9 @@ const MyContractsPage: React.FC = () => {
                   <p className="mb-3">
                     <strong>Tiền cọc:</strong> {depositDisplay(primary)}
                   </p>
+                  <button type="button" className="btn btn-outline-light btn-sm w-100 mb-2" onClick={() => setViewModalContract(primary)}>
+                    Xem hợp đồng
+                  </button>
                   {primary.status === "pending_payment" && !primary.signedAt && (
                     <button type="button" className="btn btn-warning btn-sm w-100" onClick={() => void signContract(primary)}>
                       Ký xác nhận hợp đồng
@@ -391,6 +407,131 @@ const MyContractsPage: React.FC = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewModalContract && (
+        <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.45)" }}>
+          <div className="modal-dialog modal-lg modal-dialog-scrollable">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title">HỢP ĐỒNG THUÊ CHỖ Ở NỘI TRÚ</h5>
+                <button type="button" className="btn-close" aria-label="Đóng" onClick={() => setViewModalContract(null)} />
+              </div>
+              <div className="modal-body small">
+                {(() => {
+                  const c = viewModalContract;
+                  const r = c.room as Room | undefined;
+                  const areaName =
+                    typeof r?.area === "object" && r.area ? String((r.area as { name?: string }).name || "") : "";
+                  const gender = String((student as { gender?: string } | null)?.gender || "");
+                  const genderLabel = gender.toLowerCase().includes("nam") ? "Nam" : gender.toLowerCase().includes("nữ") || gender.toLowerCase().includes("nu") ? "Nữ" : "—";
+                  const fee = roomFeePerSlot(c);
+                  const roomFullMonthly = Math.round(Number(r?.price ?? 0));
+                  const slots = (() => {
+                    const cap = Number(r?.capacity ?? 0);
+                    return Number.isFinite(cap) && cap >= 1 ? cap : 1;
+                  })();
+                  const months = monthsBetween(c.startDate, c.endDate) || 12;
+                  const total = fee * months;
+                  const deposit = c.depositAmount != null ? Number(c.depositAmount) : 100000;
+                  const floor = (r as { floor?: number } | undefined)?.floor;
+                  const roomFull = `Phòng ${(r as Room | undefined)?.roomNumber || "—"}${typeof floor === "number" ? `, Tầng ${floor}` : ""}${areaName ? `, Nhà ${areaName}` : ""} của KTX Trường ĐH.`;
+                  const signedB = c.signedAt ? "Đã ký" : "Chưa ký";
+                  const signedA = c.status === "active" ? "Đã xác nhận" : "Chờ admin xác nhận";
+                  const statusNow =
+                    c.status === "active"
+                      ? "Có hiệu lực"
+                      : c.signedAt
+                        ? "Chưa hiệu lực (chờ admin xác nhận)"
+                        : "Chưa hiệu lực (chờ ký + xác nhận ký)";
+
+                  return (
+                    <div style={{ whiteSpace: "pre-wrap", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
+{`Số hợp đồng: ${c.contractNumber || "—"}
+
+BÊN CHO THUÊ (BÊN A): KÝ TÚC XÁ TRƯỜNG ĐẠI HỌC (ĐH)
+
+Địa chỉ: ................................................................................................
+
+Điện thoại: .............................................................................................
+
+BÊN THUÊ (BÊN B):
+
+Họ và tên: ${student?.fullName || "—"}     Nam/Nữ: ${genderLabel}
+
+Mã SV: ${student?.studentId || "—"}     CCCD: ${String((student as { citizenId?: string } | null)?.citizenId || "—")}
+
+Ngày sinh: ${fmtDateDmy((student as { dateOfBirth?: string } | null)?.dateOfBirth || null)}     Dân tộc: -
+
+Email: ${student?.email || "—"}
+
+SĐT: ${student?.phone || "—"}
+
+ĐIỀU 1: NỘI DUNG THUÊ
+
+Bên A đồng ý cho Bên B thuê 01 chỗ ở nội trú tại: ${roomFull}
+
+Bên B được sử dụng trang thiết bị tại phòng theo nội quy của Trường ĐH.
+
+ĐIỀU 2: CHI PHÍ VÀ THANH TOÁN
+
+Giá thuê: Phòng có ${slots} chỗ (slot). Tổng tiền thuê toàn phòng: ${roomFullMonthly.toLocaleString("vi-VN")} VNĐ/tháng. Giá thuê 01 chỗ (01 sinh viên — Bên B): ${Math.round(fee).toLocaleString("vi-VN")} VNĐ/tháng${c.monthlyRent != null && Number(c.monthlyRent) > 0 ? " (theo thỏa thuận trong hợp đồng)" : ` (= ${roomFullMonthly.toLocaleString("vi-VN")} ÷ ${slots})`}.
+Tổng tiền Bên B thanh toán tiền thuê cho cả thời hạn (theo 01 chỗ, ${months} tháng): ${Math.round(total).toLocaleString("vi-VN")} VNĐ.
+
+Tiền thế chấp tài sản: ${Math.round(deposit).toLocaleString("vi-VN")} VNĐ/sinh viên.
+
+Thời hạn thuê: Từ ngày ${fmtDateDmy(c.startDate)} đến ngày ${fmtDateDmy(c.endDate)}.
+
+Phương thức thanh toán: Thanh toán trực tuyến qua tài khoản của Trường ĐH tại thời điểm nhận phòng.
+
+Tiền điện, nước: Thanh toán hàng tháng theo chỉ số công tơ và đơn giá quy định.
+
+ĐIỀU 3: TRÁCH NHIỆM CỦA SINH VIÊN
+
+Chấp hành nghiêm chỉnh pháp luật, nội quy KTX và quy định về PCCC.
+
+Ở đúng vị trí được sắp xếp; không tự ý chuyển nhượng chỗ ở cho người khác.
+
+Giữ gìn vệ sinh, bảo quản tài sản công. Bồi thường nếu gây hư hỏng, mất mát.
+
+Thanh toán đầy đủ các khoản phí dịch vụ (điện, nước, gửi xe, wifi...) đúng hạn.
+
+Bàn giao phòng và chìa khóa ngay khi hết hạn hợp đồng hoặc nghỉ hè/Tết.
+
+ĐIỀU 4: CHẤM DỨT HỢP ĐỒNG
+
+Hợp đồng chấm dứt khi: Hết thời hạn; SV tự nguyện xin ra; SV tốt nghiệp/thôi học; hoặc SV vi phạm kỷ luật bị buộc ra khỏi KTX.
+
+(Lưu ý: Trường ĐH không hoàn trả phí nội trú nếu SV vi phạm kỷ luật hoặc chấm dứt hợp đồng sau 01 tháng).
+
+ĐIỀU 5: ĐIỀU KHOẢN CHUNG
+
+Mọi hư hỏng tài sản hoặc nợ phí sẽ được trừ vào tiền thế chấp. Sau khi hoàn tất thủ tục trả phòng, Trường ĐH sẽ hoàn trả lại tiền thế chấp cho sinh viên.
+
+ĐẠI DIỆN BÊN B
+(Ký, ghi rõ họ tên)
+${signedB}
+
+ĐẠI DIỆN BÊN A
+(Ký, ghi rõ họ tên)
+${signedA}
+
+Trạng thái hiện tại: ${statusNow}
+
+Hướng dẫn: ${c.signedAt ? "Bạn đã ký xác nhận. Vui lòng chờ admin xác nhận để hợp đồng có hiệu lực." : "Sinh viên chưa ký xác nhận hợp đồng."}
+`}
+                    </div>
+                  );
+                })()}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setViewModalContract(null)}>
+                  Đóng
+                </button>
+              </div>
             </div>
           </div>
         </div>

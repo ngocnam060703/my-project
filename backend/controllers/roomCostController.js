@@ -24,7 +24,7 @@ exports.getRoomCosts = async (req, res) => {
 exports.upsertRoomCost = async (req, res) => {
   try {
     if (!isAdmin(req.user)) return res.status(403).json({ message: "Không có quyền" });
-    const { roomId, month, year, electricityFee, waterFee, note } = req.body;
+    const { roomId, month, year, electricityFee, waterFee, wifiMonthlyFee, note } = req.body;
     if (!mongoose.isValidObjectId(String(roomId || ""))) {
       return res.status(400).json({ message: "roomId không hợp lệ" });
     }
@@ -45,6 +45,7 @@ exports.upsertRoomCost = async (req, res) => {
         year: y,
         electricityFee: Math.max(0, Number(electricityFee || 0)),
         waterFee: Math.max(0, Number(waterFee || 0)),
+        wifiMonthlyFee: Math.max(0, Number(wifiMonthlyFee ?? 0)),
         note: note ? String(note) : "",
         enteredBy: req.user._id,
       },

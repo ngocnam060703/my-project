@@ -8,6 +8,8 @@ const contractSchema = new mongoose.Schema(
     application: { type: mongoose.Schema.Types.ObjectId, ref: "Application", default: null },
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     room: { type: mongoose.Schema.Types.ObjectId, ref: "Room", required: true },
+    /** Giường được xếp trong phòng (Bed) */
+    bed: { type: mongoose.Schema.Types.ObjectId, ref: "Bed", default: null, index: true },
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     status: {

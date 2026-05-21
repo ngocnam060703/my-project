@@ -10,6 +10,7 @@ router.use(auth, requireRole("admin", "manager"));
 router.get("/", zoneController.list);
 router.post("/", createZoneRules, validateRequest, zoneController.create);
 router.get("/:id", zoneIdParam, validateRequest, zoneController.getById);
+router.get("/:id/residents", zoneIdParam, validateRequest, zoneController.getResidents);
 router.patch("/:id", updateZoneRules, validateRequest, zoneController.update);
 router.delete("/:id", requireRole("admin"), zoneIdParam, validateRequest, zoneController.remove);
 

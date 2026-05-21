@@ -50,6 +50,7 @@ router.post(
   contractController.create
 );
 router.get(["/", ""], requireRole("admin", "manager"), contractController.getAll);
+router.get("/:id/360", requireRole("admin", "manager"), contractController.get360);
 router.get("/:id", contractController.getById);
 router.put(
   "/:id/extend",
@@ -73,12 +74,7 @@ router.put(
   contractController.uploadSignedPdf
 );
 router.put("/:id/confirm-payment", requireRole("admin", "manager"), contractController.confirmPayment);
-router.put(
-  "/:id",
-  requireRole("admin", "manager"),
-  contractValidators.updateContract,
-  validateRequest,
-  contractController.update
-);
+router.put("/:id/ensure-bed", requireRole("admin", "manager"), contractController.ensureBed);
+router.put("/:id", requireRole("admin", "manager"), contractController.update);
 
 module.exports = router;
