@@ -19,6 +19,17 @@ const {
 /** Trạng thái coi là chưa thanh toán (tương thích pending cũ + unpaid mới) */
 const UNPAID_STATUSES = ["unpaid", "pending"];
 
+function canSettleBillStatus(status) {
+  return status === "overdue" || UNPAID_STATUSES.includes(status);
+}
+
+function parseDateOrNull(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+
 function toStartOfDay(d) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
@@ -242,7 +253,10 @@ exports.create = async (req, res) => {
     if (!(m >= 1 && m <= 12) || y < 2000) {
       return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
     }
-    const due = dueDate ? new Date(dueDate) : dueDateForBillingMonth(y, m);
+    const due = dueDate ? parseDateOrNull(dueDate) : dueDateForBillingMonth(y, m);
+    if (!due) {
+      return res.status(400).json({ message: "Hạn thanh toán không hợp lệ" });
+    }
 
     // Luồng mới: tạo hóa đơn theo phòng (khuyến nghị dùng trên UI admin)
     if (roomId) {
@@ -464,9 +478,12 @@ exports.generateByMonth = async (req, res) => {
   try {
     const month = Number(req.body?.month);
     const year = Number(req.body?.year);
-    const dueDate = req.body?.dueDate ? new Date(req.body.dueDate) : dueDateForBillingMonth(year, month);
+    const dueDate = req.body?.dueDate ? parseDateOrNull(req.body.dueDate) : dueDateForBillingMonth(year, month);
     if (!(month >= 1 && month <= 12) || year < 2000) {
       return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
+    }
+    if (!dueDate) {
+      return res.status(400).json({ message: "Hạn thanh toán không hợp lệ" });
     }
 
     const now = new Date();
@@ -581,41 +598,49 @@ exports.markPaid = async (req, res) => {
   try {
     const bill = await Bill.findById(req.params.id).populate("contract");
     if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    const isAdmin = req.user.role === "admin" || req.user.role === "manager";
+    if (!isAdmin) {
+      return res.status(403).json({ message: "Chỉ admin/manager được xác nhận thanh toán thủ công" });
+    }
     if (bill.status === "paid") {
       return res.status(400).json({ message: "Hóa đơn đã được thanh toán" });
     }
-    if (!UNPAID_STATUSES.includes(bill.status) && bill.status !== "overdue") {
+    if (!canSettleBillStatus(bill.status)) {
       return res.status(400).json({ message: "Hóa đơn không ở trạng thái chờ thanh toán" });
     }
-    const isAdmin = req.user.role === "admin" || req.user.role === "manager";
-    const billUserId = String(bill.user?._id || bill.user || "");
-    if (!isAdmin && billUserId !== String(req.user._id)) {
-      return res.status(403).json({ message: "Không có quyền thanh toán hóa đơn này" });
+    if (Number(bill.total || 0) <= 0) {
+      return res.status(400).json({ message: "Hóa đơn không hợp lệ: tổng tiền phải lớn hơn 0" });
     }
-    if (bill.contract && isContractExpired(bill.contract.endDate, new Date())) {
-      return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể thanh toán hóa đơn này" });
+    const rawMethod = String(req.body?.paymentMethod || "counter").trim();
+    if (!["counter", "manual"].includes(rawMethod)) {
+      return res.status(400).json({ message: "paymentMethod chỉ nhận counter hoặc manual" });
     }
-    const method = req.body?.paymentMethod === "counter" ? "counter" : "manual";
-    const ref = isAdmin && req.body?.paymentReference ? String(req.body.paymentReference).trim() : "";
+    const method = rawMethod;
+    const ref = req.body?.paymentReference ? String(req.body.paymentReference).trim() : "";
     bill.status = "paid";
     bill.paidAt = new Date();
-    bill.paymentMethod = isAdmin ? method : "manual";
+    bill.paymentMethod = method;
     bill.paymentReference = ref;
     bill.paymentHistory = bill.paymentHistory || [];
     bill.paymentHistory.push({
       at: new Date(),
       action: "paid",
-      method: isAdmin ? method : "manual",
+      method,
       reference: ref,
       amount: Math.round(Number(bill.total || 0)),
       performedBy: req.user._id,
-      note: isAdmin ? "Admin xác nhận thanh toán" : "Sinh viên xác nhận (demo)",
+      note: "Admin xác nhận thanh toán",
     });
     await bill.save();
-    if (!isAdmin) {
-      const io = getIO();
-      io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
-    }
+    const io = getIO();
+    io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
+    await Notification.create({
+      user: bill.user,
+      title: "Hóa đơn đã được xác nhận thanh toán",
+      message: `Hóa đơn ${bill.month}/${bill.year} đã được ghi nhận thanh toán.`,
+      type: "bill_paid",
+      link: "/student/my-bills",
+    });
     res.json(bill);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -627,6 +652,9 @@ exports.payOnline = async (req, res) => {
   try {
     const bill = await Bill.findById(req.params.id).populate("contract");
     if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    if (req.user.role !== "user") {
+      return res.status(403).json({ message: "Chỉ sinh viên được thực hiện thanh toán online" });
+    }
     const billUserId = String(bill.user?._id || bill.user || "");
     if (billUserId !== String(req.user._id)) {
       return res.status(403).json({ message: "Chỉ thanh toán được hóa đơn của chính bạn" });
@@ -634,11 +662,11 @@ exports.payOnline = async (req, res) => {
     if (bill.status === "paid") {
       return res.status(400).json({ message: "Hóa đơn đã được thanh toán" });
     }
-    if (!UNPAID_STATUSES.includes(bill.status) && bill.status !== "overdue") {
+    if (!canSettleBillStatus(bill.status)) {
       return res.status(400).json({ message: "Hóa đơn không ở trạng thái chờ thanh toán" });
     }
-    if (bill.contract && isContractExpired(bill.contract.endDate, new Date())) {
-      return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể thanh toán" });
+    if (Number(bill.total || 0) <= 0) {
+      return res.status(400).json({ message: "Hóa đơn không hợp lệ: tổng tiền phải lớn hơn 0" });
     }
     const paymentUrl = await buildBillPaymentUrl({
       req,
@@ -734,7 +762,11 @@ exports.updateBill = async (req, res) => {
       return res.status(400).json({ message: "Không chỉnh sửa hóa đơn đã thanh toán" });
     }
     const { dueDate, note, roomFee, electricityFee, waterFee, otherFee, sharedCommonFee, personalServiceFee } = req.body;
-    if (dueDate) bill.dueDate = new Date(dueDate);
+    if (dueDate) {
+      const parsedDue = parseDateOrNull(dueDate);
+      if (!parsedDue) return res.status(400).json({ message: "Hạn thanh toán không hợp lệ" });
+      bill.dueDate = parsedDue;
+    }
     if (note !== undefined) bill.note = String(note);
     if (roomFee !== undefined) bill.roomFee = Math.max(0, Number(roomFee));
     if (electricityFee !== undefined) bill.electricityFee = Math.max(0, Number(electricityFee));

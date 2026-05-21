@@ -195,6 +195,9 @@ export interface Contract {
   status: string;
   contractNumber?: string;
   signedAt?: string | null;
+  signedPdfUrl?: string;
+  studentConfirmedAt?: string | null;
+  paymentConfirmedAt?: string | null;
   terms?: string;
   application?: string | null;
   /** VNĐ/tháng — nếu null UI dùng giá phòng */

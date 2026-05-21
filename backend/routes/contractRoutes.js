@@ -42,12 +42,37 @@ router.post(
   contractController.requestExtend
 );
 
-router.post("/", requireRole("admin", "manager"), contractController.create);
+router.post(
+  "/",
+  requireRole("admin", "manager"),
+  contractValidators.createContract,
+  validateRequest,
+  contractController.create
+);
 router.get(["/", ""], requireRole("admin", "manager"), contractController.getAll);
 router.get("/:id/360", requireRole("admin", "manager"), contractController.get360);
 router.get("/:id", contractController.getById);
-router.put("/:id/extend", requireRole("admin", "manager"), contractController.extend);
-router.put("/:id/terminate", requireRole("admin", "manager"), contractController.terminate);
+router.put(
+  "/:id/extend",
+  requireRole("admin", "manager"),
+  contractValidators.extendContract,
+  validateRequest,
+  contractController.extend
+);
+router.put(
+  "/:id/terminate",
+  requireRole("admin", "manager"),
+  contractValidators.terminateContract,
+  validateRequest,
+  contractController.terminate
+);
+router.put(
+  "/:id/upload-signed-pdf",
+  requireRole("admin", "manager"),
+  contractValidators.uploadSignedPdf,
+  validateRequest,
+  contractController.uploadSignedPdf
+);
 router.put("/:id/confirm-payment", requireRole("admin", "manager"), contractController.confirmPayment);
 router.put("/:id/ensure-bed", requireRole("admin", "manager"), contractController.ensureBed);
 router.put("/:id", requireRole("admin", "manager"), contractController.update);

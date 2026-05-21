@@ -35,10 +35,10 @@ import type { Area, Contract, ContractExtendRequest, Room, User } from "../../ty
 import dayjs from "dayjs";
 
 const statusMap: Record<string, { color: string; text: string }> = {
-  pending_payment: { color: "gold", text: "Chưa hiệu lực (chờ ký + xác nhận ký)" },
+  pending_payment: { color: "gold", text: "Chờ xác nhận (chưa hiệu lực)" },
   active: { color: "green", text: "Có hiệu lực" },
   expired: { color: "default", text: "Hết hạn" },
-  terminated: { color: "red", text: "Đã chấm dứt" },
+  terminated: { color: "red", text: "Đã hủy / chấm dứt" },
 };
 
 const lessorAddress = "................................................................................................";
@@ -319,15 +319,12 @@ const ContractsPage: React.FC = () => {
             <Button
               type="link"
               size="small"
-              onClick={async () => {
-                try {
-                  await contractsApi.confirmPayment(r._id);
-                  message.success("Đã xác nhận. Hợp đồng có hiệu lực.");
-                  load();
-                } catch (err: unknown) {
-                  message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
-                }
-              }}
+              onClick={() =>
+                setConfirmModal({
+                  contract: r,
+                  signedPdfUrl: r.signedPdfUrl || "",
+                })
+              }
             >
               Xác nhận
             </Button>
@@ -567,7 +564,7 @@ const ContractsPage: React.FC = () => {
               setPage(1);
             }}
           >
-            <Select.Option value="pending_payment">Chưa hiệu lực (chờ ký + xác nhận )</Select.Option>
+            <Select.Option value="pending_payment">Chờ xác nhận (chưa hiệu lực)</Select.Option>
             <Select.Option value="active">Có hiệu lực</Select.Option>
             <Select.Option value="expired">Hết hạn</Select.Option>
             <Select.Option value="terminated">Đã chấm dứt</Select.Option>
@@ -658,6 +655,40 @@ const ContractsPage: React.FC = () => {
           size="middle"
         />
       </Card>
+
+      <Modal
+        title={confirmModal ? `Xác nhận hợp đồng ${confirmModal.contract.contractNumber || ""}` : "Xác nhận hợp đồng"}
+        open={!!confirmModal}
+        onCancel={() => setConfirmModal(null)}
+        onOk={async () => {
+          if (!confirmModal) return;
+          const pdfUrl = String(confirmModal.signedPdfUrl || "").trim();
+          if (!pdfUrl) {
+            message.warning("Vui lòng nhập đường dẫn PDF đã ký");
+            return;
+          }
+          try {
+            await contractsApi.uploadSignedPdf(confirmModal.contract._id, pdfUrl);
+            await contractsApi.confirmPayment(confirmModal.contract._id);
+            message.success("Đã xác nhận. Hợp đồng có hiệu lực.");
+            setConfirmModal(null);
+            void load();
+          } catch (err: unknown) {
+            message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+          }
+        }}
+      >
+        <p style={{ marginBottom: 8, color: "#6b7280" }}>
+          Điều kiện hiệu lực: sinh viên đã ký và có file PDF hợp đồng đã ký bởi hai bên.
+        </p>
+        <Input
+          placeholder="https://.../hop-dong-da-ky.pdf"
+          value={confirmModal?.signedPdfUrl || ""}
+          onChange={(e) =>
+            setConfirmModal((prev) => (prev ? { ...prev, signedPdfUrl: e.target.value } : null))
+          }
+        />
+      </Modal>
 
       <Modal
         title={`Chi tiết hợp đồng ${detailModal?.contractNumber || ""}`}
@@ -845,10 +876,20 @@ const ContractsPage: React.FC = () => {
                 <p style={{ color: "#ad6800" }}>
                   <strong>Hướng dẫn:</strong>{" "}
                   {detailModal.signedAt
-                    ? "Sinh viên đã ký xác nhận, chờ admin xác nhận để hợp đồng có hiệu lực."
+                    ? detailModal.signedPdfUrl
+                      ? "Sinh viên đã ký và đã có PDF. Admin có thể xác nhận để hợp đồng có hiệu lực."
+                      : "Sinh viên đã ký nhưng chưa có file PDF đã ký. Vui lòng upload PDF trước khi xác nhận."
                     : "Sinh viên chưa ký xác nhận hợp đồng."}
                 </p>
               )}
+              {detailModal.signedPdfUrl ? (
+                <p style={{ marginTop: 8 }}>
+                  <strong>PDF đã ký:</strong>{" "}
+                  <a href={detailModal.signedPdfUrl} target="_blank" rel="noreferrer">
+                    Xem file
+                  </a>
+                </p>
+              ) : null}
               {detailModal.terms ? (
                 <div style={{ marginTop: 16 }}>
                   <strong>Điều khoản bổ sung / ghi chú:</strong>

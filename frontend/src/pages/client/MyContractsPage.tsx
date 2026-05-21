@@ -296,7 +296,7 @@ const MyContractsPage: React.FC = () => {
                   </button>
                   {primary.status === "pending_payment" && !primary.signedAt && (
                     <button type="button" className="btn btn-warning btn-sm w-100" onClick={() => void signContract(primary)}>
-                      Ký xác nhận (chờ admin xác nhận)
+                      Ký xác nhận hợp đồng
                     </button>
                   )}
                   {primary.status === "active" && Boolean(data?.extensionEnabled) && (

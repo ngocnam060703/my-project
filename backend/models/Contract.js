@@ -20,9 +20,17 @@ const contractSchema = new mongoose.Schema(
     contractNumber: { type: String, unique: true },
     terms: { type: String, default: "" },
     signedAt: { type: Date, default: null },
+    studentConfirmedAt: { type: Date, default: null },
+    studentConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     paymentConfirmedAt: { type: Date, default: null },
     paymentConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    adminReviewedAt: { type: Date, default: null },
+    adminReviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    signedPdfUrl: { type: String, default: "" },
+    signedPdfUploadedAt: { type: Date, default: null },
+    signedPdfUploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    cancelReason: { type: String, default: "" },
     /** Giá thuê / tháng (VNĐ) — tuỳ chọn; nếu null UI dùng giá phòng */
     monthlyRent: { type: Number, default: null },
     /** Tiền cọc (VNĐ) — tuỳ chọn */

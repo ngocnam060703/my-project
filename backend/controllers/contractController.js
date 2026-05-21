@@ -13,6 +13,14 @@ const { tryAutoAssignBed } = require("../services/bedAllocation");
 const { releaseBedForContractId } = require("../services/bedOccupancy");
 
 const CONTRACT_EXT_SETTING_KEY = "contract_extension";
+const CONTRACT_STATUSES = ["pending_payment", "active", "expired", "terminated"];
+const HOLD_SLOT_STATUSES = new Set(["pending_payment", "active"]);
+const ALLOWED_STATUS_TRANSITIONS = {
+  pending_payment: ["terminated"],
+  active: ["expired", "terminated"],
+  expired: ["terminated"],
+  terminated: [],
+};
 
 async function isContractExtensionGloballyEnabled() {
   const doc = await ContractExtensionSetting.findOne({ key: CONTRACT_EXT_SETTING_KEY });
@@ -23,6 +31,24 @@ function addCalendarMonths(date, months) {
   const d = new Date(date);
   d.setMonth(d.getMonth() + Number(months));
   return d;
+}
+
+function parseDateValue(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function validateDateRange(startDate, endDate) {
+  if (!startDate || !endDate) return "Thiếu ngày bắt đầu hoặc ngày kết thúc";
+  const start = parseDateValue(startDate);
+  const end = parseDateValue(endDate);
+  if (!start || !end) return "Ngày bắt đầu hoặc ngày kết thúc không hợp lệ";
+  if (start >= end) return "Ngày kết thúc phải sau ngày bắt đầu";
+  return null;
+}
+
+function canUpdateCoreContractData(contract) {
+  return contract.status !== "active" && contract.status !== "expired" && contract.status !== "terminated";
 }
 
 async function notifyAdminsNewExtendRequest({ studentName, contractNumber, months }) {
@@ -56,7 +82,7 @@ async function decrementRoomOccupancy(roomId) {
 }
 
 function statusHoldsSlot(status) {
-  return status === "active" || status === "pending_payment";
+  return HOLD_SLOT_STATUSES.has(String(status || ""));
 }
 
 exports.getAll = async (req, res) => {
@@ -222,9 +248,23 @@ exports.create = async (req, res) => {
     if (!u) return res.status(404).json({ message: "Không tìm thấy sinh viên" });
     const roomDoc = await Room.findById(room);
     if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng" });
+    const dateErr = validateDateRange(startDate, endDate);
+    if (dateErr) return res.status(400).json({ message: dateErr });
     const st = bodyStatus || "pending_payment";
-    if (!["pending_payment", "active", "expired", "terminated"].includes(st)) {
+    if (!CONTRACT_STATUSES.includes(st)) {
       return res.status(400).json({ message: "Trạng thái không hợp lệ" });
+    }
+    if (st === "active") {
+      return res.status(400).json({ message: "Không thể tạo trực tiếp hợp đồng ở trạng thái active" });
+    }
+    const openContract = await Contract.findOne({
+      user,
+      status: { $in: ["pending_payment", "active"] },
+    }).select("_id contractNumber status");
+    if (openContract) {
+      return res.status(400).json({
+        message: `Sinh viên đã có hợp đồng đang mở (${openContract.contractNumber || openContract._id} - ${openContract.status})`,
+      });
     }
     if (statusHoldsSlot(st)) {
       if (roomDoc.currentOccupancy >= roomDoc.capacity) {
@@ -246,8 +286,8 @@ exports.create = async (req, res) => {
       registration: registrationRef,
       user,
       room,
-      startDate: new Date(startDate),
-      endDate: new Date(endDate),
+      startDate: parseDateValue(startDate),
+      endDate: parseDateValue(endDate),
       status: st,
       terms: terms != null ? String(terms) : "",
       contractNumber,
@@ -281,9 +321,32 @@ exports.update = async (req, res) => {
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
 
     const { startDate, endDate, terms, status: newStatus } = req.body;
+    const hasCoreFieldUpdate = startDate !== undefined || endDate !== undefined || terms !== undefined;
+    if (hasCoreFieldUpdate && !canUpdateCoreContractData(contract)) {
+      return res.status(400).json({
+        message: "Hợp đồng đã có hiệu lực hoặc đã kết thúc, không được sửa nội dung. Vui lòng dùng gia hạn/phụ lục/hợp đồng mới.",
+      });
+    }
+
+    const nextStartDate = startDate !== undefined ? startDate : contract.startDate;
+    const nextEndDate = endDate !== undefined ? endDate : contract.endDate;
+    if (startDate !== undefined || endDate !== undefined) {
+      const dateErr = validateDateRange(nextStartDate, nextEndDate);
+      if (dateErr) return res.status(400).json({ message: dateErr });
+    }
+
     if (newStatus !== undefined) {
-      if (!["pending_payment", "active", "expired", "terminated"].includes(newStatus)) {
+      if (!CONTRACT_STATUSES.includes(newStatus)) {
         return res.status(400).json({ message: "Trạng thái không hợp lệ" });
+      }
+      if (newStatus === "active") {
+        return res.status(400).json({ message: "Dùng API xác nhận thanh toán để chuyển sang active" });
+      }
+      if (newStatus !== contract.status) {
+        const allowed = ALLOWED_STATUS_TRANSITIONS[contract.status] || [];
+        if (!allowed.includes(newStatus)) {
+          return res.status(400).json({ message: `Không thể chuyển trạng thái từ ${contract.status} sang ${newStatus}` });
+        }
       }
       const oldHolds = statusHoldsSlot(contract.status);
       const nextHolds = statusHoldsSlot(newStatus);
@@ -301,8 +364,8 @@ exports.update = async (req, res) => {
       }
       contract.status = newStatus;
     }
-    if (startDate !== undefined) contract.startDate = new Date(startDate);
-    if (endDate !== undefined) contract.endDate = new Date(endDate);
+    if (startDate !== undefined) contract.startDate = parseDateValue(startDate);
+    if (endDate !== undefined) contract.endDate = parseDateValue(endDate);
     if (terms !== undefined) contract.terms = String(terms);
     await contract.save();
     const populated = await Contract.findById(contract._id)
@@ -452,8 +515,16 @@ exports.extend = async (req, res) => {
   try {
     const contract = await Contract.findById(req.params.id);
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+    if (contract.status !== "active") {
+      return res.status(400).json({ message: "Chỉ hợp đồng active mới được gia hạn" });
+    }
     const { endDate } = req.body;
-    contract.endDate = new Date(endDate);
+    const parsedEndDate = parseDateValue(endDate);
+    if (!parsedEndDate) return res.status(400).json({ message: "Ngày kết thúc mới không hợp lệ" });
+    if (parsedEndDate <= contract.endDate) {
+      return res.status(400).json({ message: "Ngày kết thúc mới phải lớn hơn ngày kết thúc hiện tại" });
+    }
+    contract.endDate = parsedEndDate;
     await contract.save();
     res.json(contract);
   } catch (error) {
@@ -465,10 +536,15 @@ exports.terminate = async (req, res) => {
   try {
     const contract = await Contract.findById(req.params.id);
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+    if (contract.status === "expired" || contract.status === "terminated") {
+      return res.status(400).json({ message: "Hợp đồng đã kết thúc trước đó" });
+    }
     if (contract.status === "active" || contract.status === "pending_payment") {
       await decrementRoomOccupancy(contract.room);
       await releaseBedForContractId(contract._id, req.user?._id, "Hợp đồng chấm dứt");
     }
+    const reason = String(req.body?.reason || "").trim();
+    if (reason) contract.cancelReason = reason;
     contract.status = "terminated";
     contract.bed = null;
     await contract.save();
@@ -489,6 +565,8 @@ exports.studentSign = async (req, res) => {
       return res.status(400).json({ message: "Hợp đồng không ở trạng thái chờ thanh toán" });
     }
     contract.signedAt = new Date();
+    contract.studentConfirmedAt = contract.signedAt;
+    contract.studentConfirmedBy = req.user._id;
     await contract.save();
 
     const io = getIO();
@@ -520,6 +598,31 @@ exports.studentSign = async (req, res) => {
   }
 };
 
+exports.uploadSignedPdf = async (req, res) => {
+  try {
+    const contract = await Contract.findById(req.params.id);
+    if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+    if (contract.status !== "pending_payment") {
+      return res.status(400).json({ message: "Chỉ được upload file PDF khi hợp đồng đang chờ xác nhận" });
+    }
+    const signedPdfUrl = String(req.body?.signedPdfUrl || "").trim();
+    if (!signedPdfUrl) {
+      return res.status(400).json({ message: "Vui lòng cung cấp đường dẫn file PDF đã ký" });
+    }
+    const lower = signedPdfUrl.toLowerCase();
+    if (!lower.endsWith(".pdf")) {
+      return res.status(400).json({ message: "File hợp đồng phải là PDF" });
+    }
+    contract.signedPdfUrl = signedPdfUrl;
+    contract.signedPdfUploadedAt = new Date();
+    contract.signedPdfUploadedBy = req.user._id;
+    await contract.save();
+    res.json(contract);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.confirmPayment = async (req, res) => {
   try {
     const contract = await Contract.findById(req.params.id);
@@ -530,9 +633,14 @@ exports.confirmPayment = async (req, res) => {
     if (!contract.signedAt) {
       return res.status(400).json({ message: "Sinh viên chưa ký hợp đồng" });
     }
+    if (!contract.signedPdfUrl) {
+      return res.status(400).json({ message: "Chưa có file PDF hợp đồng đã ký. Vui lòng upload trước khi xác nhận." });
+    }
     contract.status = "active";
     contract.paymentConfirmedAt = new Date();
     contract.paymentConfirmedBy = req.user._id;
+    contract.adminReviewedAt = contract.paymentConfirmedAt;
+    contract.adminReviewedBy = req.user._id;
     await contract.save();
 
     // Auto assign bed (best effort) when contract becomes active

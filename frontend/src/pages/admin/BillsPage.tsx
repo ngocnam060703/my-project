@@ -49,6 +49,7 @@ const BillsPage: React.FC = () => {
   });
   const [genMonth, setGenMonth] = useState(new Date().getMonth() + 1);
   const [genYear, setGenYear] = useState(new Date().getFullYear());
+  const [payModal, setPayModal] = useState<{ bill: Bill; method: "counter" | "manual"; reference: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -526,6 +527,61 @@ const BillsPage: React.FC = () => {
             <Button type="primary" htmlType="submit" block>Tạo hóa đơn</Button>
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={payModal ? `Xác nhận thanh toán hóa đơn ${payModal.bill.month}/${payModal.bill.year}` : "Xác nhận thanh toán"}
+        open={!!payModal}
+        onCancel={() => setPayModal(null)}
+        onOk={async () => {
+          if (!payModal) return;
+          try {
+            await billsApi.markPaid(payModal.bill._id, {
+              paymentMethod: payModal.method,
+              paymentReference: payModal.reference.trim() || undefined,
+            });
+            message.success("Đã ghi nhận thanh toán");
+            setPayModal(null);
+            void load();
+          } catch (err: unknown) {
+            message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+          }
+        }}
+      >
+        {payModal && (
+          <div style={{ display: "grid", gap: 12 }}>
+            <div>
+              <strong>Sinh viên:</strong> {(payModal.bill.user as { fullName?: string })?.fullName || "—"}
+            </div>
+            <div>
+              <strong>Số tiền:</strong> {formatMoney(payModal.bill.total)}
+            </div>
+            <div>
+              <strong>Phương thức thu:</strong>
+              <Select
+                style={{ width: "100%", marginTop: 6 }}
+                value={payModal.method}
+                onChange={(v) =>
+                  setPayModal((prev) => (prev ? { ...prev, method: v as "counter" | "manual" } : null))
+                }
+              >
+                <Select.Option value="counter">Thu tại quầy</Select.Option>
+                <Select.Option value="manual">Chuyển khoản / xác nhận thủ công</Select.Option>
+              </Select>
+            </div>
+            <div>
+              <strong>Mã tham chiếu (không bắt buộc):</strong>
+              <Input
+                placeholder="Ví dụ: FT240518-001"
+                style={{ marginTop: 6 }}
+                value={payModal.reference}
+                onChange={(e) =>
+                  setPayModal((prev) => (prev ? { ...prev, reference: e.target.value } : null))
+                }
+              />
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal
