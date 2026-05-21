@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { Form, Input, Button, Card, message } from "antd";
+import { App, Form, Input, Button, Card } from "antd";
 import { UserOutlined, LockOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
@@ -8,6 +8,7 @@ import { getUserString } from "../utils/authStorage";
 
 const LoginPage: React.FC = () => {
   useDocumentTitle("Đăng nhập");
+  const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();

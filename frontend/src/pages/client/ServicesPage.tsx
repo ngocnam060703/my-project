@@ -183,7 +183,7 @@ const ServicesPage: React.FC = () => {
   ];
 
   const serviceTab = (
-    <Space direction="vertical" size={20} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={20} style={{ width: "100%" }}>
       <Card
         style={{ borderRadius: 14, background: "linear-gradient(120deg, #f0f5ff 0%, #fff 55%)" }}
         styles={{ body: { padding: "20px 24px" } }}
@@ -217,7 +217,7 @@ const ServicesPage: React.FC = () => {
             </Space>
           </Col>
           <Col xs={24} md={10} style={{ textAlign: "right" }}>
-            <Space direction="vertical" align="end" size={4} style={{ width: "100%" }}>
+            <Space orientation="vertical" align="end" size={4} style={{ width: "100%" }}>
               <Text type="secondary">
                 <CalendarOutlined /> Kỳ đang thao tác
               </Text>
@@ -253,7 +253,7 @@ const ServicesPage: React.FC = () => {
                 {common.map((s) => (
                   <Col xs={24} sm={12} lg={8} key={s._id}>
                     <Card size="small" style={cardShell("#1677ff")} styles={{ body: { minHeight: 140 } }}>
-                      <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                      <Space orientation="vertical" size={8} style={{ width: "100%" }}>
                         <Space wrap>
                           <Tag color="blue">Chung</Tag>
                           {String(s.name).toLowerCase().includes("tiền phòng") ? <Tag color="gold">Tiền phòng</Tag> : null}
@@ -299,7 +299,7 @@ const ServicesPage: React.FC = () => {
                     return (
                       <Col xs={24} sm={12} lg={8} key={s._id}>
                         <Card size="small" style={cardShell("#722ed1")} styles={{ body: { minHeight: 200 } }}>
-                          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                          <Space orientation="vertical" size={10} style={{ width: "100%" }}>
                             <Tag color="purple">Theo lượt</Tag>
                             <Text strong style={{ fontSize: 16 }}>
                               {s.name}
@@ -344,7 +344,7 @@ const ServicesPage: React.FC = () => {
                   return (
                     <Col xs={24} sm={12} lg={8} key={s._id}>
                       <Card size="small" style={cardShell("#52c41a")} styles={{ body: { minHeight: 180 } }}>
-                        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                        <Space orientation="vertical" size={10} style={{ width: "100%" }}>
                           <Tag color="green">Theo tháng</Tag>
                           <Text strong style={{ fontSize: 16 }}>
                             {s.name}

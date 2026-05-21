@@ -16,4 +16,13 @@ module.exports = function setupProxy(app) {
       logLevel: "warn",
     })
   );
+  app.use(
+    "/socket.io",
+    createProxyMiddleware({
+      target,
+      changeOrigin: true,
+      ws: true,
+      logLevel: "warn",
+    })
+  );
 };

@@ -1164,7 +1164,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
       >
         {detailPayload && (
           <Spin spinning={detailLoading}>
-            <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            <Space orientation="vertical" size="large" style={{ width: "100%" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
                 <Badge status={du?.isActive === false ? "default" : "success"} />
                 <Avatar size={64} src={du?.avatar || undefined} icon={<UserOutlined />} />
@@ -1214,7 +1214,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                     <Descriptions.Item label="SĐT liên hệ khẩn cấp">{du?.familyEmergencyPhone || "—"}</Descriptions.Item>
                     <Descriptions.Item label="Phòng đang ở (theo hợp đồng hiện hành)">
                       {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object" ? (
-                        <Space direction="vertical" size={4}>
+                        <Space orientation="vertical" size={4}>
                           <span>
                             Phòng <strong>{detailPayload.currentRoom.roomNumber}</strong>
                             {typeof detailPayload.currentRoom.area === "object" && detailPayload.currentRoom.area ? (

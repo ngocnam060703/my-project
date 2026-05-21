@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Row, Col, Card, Statistic, Spin, Progress, Switch, Space, message, Button, Modal, Form, Input, DatePicker, Select } from "antd";
+import { App, Row, Col, Card, Statistic, Spin, Progress, Switch, Space, Button, Modal, Form, Input, DatePicker, Select } from "antd";
 import { HomeOutlined, TeamOutlined, FileAddOutlined, WarningOutlined } from "@ant-design/icons";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
 import { useNavigate } from "react-router-dom";
@@ -79,6 +79,7 @@ interface RegistrationPeriod {
 }
 
 const DashboardPage: React.FC = () => {
+  const { message } = App.useApp();
   const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -451,7 +452,7 @@ const DashboardPage: React.FC = () => {
             {periods.length === 0 ? (
               <span>Chưa có đợt đăng ký nào. Vui lòng tạo đợt trước khi bật.</span>
             ) : (
-              <Space direction="vertical" style={{ width: "100%" }}>
+              <Space orientation="vertical" style={{ width: "100%" }}>
                 <div style={{ color: "#6b7280", fontSize: 12 }}>
                   Dùng công tắc phía trên để bật/tắt nhanh đợt đăng ký hiện tại.
                 </div>

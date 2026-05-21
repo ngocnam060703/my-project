@@ -147,7 +147,7 @@ const ServicesPage: React.FC = () => {
 
   return (
     <div style={{ maxWidth: 1280, margin: "0 auto" }}>
-      <Space direction="vertical" size="large" style={{ width: "100%" }}>
+      <Space orientation="vertical" size="large" style={{ width: "100%" }}>
         <div>
           <Title level={3} style={{ marginBottom: 4 }}>
             Dịch vụ KTX
@@ -237,7 +237,7 @@ const ServicesPage: React.FC = () => {
                 key: "name",
                 ellipsis: true,
                 render: (_: unknown, r: Service) => (
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     <Text strong>{r.name}</Text>
                     {r.description ? (
                       <Text type="secondary" style={{ fontSize: 12 }}>

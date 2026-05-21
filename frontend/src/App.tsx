@@ -1,6 +1,6 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
-import { Spin } from "antd";
+import { App as AntdApp, Spin } from "antd";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
@@ -76,10 +76,11 @@ function App() {
   return (
     <ThemeProvider>
       <ErrorBoundary>
-        <BrowserRouter>
-          <AuthProvider>
-            <SocketProvider>
-              <Routes>
+        <AntdApp>
+          <BrowserRouter>
+            <AuthProvider>
+              <SocketProvider>
+                <Routes>
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/manager" element={<Navigate to="/admin" replace />} />
@@ -141,10 +142,11 @@ function App() {
                 <Route path="/contract-renewal/:id" element={<LegacyContractRenewalRedirect />} />
 
                 <Route path="*" element={<NotFoundPage />} />
-              </Routes>
-            </SocketProvider>
-          </AuthProvider>
-        </BrowserRouter>
+                </Routes>
+              </SocketProvider>
+            </AuthProvider>
+          </BrowserRouter>
+        </AntdApp>
       </ErrorBoundary>
     </ThemeProvider>
   );

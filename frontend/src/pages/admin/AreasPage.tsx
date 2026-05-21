@@ -582,7 +582,7 @@ const AreasPage: React.FC = () => {
       >
         <Spin spinning={detailLoading}>
           {detail && z && (
-            <Space direction="vertical" size="large" style={{ width: "100%" }}>
+            <Space orientation="vertical" size="large" style={{ width: "100%" }}>
               <Descriptions bordered size="small" column={1}>
                 <Descriptions.Item label="Mô tả">{z.description || "—"}</Descriptions.Item>
                 <Descriptions.Item label="Phòng (thực tế / quy hoạch)">

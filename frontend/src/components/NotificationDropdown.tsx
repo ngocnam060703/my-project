@@ -40,15 +40,24 @@ const NotificationDropdown: React.FC = () => {
     if (open) load();
   }, [open]);
 
+  const normalizeLink = (link?: string): string | undefined => {
+    if (!link) return undefined;
+    const v = String(link).trim();
+    if (!v) return undefined;
+    if (/^https?:\/\//i.test(v)) return v;
+    return v.startsWith("/") ? v : `/${v}`;
+  };
+
   const handleRead = async (id: string, link?: string) => {
+    const to = normalizeLink(link);
     try {
       await notificationsApi.markRead(id);
       setNotifications((prev) => prev.map((n) => (n._id === id ? { ...n, isRead: true } : n)));
       setUnreadCount((c) => Math.max(0, c - 1));
       setOpen(false);
-      if (link) navigate(link);
+      if (to) navigate(to);
     } catch {
-      if (link) navigate(link);
+      if (to) navigate(to);
     }
   };
 
@@ -93,7 +102,7 @@ const NotificationDropdown: React.FC = () => {
   );
 
   return (
-    <Dropdown dropdownRender={() => content} trigger={["click"]} open={open} onOpenChange={setOpen}>
+    <Dropdown popupRender={() => content} trigger={["click"]} open={open} onOpenChange={setOpen}>
       <Badge count={unreadCount} size="small">
         <Button type="text" icon={<BellOutlined />} style={{ color: "white" }} title="Thông báo" />
       </Badge>

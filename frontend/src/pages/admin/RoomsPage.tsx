@@ -907,7 +907,7 @@ const RoomsPage: React.FC = () => {
                     if (!ss) return <span style={{ color: "#64748b" }}>—</span>;
                     const isApprox = !detailSlotStats[rid];
                     return (
-                      <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                      <Space orientation="vertical" size={10} style={{ width: "100%" }}>
                         {isApprox ? (
                           <div style={{ fontSize: 11, color: "#b45309" }}>Ước lượng theo số chỗ trên phòng — mở Bed Layout để xem slot giường chính xác.</div>
                         ) : null}
@@ -1403,7 +1403,7 @@ const RoomsPage: React.FC = () => {
                   </Space>
                 }
                 description={
-                  <Space direction="vertical" size={6}>
+                  <Space orientation="vertical" size={6}>
                     <span>
                       MSSV: {it.user?.studentId || "-"} | SĐT: {it.user?.phone || "-"} | Email: {it.user?.email || "-"}
                     </span>

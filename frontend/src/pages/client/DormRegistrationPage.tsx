@@ -119,7 +119,7 @@ const DormRegistrationPage: React.FC = () => {
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         <Title level={3} style={{ marginBottom: 0 }}>
           Đăng ký nội trú
         </Title>

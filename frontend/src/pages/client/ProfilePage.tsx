@@ -815,7 +815,7 @@ const ProfilePage: React.FC = () => {
 
   return (
     <div style={{ maxWidth: 1120, margin: "0 auto", padding: "0 8px 48px" }}>
-      <Space direction="vertical" size={24} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={24} style={{ width: "100%" }}>
         <div
           style={{
             borderRadius: 16,
