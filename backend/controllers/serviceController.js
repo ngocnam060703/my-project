@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Service = require("../models/Service");
 const ServiceRegistration = require("../models/ServiceRegistration");
+const LaundryUsage = require("../models/LaundryUsage");
 const RoomService = require("../models/RoomService");
 const ServiceUsage = require("../models/ServiceUsage");
 const Contract = require("../models/Contract");
@@ -11,6 +12,20 @@ function isAdmin(user) {
 
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseMonthYear(month, year) {
+  const m = Number(month);
+  const y = Number(year);
+  if (!(m >= 1 && m <= 12) || y < 2000) return null;
+  return { month: m, year: y };
+}
+
+function sanitizeHybridConfig(input) {
+  const billingModel = input?.billingModel === "hybrid" ? "hybrid" : "single";
+  const monthlyPackagePrice = Math.max(0, Number(input?.monthlyPackagePrice || 0));
+  const includedUsesPerMonth = Math.max(0, Number(input?.includedUsesPerMonth || 0));
+  return { billingModel, monthlyPackagePrice, includedUsesPerMonth };
 }
 
 /** Tên dịch vụ không trùng (không phân biệt hoa thường), toàn hệ thống. */
@@ -53,6 +68,21 @@ exports.createService = async (req, res) => {
     await assertUniqueServiceName(n);
     const mu = measureUnit === "kwh" || measureUnit === "m3" || measureUnit === "month" ? measureUnit : "month";
     const tt = tariffType === "variable" ? "variable" : "fixed";
+    const hybridCfg = sanitizeHybridConfig(req.body);
+    if (hybridCfg.billingModel === "hybrid") {
+      if (type !== "personal") {
+        return res.status(400).json({ message: "billingModel=hybrid chỉ áp dụng cho dịch vụ cá nhân" });
+      }
+      if (unit !== "once") {
+        return res.status(400).json({ message: "Dịch vụ hybrid phải dùng unit=once (đơn giá/lượt)" });
+      }
+      if (!(hybridCfg.monthlyPackagePrice > 0)) {
+        return res.status(400).json({ message: "monthlyPackagePrice phải lớn hơn 0 cho dịch vụ hybrid" });
+      }
+      if (!(hybridCfg.includedUsesPerMonth > 0)) {
+        return res.status(400).json({ message: "includedUsesPerMonth phải lớn hơn 0 cho dịch vụ hybrid" });
+      }
+    }
     const doc = await Service.create({
       name: n,
       type,
@@ -60,6 +90,9 @@ exports.createService = async (req, res) => {
       unit,
       measureUnit: mu,
       tariffType: tt,
+      billingModel: hybridCfg.billingModel,
+      monthlyPackagePrice: hybridCfg.monthlyPackagePrice,
+      includedUsesPerMonth: hybridCfg.includedUsesPerMonth,
       description: description ? String(description) : "",
       isActive: isActive !== undefined ? !!isActive : true,
     });
@@ -89,6 +122,32 @@ exports.updateService = async (req, res) => {
       const p = Number(req.body.price);
       if (!(p > 0)) return res.status(400).json({ message: "Đơn giá phải lớn hơn 0" });
       data.price = p;
+    }
+    ["billingModel", "monthlyPackagePrice", "includedUsesPerMonth"].forEach((k) => {
+      if (req.body[k] !== undefined) data[k] = req.body[k];
+    });
+    const current = await Service.findById(id);
+    if (!current) return res.status(404).json({ message: "Không tìm thấy dịch vụ" });
+    const merged = {
+      type: data.type ?? current.type,
+      unit: data.unit ?? current.unit,
+      billingModel: data.billingModel ?? current.billingModel ?? "single",
+      monthlyPackagePrice: data.monthlyPackagePrice ?? current.monthlyPackagePrice ?? 0,
+      includedUsesPerMonth: data.includedUsesPerMonth ?? current.includedUsesPerMonth ?? 0,
+    };
+    if (merged.billingModel === "hybrid") {
+      if (merged.type !== "personal") {
+        return res.status(400).json({ message: "billingModel=hybrid chỉ áp dụng cho dịch vụ cá nhân" });
+      }
+      if (merged.unit !== "once") {
+        return res.status(400).json({ message: "Dịch vụ hybrid phải dùng unit=once (đơn giá/lượt)" });
+      }
+      if (!(Number(merged.monthlyPackagePrice) > 0)) {
+        return res.status(400).json({ message: "monthlyPackagePrice phải lớn hơn 0 cho dịch vụ hybrid" });
+      }
+      if (!(Number(merged.includedUsesPerMonth) > 0)) {
+        return res.status(400).json({ message: "includedUsesPerMonth phải lớn hơn 0 cho dịch vụ hybrid" });
+      }
     }
     const doc = await Service.findByIdAndUpdate(id, data, { new: true, runValidators: true });
     if (!doc) return res.status(404).json({ message: "Không tìm thấy dịch vụ" });
@@ -161,7 +220,7 @@ exports.getMyServiceRegistrations = async (req, res) => {
 exports.upsertMyServiceRegistration = async (req, res) => {
   try {
     if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
-    const { serviceId, month, year, quantity, enabled } = req.body;
+    const { serviceId, month, year, quantity, enabled, planType } = req.body;
     if (!mongoose.isValidObjectId(String(serviceId || ""))) {
       return res.status(400).json({ message: "serviceId không hợp lệ" });
     }
@@ -173,11 +232,12 @@ exports.upsertMyServiceRegistration = async (req, res) => {
       return res.status(400).json({ message: "Dịch vụ đang ngừng hoạt động" });
     }
 
-    const m = Number(month);
-    const y = Number(year);
-    if (!(m >= 1 && m <= 12) || y < 2000) {
+    const parsed = parseMonthYear(month, year);
+    if (!parsed) {
       return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
     }
+    const m = parsed.month;
+    const y = parsed.year;
 
     const member = await Contract.findOne({
       user: req.user._id,
@@ -186,6 +246,12 @@ exports.upsertMyServiceRegistration = async (req, res) => {
     if (!member) return res.status(403).json({ message: "Bạn chưa là thành viên KTX" });
 
     const q = Math.max(0, Number(quantity ?? 1));
+    const pType = planType === "monthly_package" ? "monthly_package" : "per_use";
+    if (svc.billingModel === "hybrid" && pType === "monthly_package") {
+      if (!(Number(svc.monthlyPackagePrice || 0) > 0) || !(Number(svc.includedUsesPerMonth || 0) > 0)) {
+        return res.status(400).json({ message: "Dịch vụ chưa cấu hình gói tháng hợp lệ" });
+      }
+    }
     const doc = await ServiceRegistration.findOneAndUpdate(
       { user: req.user._id, service: serviceId, month: m, year: y },
       {
@@ -193,13 +259,138 @@ exports.upsertMyServiceRegistration = async (req, res) => {
         service: serviceId,
         month: m,
         year: y,
-        quantity: svc.unit === "once" ? q : 1,
-        enabled: svc.unit === "monthly" ? enabled !== false : q > 0,
+        quantity: svc.billingModel === "hybrid" ? 0 : svc.unit === "once" ? q : 1,
+        planType: svc.billingModel === "hybrid" ? pType : "per_use",
+        packagePriceSnapshot:
+          svc.billingModel === "hybrid" && pType === "monthly_package" ? Number(svc.monthlyPackagePrice || 0) : 0,
+        includedUsesSnapshot:
+          svc.billingModel === "hybrid" && pType === "monthly_package" ? Number(svc.includedUsesPerMonth || 0) : 0,
+        overageUnitPriceSnapshot:
+          svc.billingModel === "hybrid" && pType === "monthly_package" ? Number(svc.price || 0) : 0,
+        enabled: svc.billingModel === "hybrid" ? enabled !== false : svc.unit === "monthly" ? enabled !== false : q > 0,
       },
       { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
     ).populate("service");
 
     res.json(doc);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.recordMyLaundryUse = async (req, res) => {
+  try {
+    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
+    const { serviceId, month, year, quantity = 1, note = "" } = req.body;
+    if (!mongoose.isValidObjectId(String(serviceId || ""))) {
+      return res.status(400).json({ message: "serviceId không hợp lệ" });
+    }
+    const parsed = parseMonthYear(month, year);
+    if (!parsed) return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
+    const q = Math.max(1, Math.floor(Number(quantity) || 1));
+
+    const svc = await Service.findById(serviceId);
+    if (!svc || svc.type !== "personal" || svc.billingModel !== "hybrid") {
+      return res.status(400).json({ message: "Chỉ hỗ trợ ghi nhận lượt cho dịch vụ hybrid cá nhân" });
+    }
+    if (!svc.isActive) return res.status(400).json({ message: "Dịch vụ đang ngừng hoạt động" });
+
+    const member = await Contract.findOne({
+      user: req.user._id,
+      status: { $in: ["active", "pending_payment"] },
+    });
+    if (!member) return res.status(403).json({ message: "Bạn chưa là thành viên KTX" });
+
+    const reg = await ServiceRegistration.findOne({
+      user: req.user._id,
+      service: serviceId,
+      month: parsed.month,
+      year: parsed.year,
+      enabled: true,
+    });
+    if (!reg) {
+      return res.status(400).json({ message: "Bạn chưa đăng ký dịch vụ cho tháng này" });
+    }
+
+    await LaundryUsage.create({
+      user: req.user._id,
+      service: serviceId,
+      month: parsed.month,
+      year: parsed.year,
+      quantity: q,
+      note: String(note || ""),
+    });
+    const agg = await LaundryUsage.aggregate([
+      { $match: { user: req.user._id, service: svc._id, month: parsed.month, year: parsed.year } },
+      { $group: { _id: null, total: { $sum: "$quantity" } } },
+    ]);
+    const usedCount = Number(agg[0]?.total || 0);
+    const includedUses = reg.planType === "monthly_package" ? Number(reg.includedUsesSnapshot || svc.includedUsesPerMonth || 0) : 0;
+
+    return res.status(201).json({
+      message: "Đã ghi nhận lượt sử dụng",
+      planType: reg.planType,
+      usedCount,
+      includedUses,
+      remainingUses: Math.max(0, includedUses - usedCount),
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getMyLaundryUsageSummary = async (req, res) => {
+  try {
+    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
+    const { serviceId, month, year } = req.query;
+    if (!mongoose.isValidObjectId(String(serviceId || ""))) {
+      return res.status(400).json({ message: "serviceId không hợp lệ" });
+    }
+    const parsed = parseMonthYear(month, year);
+    if (!parsed) return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
+
+    const [svc, reg] = await Promise.all([
+      Service.findById(serviceId),
+      ServiceRegistration.findOne({
+        user: req.user._id,
+        service: serviceId,
+        month: parsed.month,
+        year: parsed.year,
+      }),
+    ]);
+    if (!svc || svc.type !== "personal" || svc.billingModel !== "hybrid") {
+      return res.status(400).json({ message: "Dịch vụ không thuộc mô hình hybrid cá nhân" });
+    }
+
+    const agg = await LaundryUsage.aggregate([
+      { $match: { user: req.user._id, service: svc._id, month: parsed.month, year: parsed.year } },
+      { $group: { _id: null, total: { $sum: "$quantity" } } },
+    ]);
+    const usedCount = Number(agg[0]?.total || 0);
+    const currentPlanType = reg?.planType || "per_use";
+    const includedUses =
+      currentPlanType === "monthly_package" ? Number(reg?.includedUsesSnapshot || svc.includedUsesPerMonth || 0) : 0;
+    const monthlyPackagePrice =
+      currentPlanType === "monthly_package" ? Number(reg?.packagePriceSnapshot || svc.monthlyPackagePrice || 0) : 0;
+    const perUsePrice = Number(svc.price || 0);
+    const overageCount = currentPlanType === "monthly_package" ? Math.max(0, usedCount - includedUses) : 0;
+    const estimatedAmount =
+      currentPlanType === "monthly_package" ? monthlyPackagePrice + overageCount * perUsePrice : usedCount * perUsePrice;
+
+    res.json({
+      serviceId: String(svc._id),
+      month: parsed.month,
+      year: parsed.year,
+      enabled: reg?.enabled !== false,
+      planType: currentPlanType,
+      usedCount,
+      includedUses,
+      remainingUses: Math.max(0, includedUses - usedCount),
+      overageCount,
+      perUsePrice,
+      monthlyPackagePrice,
+      estimatedAmount,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

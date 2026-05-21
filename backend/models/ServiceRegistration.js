@@ -7,6 +7,12 @@ const serviceRegistrationSchema = new mongoose.Schema(
     month: { type: Number, required: true, min: 1, max: 12 },
     year: { type: Number, required: true, min: 2000 },
     quantity: { type: Number, default: 1, min: 0 },
+    /** hybrid: per_use | monthly_package */
+    planType: { type: String, enum: ["per_use", "monthly_package"], default: "per_use" },
+    /** Snapshot để giữ đúng đơn giá/quota tại thời điểm đăng ký gói tháng. */
+    packagePriceSnapshot: { type: Number, default: 0, min: 0 },
+    includedUsesSnapshot: { type: Number, default: 0, min: 0 },
+    overageUnitPriceSnapshot: { type: Number, default: 0, min: 0 },
     enabled: { type: Boolean, default: true },
   },
   { timestamps: true }

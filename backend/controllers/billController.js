@@ -4,6 +4,7 @@ const Contract = require("../models/Contract");
 const Notification = require("../models/Notification");
 const Service = require("../models/Service");
 const ServiceRegistration = require("../models/ServiceRegistration");
+const LaundryUsage = require("../models/LaundryUsage");
 const RoomMonthlyCost = require("../models/RoomMonthlyCost");
 const Room = require("../models/Room");
 const User = require("../models/User");
@@ -128,14 +129,26 @@ async function buildPersonalFeeForUser({ userId, month, year }) {
     exactByService.set(String(r.service?._id || r.service), r);
   }
 
+  const hybridServiceIds = personalServices.filter((s) => s.billingModel === "hybrid").map((s) => s._id);
+  const usageByService = new Map();
+  if (hybridServiceIds.length) {
+    const usageAgg = await LaundryUsage.aggregate([
+      { $match: { user: userId, month, year, service: { $in: hybridServiceIds } } },
+      { $group: { _id: "$service", total: { $sum: "$quantity" } } },
+    ]);
+    for (const row of usageAgg) {
+      usageByService.set(String(row._id), Number(row.total || 0));
+    }
+  }
+
   const breakdown = [];
   let total = 0;
   for (const svc of personalServices) {
     const sid = String(svc._id);
     let reg = exactByService.get(sid);
 
-    // Dịch vụ theo tháng: nếu chưa có bản ghi tháng này, lấy đăng ký gần nhất trước đó.
-    if (!reg && svc.unit === "monthly") {
+    // Dịch vụ theo tháng/hybrid: nếu chưa có bản ghi tháng này, lấy đăng ký gần nhất trước đó.
+    if (!reg && (svc.unit === "monthly" || svc.billingModel === "hybrid")) {
       reg = await ServiceRegistration.findOne({
         user: userId,
         service: svc._id,
@@ -148,7 +161,24 @@ async function buildPersonalFeeForUser({ userId, month, year }) {
     if (!reg) continue;
     let amount = 0;
     let quantity = Number(reg.quantity || 1);
-    if (svc.unit === "monthly") {
+    let planType = reg.planType || "per_use";
+    let includedUses = 0;
+    let usedCount = 0;
+    let overageCount = 0;
+    let unitPrice = Number(svc.price || 0);
+    if (svc.billingModel === "hybrid") {
+      if (!reg.enabled) continue;
+      usedCount = Number(usageByService.get(sid) || 0);
+      quantity = usedCount;
+      if (planType === "monthly_package") {
+        const packagePrice = Number(reg.packagePriceSnapshot || svc.monthlyPackagePrice || 0);
+        includedUses = Number(reg.includedUsesSnapshot || svc.includedUsesPerMonth || 0);
+        overageCount = Math.max(0, usedCount - includedUses);
+        amount = packagePrice + overageCount * unitPrice;
+      } else {
+        amount = usedCount * unitPrice;
+      }
+    } else if (svc.unit === "monthly") {
       amount = reg.enabled ? Number(svc.price || 0) : 0;
       quantity = 1;
     } else {
@@ -162,6 +192,11 @@ async function buildPersonalFeeForUser({ userId, month, year }) {
       unit: svc.unit,
       quantity,
       amount,
+      planType,
+      includedUses,
+      usedCount,
+      overageCount,
+      unitPrice,
     });
   }
 

@@ -13,6 +13,12 @@ const serviceSchema = new mongoose.Schema(
     measureUnit: { type: String, enum: ["month", "kwh", "m3"], default: "month" },
     /** Cố định mỗi kỳ vs theo chỉ số (điện/nước). */
     tariffType: { type: String, enum: ["fixed", "variable"], default: "fixed" },
+    /** Mô hình tính phí cá nhân: single (cũ) | hybrid (theo lượt + gói tháng). */
+    billingModel: { type: String, enum: ["single", "hybrid"], default: "single" },
+    /** Giá gói tháng cho dịch vụ hybrid (vd: giặt theo tháng). */
+    monthlyPackagePrice: { type: Number, default: 0, min: 0 },
+    /** Số lượt bao gồm trong gói tháng. */
+    includedUsesPerMonth: { type: Number, default: 0, min: 0 },
     description: { type: String, default: "" },
     isActive: { type: Boolean, default: true },
   },

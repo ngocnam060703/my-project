@@ -12,6 +12,8 @@ router.get("/", serviceController.getServices);
 // Student
 router.get("/my-registrations", requireRole("user"), serviceController.getMyServiceRegistrations);
 router.post("/my-registrations", requireRole("user"), serviceController.upsertMyServiceRegistration);
+router.get("/my-laundry-usage/summary", requireRole("user"), serviceController.getMyLaundryUsageSummary);
+router.post("/my-laundry-usage/use", requireRole("user"), serviceController.recordMyLaundryUse);
 
 // Admin/manager
 router.post("/", requireRole("admin", "manager"), serviceController.createService);

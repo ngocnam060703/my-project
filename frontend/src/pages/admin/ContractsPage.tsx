@@ -86,6 +86,7 @@ const ContractsPage: React.FC = () => {
   const [areas, setAreas] = useState<Array<Pick<Area, "_id" | "name">>>([]);
   const [extendReqs, setExtendReqs] = useState<ContractExtendRequest[]>([]);
   const [rejectExt, setRejectExt] = useState<{ id: string; note: string } | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{ contract: Contract; signedPdfUrl: string } | null>(null);
   const [ops, setOps] = useState<{
     activeContracts: number;
     expiringSoonContracts: number;

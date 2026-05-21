@@ -479,97 +479,110 @@ const ProfilePage: React.FC = () => {
           message="Cập nhật hồ sơ sinh viên đầy đủ"
           description="Bạn có thể tự cập nhật đầy đủ thông tin cá nhân, học tập, gia đình và địa chỉ trên biểu mẫu này."
         />
-        <FormSectionTitle>Thông tin cơ bản</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Họ tên" name="fullName" rules={[{ required: true, message: "Nhập họ tên" }]}>
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Email đăng nhập">
-              <Input size="large" value={profile.email} disabled />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Mã sinh viên" name="studentId" rules={[{ required: true, message: "Nhập mã sinh viên" }]}>
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Lớp" name="className">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Ngành" name="major">
-              {majorOptions.length ? (
-                <Select
+        <StudentFormBlock title="Khối 1 — Thông tin cơ bản" hint="Thông tin định danh cá nhân và học vụ căn bản.">
+          <Row gutter={[20, 0]}>
+            <Col xs={24} lg={12}>
+              <Form.Item label="Họ tên" name="fullName" rules={[{ required: true, message: "Nhập họ tên" }]}>
+                <Input size="large" allowClear />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item label="Email đăng nhập">
+                <Input size="large" value={profile.email} disabled />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item label="Mã sinh viên" name="studentId" rules={[{ required: true, message: "Nhập mã sinh viên" }]}>
+                <Input size="large" allowClear />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item label="Lớp" name="className">
+                <Input size="large" allowClear />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item label="Ngành" name="major">
+                {majorOptions.length ? (
+                  <Select
+                    size="large"
+                    allowClear
+                    showSearch
+                    placeholder="Chọn ngành (từ danh mục)"
+                    optionFilterProp="label"
+                    onChange={(v) => {
+                      const vv = String(v || "").trim();
+                      const picked = majorOptions.find((m) => String(m.faculty || "").trim() === vv);
+                      if (picked) {
+                        form.setFieldsValue({
+                          // Major.name = Khoa/nhóm ngành, Major.faculty = Ngành
+                          major: String(picked.faculty || "").trim(),
+                          facultyGroup: String(picked.name || "").trim(),
+                        });
+                      }
+                    }}
+                    options={majorOptions.map((m) => ({
+                      value: String(m.faculty || "").trim(),
+                      label: m.code
+                        ? `${m.code} — ${String(m.faculty || "").trim()}`
+                        : String(m.faculty || "").trim(),
+                    }))}
+                  />
+                ) : (
+                  <Input size="large" allowClear placeholder="Nhập ngành" />
+                )}
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item label="Giới tính" name="gender">
+                <Input size="large" allowClear />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item
+                name="citizenId"
+                label="CCCD/CMND"
+                rules={[{ pattern: /^\d{9,12}$/, message: "CCCD phải gồm 9-12 chữ số" }]}
+              >
+                <Input size="large" allowClear />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item name="dateOfBirth" label="Ngày sinh">
+                <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
+              </Form.Item>
+            </Col>
+          </Row>
+        </StudentFormBlock>
+
+        <StudentFormBlock title="Khối 2 — Thông tin học tập & địa chỉ" hint="Phục vụ đối soát hồ sơ và liên hệ khi cần.">
+          <Row gutter={[20, 0]}>
+            <Col xs={24} lg={12}>
+              <Form.Item label="Khoa/nhóm ngành" name="facultyGroup">
+                <Input
                   size="large"
                   allowClear
-                  showSearch
-                  placeholder="Chọn ngành (từ danh mục)"
-                  optionFilterProp="label"
-                  onChange={(v) => {
-                    const vv = String(v || "").trim();
-                    const picked = majorOptions.find((m) => String(m.faculty || "").trim() === vv);
-                    if (picked) {
-                      form.setFieldsValue({
-                        // Major.name = Khoa/nhóm ngành, Major.faculty = Ngành
-                        major: String(picked.faculty || "").trim(),
-                        facultyGroup: String(picked.name || "").trim(),
-                      });
-                    }
-                  }}
-                  options={majorOptions.map((m) => ({
-                    value: String(m.faculty || "").trim(),
-                    label: m.code
-                      ? `${m.code} — ${String(m.faculty || "").trim()}`
-                      : String(m.faculty || "").trim(),
-                  }))}
+                  disabled={majorOptions.length > 0}
+                  placeholder={majorOptions.length ? "Tự điền theo ngành" : ""}
                 />
-              ) : (
-                <Input size="large" allowClear placeholder="Nhập ngành" />
-              )}
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Giới tính" name="gender">
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="citizenId" label="CCCD/CMND" rules={[{ pattern: /^\d{9,12}$/, message: "CCCD phải gồm 9-12 chữ số" }]}>
-              <Input size="large" allowClear />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item name="dateOfBirth" label="Ngày sinh">
-              <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
-            </Form.Item>
-          </Col>
-        </Row>
-        <FormSectionTitle>Thông tin học tập</FormSectionTitle>
-        <Row gutter={[20, 0]}>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Khoa/nhóm ngành" name="facultyGroup">
-              <Input size="large" allowClear disabled={majorOptions.length > 0} placeholder={majorOptions.length ? "Tự điền theo ngành" : ""} />
-            </Form.Item>
-          </Col>
-          <Col xs={24} lg={12}>
-            <Form.Item label="Khóa" name="faculty">
-              <Input size="large" allowClear placeholder="VD: K26" />
-            </Form.Item>
-            <Form.Item name="addressPermanent" label="Thường trú">
-              <Input.TextArea rows={2} showCount maxLength={500} />
-            </Form.Item>
-            <Form.Item name="addressTemporary" label="Tạm trú">
-              <Input.TextArea rows={2} showCount maxLength={500} />
-            </Form.Item>
-            <Form.Item name="addressAbsent" label="Tạm vắng" style={{ marginBottom: 0 }}>
-              <Input.TextArea rows={2} showCount maxLength={500} />
-            </Form.Item>
-          </StudentFormBlock>
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item label="Khóa" name="faculty">
+                <Input size="large" allowClear placeholder="VD: K26" />
+              </Form.Item>
+              <Form.Item name="addressPermanent" label="Thường trú">
+                <Input.TextArea rows={2} showCount maxLength={500} />
+              </Form.Item>
+              <Form.Item name="addressTemporary" label="Tạm trú">
+                <Input.TextArea rows={2} showCount maxLength={500} />
+              </Form.Item>
+              <Form.Item name="addressAbsent" label="Tạm vắng" style={{ marginBottom: 0 }}>
+                <Input.TextArea rows={2} showCount maxLength={500} />
+              </Form.Item>
+            </Col>
+          </Row>
+        </StudentFormBlock>
 
           <StudentFormBlock
             title="Khối 4 — Liên hệ khẩn cấp"
@@ -631,7 +644,6 @@ const ProfilePage: React.FC = () => {
               />
             )}
           </StudentFormBlock>
-        </Space>
         <Divider style={{ margin: "8px 0 20px" }} />
         <Form.Item style={{ marginBottom: 0 }}>
           <Flex gap="middle" wrap="wrap">
