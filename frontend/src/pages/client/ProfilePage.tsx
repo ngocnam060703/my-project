@@ -24,7 +24,7 @@ import {
 import dayjs from "dayjs";
 import { EditOutlined, HomeOutlined, UserOutlined, IdcardOutlined, BookOutlined, PhoneOutlined } from "@ant-design/icons";
 import { authApi, majorsApi, studentsApi } from "../../api";
-import type { StudentProfileResponse } from "../../types";
+import type { StudentPriorityType, StudentProfileResponse } from "../../types";
 import { useAuth } from "../../contexts/AuthContext";
 import { setUserString } from "../../utils/authStorage";
 
@@ -150,7 +150,10 @@ interface ProfilePayload {
   addressNative?: string;
   addressPermanent?: string;
   addressTemporary?: string;
-  addressAbsent?: string;
+  ethnicity?: string;
+  priorityType?: StudentPriorityType;
+  priorityProofUrl?: string | null;
+  checkInDate?: string | null;
   familyFatherName?: string;
   familyFatherPhone?: string;
   familyMotherName?: string;
@@ -158,6 +161,14 @@ interface ProfilePayload {
   familyEmergencyPhone?: string;
   avatar?: string;
 }
+
+const PRIORITY_OPTIONS: { label: string; value: StudentPriorityType }[] = [
+  { label: "Bình thường", value: "normal" },
+  { label: "Con liệt sĩ", value: "martyr_child" },
+  { label: "Con thương binh", value: "invalid_child" },
+  { label: "Dân tộc thiểu số", value: "minority" },
+  { label: "Tàn tật", value: "disabled" },
+];
 
 type MajorOption = { _id: string; code?: string; name: string; faculty?: string; isActive?: boolean };
 
@@ -173,6 +184,8 @@ const ProfilePage: React.FC = () => {
   /** Sinh viên đã đủ hồ sơ: bật form khi bấm «Chỉnh sửa hồ sơ» */
   const [editingProfile, setEditingProfile] = useState(false);
   const [majorOptions, setMajorOptions] = useState<MajorOption[]>([]);
+  const [priorityProofFile, setPriorityProofFile] = useState<File | null>(null);
+  const [priorityProofPreviewUrl, setPriorityProofPreviewUrl] = useState<string | null>(null);
 
   const syncAuthUser = useCallback((p: ProfilePayload) => {
     setUser((prev) => {
@@ -202,6 +215,14 @@ const ProfilePage: React.FC = () => {
         try {
           const detail = (await studentsApi.getMe()).data as StudentProfileResponse;
           activeProfile = detail.student as ProfilePayload;
+          activeProfile = {
+            ...activeProfile,
+            checkInDate:
+              detail.student?.checkInDate ||
+              detail.currentContract?.startDate ||
+              activeProfile.checkInDate ||
+              null,
+          };
           setProfile(activeProfile);
           syncAuthUser(activeProfile);
           setRoom((detail.currentRoom ?? null) as DashboardRoom | null);
@@ -236,13 +257,17 @@ const ProfilePage: React.FC = () => {
         addressNative: activeProfile.addressNative,
         addressPermanent: activeProfile.addressPermanent,
         addressTemporary: activeProfile.addressTemporary,
-        addressAbsent: activeProfile.addressAbsent,
+        ethnicity: activeProfile.ethnicity,
+        priorityType: activeProfile.priorityType || "normal",
+        priorityProofUrl: activeProfile.priorityProofUrl || null,
         familyFatherName: activeProfile.familyFatherName,
         familyFatherPhone: activeProfile.familyFatherPhone,
         familyMotherName: activeProfile.familyMotherName,
         familyMotherPhone: activeProfile.familyMotherPhone,
         familyEmergencyPhone: activeProfile.familyEmergencyPhone,
       });
+      setPriorityProofFile(null);
+      setPriorityProofPreviewUrl(activeProfile.priorityProofUrl || null);
     } catch {
       message.error("Không tải được hồ sơ");
     } finally {
@@ -268,18 +293,29 @@ const ProfilePage: React.FC = () => {
   const onFinishStudent = async (v: Record<string, unknown>) => {
     setSaving(true);
     try {
+      const priorityType = (v.priorityType as StudentPriorityType | undefined) || "normal";
+      const existingProofUrl = (v.priorityProofUrl as string | null | undefined) || null;
+      const needsProof = priorityType !== "normal";
+      if (needsProof && !priorityProofFile && !existingProofUrl) {
+        message.error("Vui lòng tải minh chứng cho diện ưu tiên đã chọn.");
+        setSaving(false);
+        return;
+      }
+
       const normalizeFormDate = (value: unknown): string | null | undefined => {
         if (value === null) return null;
         if (value === undefined || value === "") return undefined;
         const d = dayjs(value as dayjs.ConfigType);
         return d.isValid() ? d.format("YYYY-MM-DD") : undefined;
       };
+      const proofUrlFromFile = priorityProofFile ? URL.createObjectURL(priorityProofFile) : undefined;
       const res = await studentsApi.updateMe({
         fullName: v.fullName as string,
         phone: v.phone as string,
         studentId: v.studentId as string,
         className: v.className as string,
         major: v.major as string,
+        facultyGroup: v.facultyGroup as string | undefined,
         gender: v.gender as string,
         citizenId: v.citizenId as string,
         dateOfBirth: normalizeFormDate(v.dateOfBirth),
@@ -291,7 +327,9 @@ const ProfilePage: React.FC = () => {
         addressNative: v.addressNative as string | undefined,
         addressPermanent: v.addressPermanent as string | undefined,
         addressTemporary: v.addressTemporary as string | undefined,
-        addressAbsent: v.addressAbsent as string | undefined,
+        ethnicity: v.ethnicity as string | undefined,
+        priorityType,
+        priorityProofUrl: priorityType === "normal" ? null : proofUrlFromFile || existingProofUrl || null,
         familyFatherName: v.familyFatherName as string | undefined,
         familyFatherPhone: v.familyFatherPhone as string | undefined,
         familyMotherName: v.familyMotherName as string | undefined,
@@ -307,6 +345,14 @@ const ProfilePage: React.FC = () => {
         memberStatusLabel: detail.residenceStatus === "dang_o" ? "Đang ở" : "Đã rời",
       });
       syncAuthUser(updated);
+      window.dispatchEvent(
+        new CustomEvent("student-profile-updated", {
+          detail: {
+            ...updated,
+            priorityProofUrl: priorityType === "normal" ? null : proofUrlFromFile || existingProofUrl || updated.priorityProofUrl || null,
+          },
+        }),
+      );
       setEditingProfile(false);
       message.success("Đã cập nhật hồ sơ");
     } catch (e: unknown) {
@@ -361,13 +407,17 @@ const ProfilePage: React.FC = () => {
       addressNative: profile.addressNative,
       addressPermanent: profile.addressPermanent,
       addressTemporary: profile.addressTemporary,
-      addressAbsent: profile.addressAbsent,
+      ethnicity: profile.ethnicity,
+      priorityType: profile.priorityType || "normal",
+      priorityProofUrl: profile.priorityProofUrl || null,
       familyFatherName: profile.familyFatherName,
       familyFatherPhone: profile.familyFatherPhone,
       familyMotherName: profile.familyMotherName,
       familyMotherPhone: profile.familyMotherPhone,
       familyEmergencyPhone: profile.familyEmergencyPhone,
     });
+    setPriorityProofFile(null);
+    setPriorityProofPreviewUrl(profile.priorityProofUrl || null);
     setEditingProfile(true);
   };
 
@@ -548,6 +598,11 @@ const ProfilePage: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} lg={12}>
+              <Form.Item name="ethnicity" label="Dân tộc">
+                <Input size="large" allowClear placeholder="VD: Kinh, Tày, Nùng..." />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
               <Form.Item name="dateOfBirth" label="Ngày sinh">
                 <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
               </Form.Item>
@@ -571,14 +626,88 @@ const ProfilePage: React.FC = () => {
               <Form.Item label="Khóa" name="faculty">
                 <Input size="large" allowClear placeholder="VD: K26" />
               </Form.Item>
+            </Col>
+            <Col xs={24}>
+              <Form.Item name="addressNative" label="Quê quán">
+                <Input.TextArea rows={2} showCount maxLength={500} placeholder="VD: Xã ..., huyện ..., tỉnh ..." />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
               <Form.Item name="addressPermanent" label="Thường trú">
                 <Input.TextArea rows={2} showCount maxLength={500} />
               </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
               <Form.Item name="addressTemporary" label="Tạm trú">
                 <Input.TextArea rows={2} showCount maxLength={500} />
               </Form.Item>
-              <Form.Item name="addressAbsent" label="Tạm vắng" style={{ marginBottom: 0 }}>
-                <Input.TextArea rows={2} showCount maxLength={500} />
+            </Col>
+          </Row>
+        </StudentFormBlock>
+
+        <StudentFormBlock
+          title="Khối 3 — Diện chính sách/ưu tiên"
+          hint="Nếu chọn diện ưu tiên khác Bình thường, bạn phải tải giấy tờ minh chứng."
+        >
+          <Row gutter={[20, 0]}>
+            <Col xs={24} lg={12}>
+              <Form.Item name="priorityType" label="Diện ưu tiên" initialValue="normal">
+                <Select size="large" options={PRIORITY_OPTIONS} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item noStyle shouldUpdate={(prev, curr) => prev.priorityType !== curr.priorityType}>
+                {({ getFieldValue, setFieldValue }) => {
+                  const selectedPriority = (getFieldValue("priorityType") as StudentPriorityType | undefined) || "normal";
+                  if (selectedPriority === "normal") {
+                    return (
+                      <Alert
+                        type="success"
+                        showIcon
+                        message="Không yêu cầu minh chứng"
+                        description="Bạn đang chọn diện Bình thường."
+                        style={{ borderRadius: 10, marginTop: 4 }}
+                      />
+                    );
+                  }
+                  return (
+                    <>
+                      <Form.Item name="priorityProofUrl" hidden>
+                        <Input />
+                      </Form.Item>
+                      <Form.Item
+                        label="Giấy tờ minh chứng"
+                        required
+                        help={priorityProofPreviewUrl ? "Đã có minh chứng. Bạn có thể chọn file khác để thay thế." : undefined}
+                      >
+                        <input
+                          type="file"
+                          accept=".pdf,.png,.jpg,.jpeg,.webp"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] || null;
+                            setPriorityProofFile(file);
+                            if (file) {
+                              const nextUrl = URL.createObjectURL(file);
+                              setPriorityProofPreviewUrl(nextUrl);
+                              setFieldValue("priorityProofUrl", nextUrl);
+                            } else {
+                              setPriorityProofPreviewUrl(null);
+                              setFieldValue("priorityProofUrl", null);
+                            }
+                          }}
+                        />
+                        {priorityProofPreviewUrl && (
+                          <div style={{ marginTop: 8 }}>
+                            <Text type="secondary" style={{ fontSize: 12 }}>Đường dẫn minh chứng:</Text>{" "}
+                            <a href={priorityProofPreviewUrl} target="_blank" rel="noreferrer">
+                              Xem file hiện tại
+                            </a>
+                          </div>
+                        )}
+                      </Form.Item>
+                    </>
+                  );
+                }}
               </Form.Item>
             </Col>
           </Row>
@@ -633,6 +762,7 @@ const ProfilePage: React.FC = () => {
                 <Descriptions.Item label="Tầng">{room.floor ?? "—"}</Descriptions.Item>
                 <Descriptions.Item label="Loại phòng">{room.roomType ?? "—"}</Descriptions.Item>
                 <Descriptions.Item label="Trạng thái cư trú">{dashMeta.memberStatusLabel || "—"}</Descriptions.Item>
+                <Descriptions.Item label="Ngày vào ở">{formatDateVi(profile.checkInDate)}</Descriptions.Item>
               </Descriptions>
             ) : (
               <Alert
@@ -764,7 +894,17 @@ const ProfilePage: React.FC = () => {
                   <Descriptions.Item label="Quê quán">{profile.addressNative || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Thường trú">{profile.addressPermanent || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Tạm trú">{profile.addressTemporary || "—"}</Descriptions.Item>
-                  <Descriptions.Item label="Tạm vắng">{profile.addressAbsent || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Dân tộc">{profile.ethnicity || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="Diện ưu tiên">
+                    {PRIORITY_OPTIONS.find((item) => item.value === (profile.priorityType || "normal"))?.label || "Bình thường"}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Minh chứng ưu tiên">
+                    {profile.priorityProofUrl ? (
+                      <a href={profile.priorityProofUrl} target="_blank" rel="noreferrer">Xem minh chứng</a>
+                    ) : (
+                      "—"
+                    )}
+                  </Descriptions.Item>
                   <Descriptions.Item label="Bố — họ tên">{profile.familyFatherName || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Bố — SĐT">{profile.familyFatherPhone || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Mẹ — họ tên">{profile.familyMotherName || "—"}</Descriptions.Item>
@@ -795,6 +935,7 @@ const ProfilePage: React.FC = () => {
                       <Descriptions.Item label="Khu / ký túc xá">{formatRoomArea(room.area)}</Descriptions.Item>
                       <Descriptions.Item label="Tầng">{room.floor ?? "—"}</Descriptions.Item>
                       <Descriptions.Item label="Loại phòng">{room.roomType ?? "—"}</Descriptions.Item>
+                      <Descriptions.Item label="Ngày vào ở">{formatDateVi(profile.checkInDate)}</Descriptions.Item>
                     </Descriptions>
                   </>
                 ) : (

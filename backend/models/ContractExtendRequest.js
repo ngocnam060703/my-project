@@ -23,6 +23,8 @@ const contractExtendRequestSchema = new mongoose.Schema(
     note: { type: String, default: "" },
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     reviewedAt: { type: Date, default: null },
+    /** Đợt gia hạn tại thời điểm gửi yêu cầu */
+    extensionPeriod: { type: mongoose.Schema.Types.ObjectId, ref: "ContractExtensionPeriod", default: null },
   },
   { timestamps: true }
 );

@@ -6,8 +6,11 @@ const User = require("../models/User");
 const { getIO } = require("../socket");
 const { isSchoolYearNotPast } = require("../utils/schoolYear");
 const RegistrationPeriod = require("../models/RegistrationPeriod");
+const { findOpenRegistrationPeriod } = require("../services/registrationPeriodPolicy");
 const { hasDormRegistrationProfile, REQUIRED_DORM_REGISTRATION_FIELDS } = require("../utils/profileComplete");
 const { assignRoomForStudent } = require("../utils/assignRoom");
+const { releaseBedForContractId } = require("../services/bedOccupancy");
+const { syncOccupancyForRooms, recountRoomOccupancyForRoom } = require("../services/roomOccupancySync");
 
 function inferSemesterSchoolYearFromDate(date = new Date()) {
   const d = new Date(date);
@@ -207,7 +210,7 @@ exports.create = async (req, res) => {
     const periodCount = await RegistrationPeriod.countDocuments();
     if (periodCount > 0) {
       const now = new Date();
-      const period = await RegistrationPeriod.findOne({ isActive: true, startDate: { $lte: now }, endDate: { $gte: now } });
+      const period = await findOpenRegistrationPeriod(now);
       if (!period) {
         return res.status(400).json({ message: "Đăng ký nội trú hiện đã đóng. Vui lòng đợi đợt đăng ký tiếp theo." });
       }
@@ -283,18 +286,21 @@ exports.approve = async (req, res) => {
         return res.status(400).json({ message: "Chỉ được duyệt chuyển phòng trong cùng khu" });
       }
 
-      fromRoom.currentOccupancy = Math.max(0, (fromRoom.currentOccupancy || 0) - 1);
-      fromRoom.status = fromRoom.currentOccupancy >= fromRoom.capacity ? "full" : "available";
       if (String(fromRoom.roomLeader || "") === String(reg.user._id)) {
         fromRoom.roomLeader = null;
+        await fromRoom.save();
       }
 
-      room.currentOccupancy += 1;
-      room.status = room.currentOccupancy >= room.capacity ? "full" : "available";
-      if (!room.roomLeader) room.roomLeader = reg.user._id;
-
+      await releaseBedForContractId(resolvedContract._id, req.user?._id || null, "Chuyển phòng (duyệt đơn)");
       resolvedContract.room = room._id;
-      await Promise.all([reg.save(), fromRoom.save(), room.save(), resolvedContract.save()]);
+      resolvedContract.bed = null;
+      if (!room.roomLeader) {
+        room.roomLeader = reg.user._id;
+        await room.save();
+      }
+
+      await Promise.all([reg.save(), resolvedContract.save()]);
+      await syncOccupancyForRooms([fromRoom._id, room._id]);
 
       const io = getIO();
       io.emit("registration:approved", { userId: reg.user._id.toString(), message: "Đơn chuyển phòng của bạn đã được duyệt" });
@@ -309,8 +315,6 @@ exports.approve = async (req, res) => {
     }
 
     await reg.save();
-    room.currentOccupancy += 1;
-    room.status = room.currentOccupancy >= room.capacity ? "full" : "available";
     if (!room.roomLeader) room.roomLeader = reg.user._id;
     await room.save();
     const startDate = reg.startDate ? new Date(reg.startDate) : new Date();
@@ -335,6 +339,7 @@ exports.approve = async (req, res) => {
       signedAt: null,
       createdBy: req.user._id,
     });
+    await recountRoomOccupancyForRoom(reg.room._id);
     res.json({ registration: reg, contract });
   } catch (error) {
     res.status(500).json({ message: error.message });

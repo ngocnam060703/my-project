@@ -12,11 +12,15 @@ interface Period {
   isActive: boolean;
 }
 
+const isOpenNow = (p: Period, now = dayjs()) =>
+  !!p.isActive && !now.isBefore(dayjs(p.startDate)) && !now.isAfter(dayjs(p.endDate));
+
 const RegistrationPeriodsPage: React.FC = () => {
   const [data, setData] = useState<Period[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [form] = Form.useForm();
 
   const load = async () => {
@@ -32,6 +36,17 @@ const RegistrationPeriodsPage: React.FC = () => {
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const expiredButActive = data.find((p) => p.isActive && dayjs(nowMs).isAfter(dayjs(p.endDate)));
+
+  useEffect(() => {
+    if (!expiredButActive) return;
+    void load();
+  }, [expiredButActive?._id, nowMs]);
 
   const onFinish = async (v: { name: string; startDate: ReturnType<typeof dayjs>; endDate: ReturnType<typeof dayjs> }) => {
     try {
@@ -86,13 +101,15 @@ const RegistrationPeriodsPage: React.FC = () => {
             render: (_: unknown, r: Period) => (
               <Space>
                 <Switch
-                  checked={r.isActive}
+                  checked={isOpenNow(r, dayjs(nowMs))}
                   loading={togglingId === r._id}
                   checkedChildren="Bật"
                   unCheckedChildren="Tắt"
                   onChange={(checked) => handleToggleActive(r, checked)}
                 />
-                <span style={{ color: "#6b7280", fontSize: 12 }}>{r.isActive ? "Đang mở" : "Đã đóng"}</span>
+                <span style={{ color: "#6b7280", fontSize: 12 }}>
+                  {isOpenNow(r, dayjs(nowMs)) ? "Đang mở" : r.isActive ? "Đã hết hạn" : "Đã đóng"}
+                </span>
               </Space>
             ),
           },

@@ -27,6 +27,11 @@ exports.createUserRules = [
     .withMessage("Mật khẩu tối thiểu 6 ký tự"),
   optionalAvatarUrl(),
   body("role").optional().isIn(["user", "student", "manager", "admin"]).withMessage("Vai trò không hợp lệ"),
+  body("ethnicity").optional().trim().isLength({ max: 100 }).withMessage("Dân tộc không hợp lệ"),
+  body("priorityType")
+    .optional()
+    .isIn(["normal", "martyr_child", "invalid_child", "minority", "disabled"])
+    .withMessage("Đối tượng ưu tiên không hợp lệ"),
 ];
 
 exports.updateUserRules = [
@@ -40,6 +45,11 @@ exports.updateUserRules = [
   body("fullName").optional().trim().notEmpty().withMessage("Tên không được để trống"),
   optionalAvatarUrl(),
   body("role").optional().isIn(["user", "student", "manager", "admin"]).withMessage("Vai trò không hợp lệ"),
+  body("ethnicity").optional().trim().isLength({ max: 100 }).withMessage("Dân tộc không hợp lệ"),
+  body("priorityType")
+    .optional()
+    .isIn(["normal", "martyr_child", "invalid_child", "minority", "disabled"])
+    .withMessage("Đối tượng ưu tiên không hợp lệ"),
   body("password")
     .optional()
     .isString()

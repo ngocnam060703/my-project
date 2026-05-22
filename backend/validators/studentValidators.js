@@ -34,6 +34,36 @@ const studentCitizenRule = body("citizenId")
   })
   .withMessage("CCCD phải gồm 9-12 chữ số");
 
+const priorityTypeRule = body("priorityType")
+  .optional()
+  .isIn(["normal", "martyr_child", "invalid_child", "minority", "disabled"])
+  .withMessage("Diện ưu tiên không hợp lệ");
+
+const priorityProofRule = body("priorityProofUrl")
+  .optional({ values: "falsy" })
+  .custom((v) => {
+    if (v == null || String(v).trim() === "") return true;
+    const value = String(v).trim();
+    if (value.startsWith("blob:")) return true; // cho phép mock URL ở local frontend
+    try {
+      const u = new URL(value);
+      if (u.protocol !== "http:" && u.protocol !== "https:") {
+        throw new Error("Link minh chứng phải là URL http(s)");
+      }
+      return true;
+    } catch {
+      throw new Error("Link minh chứng không hợp lệ");
+    }
+  });
+
+const priorityProofRequiredWhenPolicy = body("priorityProofUrl").custom((value, { req }) => {
+  const t = String(req.body?.priorityType || "normal");
+  if (t !== "normal" && (!value || String(value).trim() === "")) {
+    throw new Error("Phải có minh chứng khi chọn diện ưu tiên");
+  }
+  return true;
+});
+
 exports.studentIdParam = [param("id").isMongoId().withMessage("ID sinh viên không hợp lệ")];
 
 exports.createStudentRules = [
@@ -48,6 +78,10 @@ exports.createStudentRules = [
   body("enrollmentDate").optional({ values: "falsy" }).isISO8601().withMessage("Ngày nhập học không hợp lệ"),
   studentPhoneRule,
   studentCitizenRule,
+  body("ethnicity").optional().trim().isLength({ max: 100 }).withMessage("Dân tộc không hợp lệ"),
+  priorityTypeRule,
+  priorityProofRule,
+  priorityProofRequiredWhenPolicy,
   optionalAvatarUrl(),
 ];
 
@@ -60,6 +94,10 @@ exports.adminUpdateStudentRules = [
   body("enrollmentDate").optional({ values: "falsy" }).isISO8601().withMessage("Ngày nhập học không hợp lệ"),
   studentPhoneRule,
   studentCitizenRule,
+  body("ethnicity").optional().trim().isLength({ max: 100 }).withMessage("Dân tộc không hợp lệ"),
+  priorityTypeRule,
+  priorityProofRule,
+  priorityProofRequiredWhenPolicy,
   optionalAvatarUrl(),
 ];
 
@@ -74,5 +112,9 @@ exports.studentSelfUpdateRules = [
   body("dateOfBirth").optional({ values: "falsy" }).isISO8601().withMessage("Ngày sinh không hợp lệ"),
   body("enrollmentDate").optional({ values: "falsy" }).isISO8601().withMessage("Ngày nhập học không hợp lệ"),
   studentCitizenRule,
+  body("ethnicity").optional().trim().isLength({ max: 100 }).withMessage("Dân tộc không hợp lệ"),
+  priorityTypeRule,
+  priorityProofRule,
+  priorityProofRequiredWhenPolicy,
   optionalAvatarUrl(),
 ];

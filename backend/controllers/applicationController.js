@@ -7,6 +7,7 @@ const Notification = require("../models/Notification");
 const { getIO } = require("../socket");
 const { isSchoolYearNotPast } = require("../utils/schoolYear");
 const RegistrationPeriod = require("../models/RegistrationPeriod");
+const { findOpenRegistrationPeriod } = require("../services/registrationPeriodPolicy");
 const { hasDormRegistrationProfile, REQUIRED_DORM_REGISTRATION_FIELDS } = require("../utils/profileComplete");
 const {
   normalizeGender,
@@ -302,7 +303,7 @@ exports.create = async (req, res) => {
     const periodCount = await RegistrationPeriod.countDocuments();
     if (periodCount > 0) {
       const now = new Date();
-      const period = await RegistrationPeriod.findOne({ isActive: true, startDate: { $lte: now }, endDate: { $gte: now } });
+      const period = await findOpenRegistrationPeriod(now);
       if (!period) {
         return res.status(400).json({ message: "Đợt đăng ký hiện đã đóng. Vui lòng đợi đợt tiếp theo." });
       }
@@ -500,6 +501,9 @@ exports.approve = async (req, res) => {
       await room.save();
     }
     await app.save();
+
+    const { recountRoomOccupancyForRoom } = require("../services/roomOccupancySync");
+    await recountRoomOccupancyForRoom(room._id);
 
     const io = getIO();
     io.emit("application:approved", { userId: String(app.user), message: "Đơn đăng ký KTX của bạn đã được duyệt" });

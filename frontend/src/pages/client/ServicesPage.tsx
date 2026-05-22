@@ -29,6 +29,7 @@ import {
 import dayjs, { type Dayjs } from "dayjs";
 import "dayjs/locale/vi";
 import { servicesApi } from "../../api";
+import PersonalServiceRegistration from "../../components/services/PersonalServiceRegistration";
 
 dayjs.locale("vi");
 
@@ -286,6 +287,9 @@ const ServicesPage: React.FC = () => {
               </Title>
               <Badge count={personal.length} style={{ backgroundColor: "#722ed1" }} />
             </Space>
+            <div style={{ marginBottom: 16 }}>
+              <PersonalServiceRegistration />
+            </div>
             {personal.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dịch vụ cá nhân" />
             ) : (

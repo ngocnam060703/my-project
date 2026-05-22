@@ -11,18 +11,15 @@ const User = require("../models/User");
 const { getIO } = require("../socket");
 const { dueDateForBillingMonth } = require("../services/billingDueDate");
 const { refreshOverdueMonthlyBills } = require("../services/billingOverdue");
+const { ensureBillCodesForList, assignBillCodeIfMissing } = require("../services/billCodeGenerator");
+const { settleBillAtCounter, settleBillViaVnpay, canSettleBillStatus } = require("../services/billPaymentService");
+const { closeMeterPeriodForRoom } = require("../services/meterBillingService");
 const {
   buildBillPaymentUrl,
   verifyReturnQuery,
   parseBillIdFromTxnRef,
   getClientReturnBaseUrl,
 } = require("../services/vnpayGateway");
-/** Trạng thái coi là chưa thanh toán (tương thích pending cũ + unpaid mới) */
-const UNPAID_STATUSES = ["unpaid", "pending"];
-
-function canSettleBillStatus(status) {
-  return status === "overdue" || UNPAID_STATUSES.includes(status);
-}
 
 function parseDateOrNull(value) {
   if (!value) return null;
@@ -241,25 +238,71 @@ exports.getAll = async (req, res) => {
     if (room) filter.room = room;
     if (month) filter.month = parseInt(month, 10);
     if (year) filter.year = parseInt(year, 10);
-    if (billType === "monthly" || billType === "penalty") filter.billType = billType;
+    if (billType === "monthly" || billType === "penalty" || billType === "damage_reimbursement") {
+      filter.billType = billType;
+    }
     if (search && String(search).trim()) {
-      const rx = new RegExp(String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-      const users = await User.find({ fullName: rx, role: "user", isDeleted: { $ne: true } }).select("_id");
-      filter.user = { $in: users.map((u) => u._id) };
+      const q = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const rx = new RegExp(q, "i");
+      const users = await User.find({
+        $or: [{ fullName: rx }, { studentId: rx }],
+        role: { $in: ["user", "student"] },
+        isDeleted: { $ne: true },
+      }).select("_id");
+      const orConditions = [{ billCode: rx }];
+      if (users.length) {
+        orConditions.push({ user: { $in: users.map((u) => u._id) } });
+      }
+      filter.$or = orConditions;
     } else if (user) {
       filter.user = user;
     }
     const bills = await Bill.find(filter)
-      .populate("user", "fullName email phone")
+      .populate("user", "fullName email phone studentId")
+      .populate("paidBy", "fullName role")
       .populate("contract", "contractNumber status startDate endDate")
       .populate("room")
       .populate("room.area", "name")
       .populate("violation", "ruleName description fineAmount compensationAmount createdAt")
+      .populate("maintenanceReport", "requestCode incidentType description resolutionType")
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
       .sort({ year: -1, month: -1, createdAt: -1 });
+    await ensureBillCodesForList(bills);
     const total = await Bill.countDocuments(filter);
-    res.json({ bills, total });
+    const [summaryAgg] = await Bill.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          unpaidTotal: {
+            $sum: {
+              $cond: [{ $in: ["$status", ["unpaid", "pending", "overdue"]] }, "$total", 0],
+            },
+          },
+          paidTotal: {
+            $sum: { $cond: [{ $eq: ["$status", "paid"] }, "$total", 0] },
+          },
+          unpaidCount: {
+            $sum: { $cond: [{ $in: ["$status", ["unpaid", "pending", "overdue"]] }, 1, 0] },
+          },
+        },
+      },
+    ]);
+    const [allTimeAgg] = await Bill.aggregate([
+      { $match: { status: "paid" } },
+      { $group: { _id: null, paidTotalAllTime: { $sum: "$total" } } },
+    ]);
+    res.json({
+      bills,
+      total,
+      summary: {
+        unpaidTotal: summaryAgg?.unpaidTotal || 0,
+        paidTotal: summaryAgg?.paidTotal || 0,
+        unpaidCount: summaryAgg?.unpaidCount || 0,
+        paidTotalAllTime: allTimeAgg?.paidTotalAllTime || 0,
+      },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -270,10 +313,13 @@ exports.getMyBills = async (req, res) => {
     await refreshOverdueMonthlyBills();
     const bills = await Bill.find({ user: req.user._id })
       .populate("contract", "contractNumber status startDate endDate")
+      .populate("paidBy", "fullName role")
       .populate("room")
       .populate("room.area", "name")
       .populate("violation", "ruleName description fineAmount compensationAmount createdAt")
+      .populate("maintenanceReport", "requestCode incidentType description resolutionType")
       .sort({ year: -1, month: -1, createdAt: -1 });
+    await ensureBillCodesForList(bills);
     res.json(bills);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -429,6 +475,7 @@ exports.create = async (req, res) => {
         });
         created += 1;
         createdBills.push(bill);
+        await assignBillCodeIfMissing(bill);
 
         io.emit("bill:new", { userId: String(c.user._id), message: "Bạn có hóa đơn mới" });
         await Notification.create({
@@ -439,6 +486,12 @@ exports.create = async (req, res) => {
           link: "/student/my-bills",
         });
       }
+      await closeMeterPeriodForRoom({
+        roomId,
+        month: m,
+        year: y,
+        billId: createdBills[0]?._id,
+      });
       return res.status(201).json({ created, updated, skipped, bills: createdBills });
     }
 
@@ -486,6 +539,7 @@ exports.create = async (req, res) => {
         },
       ],
     });
+    await assignBillCodeIfMissing(bill);
     await syncRoomMonthlyUtilityCost({
       roomId: contractDoc.room._id,
       month: m,
@@ -493,6 +547,12 @@ exports.create = async (req, res) => {
       electricityFee: Number(electricityFee || 0),
       waterFee: Number(waterFee || 0),
       userId: req.user._id,
+    });
+    await closeMeterPeriodForRoom({
+      roomId: contractDoc.room._id,
+      month: m,
+      year: y,
+      billId: bill._id,
     });
     const io = getIO();
     io.emit("bill:new", { userId: String(contractDoc.user._id), message: "Bạn có hóa đơn mới" });
@@ -608,6 +668,7 @@ exports.generateByMonth = async (req, res) => {
           ],
         });
         created += 1;
+        await assignBillCodeIfMissing(bill);
 
         io.emit("bill:new", {
           userId: String(c.user._id),
@@ -621,6 +682,11 @@ exports.generateByMonth = async (req, res) => {
           link: "/student/my-bills",
         });
       }
+      await closeMeterPeriodForRoom({
+        roomId: room._id,
+        month,
+        year,
+      });
     }
 
     res.json({ created, skipped });
@@ -631,54 +697,20 @@ exports.generateByMonth = async (req, res) => {
 
 exports.markPaid = async (req, res) => {
   try {
-    const bill = await Bill.findById(req.params.id).populate("contract");
-    if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
     const isAdmin = req.user.role === "admin" || req.user.role === "manager";
     if (!isAdmin) {
       return res.status(403).json({ message: "Chỉ admin/manager được xác nhận thanh toán thủ công" });
     }
-    if (bill.status === "paid") {
-      return res.status(400).json({ message: "Hóa đơn đã được thanh toán" });
-    }
-    if (!canSettleBillStatus(bill.status)) {
-      return res.status(400).json({ message: "Hóa đơn không ở trạng thái chờ thanh toán" });
-    }
-    if (Number(bill.total || 0) <= 0) {
-      return res.status(400).json({ message: "Hóa đơn không hợp lệ: tổng tiền phải lớn hơn 0" });
-    }
-    const rawMethod = String(req.body?.paymentMethod || "counter").trim();
-    if (!["counter", "manual"].includes(rawMethod)) {
-      return res.status(400).json({ message: "paymentMethod chỉ nhận counter hoặc manual" });
-    }
-    const method = rawMethod;
     const ref = req.body?.paymentReference ? String(req.body.paymentReference).trim() : "";
-    bill.status = "paid";
-    bill.paidAt = new Date();
-    bill.paymentMethod = method;
-    bill.paymentReference = ref;
-    bill.paymentHistory = bill.paymentHistory || [];
-    bill.paymentHistory.push({
-      at: new Date(),
-      action: "paid",
-      method,
-      reference: ref,
-      amount: Math.round(Number(bill.total || 0)),
-      performedBy: req.user._id,
-      note: "Admin xác nhận thanh toán",
-    });
-    await bill.save();
-    const io = getIO();
-    io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
-    await Notification.create({
-      user: bill.user,
-      title: "Hóa đơn đã được xác nhận thanh toán",
-      message: `Hóa đơn ${bill.month}/${bill.year} đã được ghi nhận thanh toán.`,
-      type: "bill_paid",
-      link: "/student/my-bills",
+    const bill = await settleBillAtCounter({
+      billId: req.params.id,
+      adminUserId: req.user._id,
+      paymentReference: ref,
     });
     res.json(bill);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const code = error.statusCode || 500;
+    res.status(code).json({ message: error.message });
   }
 };
 
@@ -736,23 +768,7 @@ exports.handleVnpayReturn = async (req, res) => {
       return res.redirect(`${clientReturnBase}?vnpay=failed&code=${encodeURIComponent(responseCode)}&billId=${encodeURIComponent(String(bill._id))}`);
     }
     if (bill.status !== "paid") {
-      bill.status = "paid";
-      bill.paidAt = new Date();
-      bill.paymentMethod = "online";
-      bill.paymentReference = txnRef;
-      bill.paymentHistory = bill.paymentHistory || [];
-      bill.paymentHistory.push({
-        at: new Date(),
-        action: "paid",
-        method: "online",
-        reference: txnRef,
-        amount: Math.round(Number(bill.total || 0)),
-        performedBy: bill.user || null,
-        note: "Thanh toán online qua VNPay",
-      });
-      await bill.save();
-      const io = getIO();
-      io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
+      await settleBillViaVnpay({ bill, txnRef });
     }
     return res.redirect(`${clientReturnBase}?vnpay=success&billId=${encodeURIComponent(String(bill._id))}`);
   } catch (error) {
@@ -770,11 +786,16 @@ exports.getById = async (req, res) => {
     }
     const bill = await Bill.findById(id)
       .populate("user", "fullName email phone studentId gender")
+      .populate("paidBy", "fullName role")
       .populate("contract", "contractNumber status startDate endDate signedAt")
       .populate("room")
       .populate("room.area", "name")
-      .populate("violation", "ruleName description fineAmount compensationAmount createdAt");
+      .populate("violation", "ruleName description fineAmount compensationAmount createdAt")
+      .populate("maintenanceReport", "requestCode incidentType description resolutionType");
     if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+    if (!bill.billCode) {
+      await assignBillCodeIfMissing(bill);
+    }
     const isStaff = req.user.role === "admin" || req.user.role === "manager";
     const billUserId = String(bill.user?._id || bill.user || "");
     if (!isStaff && billUserId !== String(req.user._id)) {

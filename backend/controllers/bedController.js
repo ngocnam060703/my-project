@@ -9,6 +9,8 @@ const {
   clearOccupiedBedDocument,
   countTakenSlots,
 } = require("../services/bedOccupancy");
+const { syncOccupancyForRooms } = require("../services/roomOccupancySync");
+const { genderAllowsStay } = require("../utils/genderPolicy");
 
 function normalizeBedStatus(s) {
   const v = String(s || "").toLowerCase().trim();
@@ -20,15 +22,6 @@ function isContractAssignable(contract) {
   const now = new Date();
   if (!["pending_payment", "active"].includes(String(contract.status))) return false;
   if (contract.endDate && new Date(contract.endDate) < now) return false;
-  return true;
-}
-
-function genderAllowsStay(userGender, areaGenderPolicy) {
-  const pol = String(areaGenderPolicy || "mixed").toLowerCase();
-  const g = String(userGender || "").toLowerCase().trim();
-  if (pol === "mixed") return true;
-  if (pol === "male") return g === "male" || g === "m" || g === "nam";
-  if (pol === "female") return g === "female" || g === "f" || g === "nu" || g === "nữ";
   return true;
 }
 
@@ -241,34 +234,50 @@ exports.checkInOccupiedBed = async (req, res) => {
 exports.transferBed = async (req, res) => {
   try {
     await syncExpiredActiveContracts();
-    const roomId = String(req.params.id || "").trim();
-    const { contractId, targetBedId, reason } = req.body || {};
-    if (!mongoose.isValidObjectId(roomId)) return res.status(400).json({ message: "roomId không hợp lệ" });
+    const sourceRoomId = String(req.params.id || "").trim();
+    const { contractId, targetBedId, targetRoomId, reason } = req.body || {};
+    if (!mongoose.isValidObjectId(sourceRoomId)) return res.status(400).json({ message: "roomId không hợp lệ" });
     if (!mongoose.isValidObjectId(contractId)) return res.status(400).json({ message: "contractId không hợp lệ" });
     if (!mongoose.isValidObjectId(targetBedId)) return res.status(400).json({ message: "targetBedId không hợp lệ" });
 
+    const destRoomId =
+      targetRoomId && mongoose.isValidObjectId(String(targetRoomId)) ? String(targetRoomId) : sourceRoomId;
+    const crossRoom = destRoomId !== sourceRoomId;
+
     const contract = await Contract.findById(contractId).populate("user", "gender fullName studentId");
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
-    if (String(contract.room) !== String(roomId)) return res.status(400).json({ message: "Hợp đồng không thuộc phòng này" });
+    if (String(contract.room) !== String(sourceRoomId)) {
+      return res.status(400).json({ message: "Hợp đồng không thuộc phòng nguồn" });
+    }
     if (!isContractAssignable(contract)) {
       return res.status(400).json({ message: "Hợp đồng không còn hiệu lực để chuyển giường" });
     }
 
-    const roomDoc = await Room.findById(roomId).populate("area", "genderPolicy").lean();
-    const areaPol = roomDoc?.area && typeof roomDoc.area === "object" ? roomDoc.area.genderPolicy : "mixed";
+    const [sourceRoomDoc, destRoomDoc] = await Promise.all([
+      Room.findById(sourceRoomId).populate("area", "genderPolicy name").lean(),
+      Room.findById(destRoomId).populate("area", "genderPolicy name").lean(),
+    ]);
+    if (!sourceRoomDoc) return res.status(404).json({ message: "Không tìm thấy phòng nguồn" });
+    if (!destRoomDoc) return res.status(404).json({ message: "Không tìm thấy phòng đích" });
+    if (String(destRoomDoc.status) === "maintenance") {
+      return res.status(400).json({ message: "Phòng đích đang bảo trì" });
+    }
+
     const uGender = contract.user && typeof contract.user === "object" ? contract.user.gender : "";
-    if (!genderAllowsStay(uGender, areaPol)) {
-      return res.status(400).json({ message: "Giới tính sinh viên không khớp chính sách khu" });
+    const destAreaPol =
+      destRoomDoc.area && typeof destRoomDoc.area === "object" ? destRoomDoc.area.genderPolicy : "mixed";
+    if (!genderAllowsStay(uGender, destAreaPol)) {
+      return res.status(400).json({ message: "Giới tính sinh viên không khớp chính sách khu phòng đích" });
     }
 
     let sourceBed =
-      (contract.bed && (await Bed.findOne({ _id: contract.bed, room: roomId }))) ||
-      (await Bed.findOne({ currentContract: contract._id, room: roomId }));
+      (contract.bed && (await Bed.findOne({ _id: contract.bed, room: sourceRoomId }))) ||
+      (await Bed.findOne({ currentContract: contract._id, room: sourceRoomId }));
     if (!sourceBed || sourceBed.status !== "occupied") {
-      return res.status(400).json({ message: "Sinh viên chưa có giường occupied trong phòng để chuyển" });
+      return res.status(400).json({ message: "Sinh viên chưa có giường occupied trong phòng nguồn để chuyển" });
     }
 
-    const targetBed = await Bed.findOne({ _id: targetBedId, room: roomId });
+    const targetBed = await Bed.findOne({ _id: targetBedId, room: destRoomId });
     if (!targetBed) return res.status(404).json({ message: "Không tìm thấy giường đích" });
     if (String(targetBed._id) === String(sourceBed._id)) {
       return res.status(400).json({ message: "Giường đích trùng giường hiện tại" });
@@ -283,17 +292,30 @@ exports.transferBed = async (req, res) => {
       return res.status(400).json({ message: "Giường đích đã có người" });
     }
 
+    if (crossRoom) {
+      const cap = Math.max(1, Number(destRoomDoc.capacity || 1));
+      const taken = await countTakenSlots(destRoomId);
+      if (taken >= cap) {
+        return res.status(400).json({ message: "Phòng đích đã hết slot trống" });
+      }
+    }
+
     const uid = sourceBed.currentUser;
     const cid = sourceBed.currentContract;
+    const noteText = reason ? String(reason) : crossRoom ? "Chuyển giường sang phòng khác" : "Chuyển giường trong phòng";
+    const srcRoomNum = sourceRoomDoc.roomNumber || sourceRoomId;
+    const dstRoomNum = destRoomDoc.roomNumber || destRoomId;
 
     await BedHistory.create({
       bed: sourceBed._id,
       room: sourceBed.room,
+      fromRoom: sourceRoomId,
+      toRoom: destRoomId,
       user: uid || null,
       contract: cid || null,
       action: "transferred_out",
       fromBedCode: sourceBed.code,
-      note: reason ? String(reason) : "Chuyển giường trong phòng",
+      note: `${noteText} (${srcRoomNum} → ${dstRoomNum})`,
       performedBy: req.user?._id || null,
     });
 
@@ -312,26 +334,39 @@ exports.transferBed = async (req, res) => {
     await targetBed.save();
 
     contract.bed = targetBed._id;
+    if (crossRoom) {
+      contract.room = destRoomId;
+    }
     await contract.save();
 
     await BedHistory.create({
       bed: targetBed._id,
       room: targetBed.room,
+      fromRoom: sourceRoomId,
+      toRoom: destRoomId,
       user: uid || null,
       contract: cid || null,
       action: "transferred_in",
       toBedCode: targetBed.code,
       toStatus: "occupied",
-      note: reason ? String(reason) : "",
+      note: noteText,
       performedBy: req.user?._id || null,
     });
+
+    await syncOccupancyForRooms([sourceRoomId, destRoomId]);
 
     const bedOut = await Bed.findById(targetBed._id)
       .populate("currentUser", "fullName studentId email phone gender")
       .populate("currentContract", "contractNumber status startDate endDate")
       .lean();
 
-    res.json({ bed: enrichBedLean(bedOut), contractId: String(contract._id) });
+    res.json({
+      bed: enrichBedLean(bedOut),
+      contractId: String(contract._id),
+      fromRoomId: sourceRoomId,
+      toRoomId: destRoomId,
+      crossRoom,
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }

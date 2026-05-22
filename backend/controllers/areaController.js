@@ -29,7 +29,7 @@ exports.getAll = async (req, res) => {
     const enriched = areas.map((a) => {
       const raw = a.toObject();
       const agg = byArea.get(String(a._id)) || { totalRooms: 0, totalStudents: 0, sumRoomCapacity: 0, hasVacancy: false };
-      const plannedCap = raw.plannedCapacity != null && raw.plannedCapacity > 0 ? raw.plannedCapacity : agg.sumRoomCapacity;
+      const plannedCap = agg.totalRooms > 0 ? agg.sumRoomCapacity : 0;
       const occupancyStatus =
         plannedCap > 0 && agg.totalStudents >= plannedCap ? "full" : agg.totalRooms === 0 ? "empty" : agg.hasVacancy ? "available" : "full";
       return {

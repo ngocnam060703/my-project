@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const Contract = require("../models/Contract");
+const { normalizePriorityFields } = require("../utils/normalizePriorityFields");
 
 const notDeleted = { isDeleted: { $ne: true } };
 
@@ -22,7 +23,9 @@ const STUDENT_FIELDS = [
   "addressNative",
   "addressPermanent",
   "addressTemporary",
-  "addressAbsent",
+  "ethnicity",
+  "priorityType",
+  "priorityProofUrl",
   "familyFatherName",
   "familyFatherPhone",
   "familyMotherName",
@@ -68,9 +71,10 @@ async function buildStudentDetail(studentId) {
     null;
   const currentRoom = currentContract?.room || null;
   const residenceStatus = contractStillInStay(currentContract) ? "dang_o" : "da_roi";
+  const checkInDate = currentContract?.startDate || null;
 
   return {
-    student,
+    student: { ...student, checkInDate },
     currentRoom,
     currentContract,
     contracts,
@@ -157,7 +161,9 @@ exports.create = async (req, res) => {
       addressNative: req.body.addressNative,
       addressPermanent: req.body.addressPermanent,
       addressTemporary: req.body.addressTemporary,
-      addressAbsent: req.body.addressAbsent,
+      ethnicity: req.body.ethnicity,
+      priorityType: req.body.priorityType,
+      priorityProofUrl: req.body.priorityProofUrl,
       familyFatherName: req.body.familyFatherName,
       familyFatherPhone: req.body.familyFatherPhone,
       familyMotherName: req.body.familyMotherName,
@@ -165,6 +171,7 @@ exports.create = async (req, res) => {
       familyEmergencyPhone: req.body.familyEmergencyPhone,
       avatar: req.body.avatar,
     };
+    normalizePriorityFields(payload);
     const created = await User.create(payload);
     const detail = await buildStudentDetail(created._id);
     res.status(201).json(detail);
@@ -188,6 +195,7 @@ exports.updateByAdmin = async (req, res) => {
       "studentId",
       "className",
       "major",
+      "facultyGroup",
       "gender",
       "citizenId",
       "address",
@@ -196,7 +204,9 @@ exports.updateByAdmin = async (req, res) => {
       "addressNative",
       "addressPermanent",
       "addressTemporary",
-      "addressAbsent",
+      "ethnicity",
+      "priorityType",
+      "priorityProofUrl",
       "familyFatherName",
       "familyFatherPhone",
       "familyMotherName",
@@ -217,6 +227,7 @@ exports.updateByAdmin = async (req, res) => {
     if (req.body.password) updates.password = await bcrypt.hash(String(req.body.password), 10);
     if (req.body.dateOfBirth !== undefined) updates.dateOfBirth = normalizeDate(req.body.dateOfBirth);
     if (req.body.enrollmentDate !== undefined) updates.enrollmentDate = normalizeDate(req.body.enrollmentDate);
+    normalizePriorityFields(updates);
 
     await User.findByIdAndUpdate(target._id, updates, { runValidators: true });
     const detail = await buildStudentDetail(target._id);
@@ -242,6 +253,7 @@ exports.updateMe = async (req, res) => {
       "studentId",
       "className",
       "major",
+      "facultyGroup",
       "gender",
       "citizenId",
       "address",
@@ -250,7 +262,9 @@ exports.updateMe = async (req, res) => {
       "addressNative",
       "addressPermanent",
       "addressTemporary",
-      "addressAbsent",
+      "ethnicity",
+      "priorityType",
+      "priorityProofUrl",
       "familyFatherName",
       "familyFatherPhone",
       "familyMotherName",
@@ -262,6 +276,7 @@ exports.updateMe = async (req, res) => {
     });
     if (req.body.dateOfBirth !== undefined) updates.dateOfBirth = normalizeDate(req.body.dateOfBirth);
     if (req.body.enrollmentDate !== undefined) updates.enrollmentDate = normalizeDate(req.body.enrollmentDate);
+    normalizePriorityFields(updates);
 
     await User.findByIdAndUpdate(current._id, updates, { runValidators: true });
     const detail = await buildStudentDetail(current._id);

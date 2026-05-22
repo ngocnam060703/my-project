@@ -2,9 +2,11 @@ const mongoose = require("mongoose");
 
 const billSchema = new mongoose.Schema(
   {
-    billType: { type: String, enum: ["monthly", "penalty"], default: "monthly" },
-    /** Liên kết vi phạm (hóa đơn phạt) */
+    billType: { type: String, enum: ["monthly", "penalty", "damage_reimbursement"], default: "monthly" },
+    /** Liên kết vi phạm (hóa đơn phạt kỷ luật) */
     violation: { type: mongoose.Schema.Types.ObjectId, ref: "Violation", default: undefined },
+    /** Liên kết khai báo hư hỏng (hóa đơn bồi thường hư hỏng) */
+    maintenanceReport: { type: mongoose.Schema.Types.ObjectId, ref: "MaintenanceReport", default: undefined },
     /** Chi tiết dòng phạt / bồi thường (hiển thị cho SV) */
     penaltyBreakdown: [
       {
@@ -65,6 +67,10 @@ const billSchema = new mongoose.Schema(
       },
     ],
     paidAt: { type: Date, default: null },
+    /** Mã hóa đơn hiển thị / tra cứu tại quầy */
+    billCode: { type: String, default: "", trim: true },
+    /** Người thực hiện ghi nhận thanh toán (admin thu quầy hoặc chính SV khi VNPay) */
+    paidBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     /** manual: xác nhận tay / offline | online: cổng thanh toán (demo) | counter: thu tại quầy */
     paymentMethod: { type: String, enum: ["manual", "online", "counter"], default: undefined },
     paymentReference: { type: String, default: "" },
@@ -82,5 +88,10 @@ billSchema.index(
   { violation: 1 },
   { unique: true, partialFilterExpression: { billType: "penalty", violation: { $type: "objectId" } } }
 );
+billSchema.index(
+  { maintenanceReport: 1 },
+  { unique: true, partialFilterExpression: { billType: "damage_reimbursement", maintenanceReport: { $type: "objectId" } } }
+);
+billSchema.index({ billCode: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("Bill", billSchema);

@@ -76,5 +76,6 @@ router.put(
 router.put("/:id/confirm-payment", requireRole("admin", "manager"), contractController.confirmPayment);
 router.put("/:id/ensure-bed", requireRole("admin", "manager"), contractController.ensureBed);
 router.put("/:id", requireRole("admin", "manager"), contractController.update);
+router.delete("/:id", requireRole("admin", "manager"), contractController.remove);
 
 module.exports = router;

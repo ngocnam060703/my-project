@@ -203,7 +203,7 @@ const HomePage: React.FC = () => {
               formatter={(v) => `${Number(v)?.toLocaleString("vi-VN")}đ`}
             />
             <p><Tag color={dashboardData.unpaidCount > 0 ? "gold" : "green"}>{dashboardData.unpaidCount > 0 ? "Chưa thanh toán" : "Đã thanh toán"}</Tag></p>
-            <Button type="primary" onClick={() => navigate("/student/my-bills")}>Xem hóa đơn</Button>
+            <Button type="primary" onClick={(e) => { e.stopPropagation(); navigate("/student/my-bills"); }}>Xem hóa đơn</Button>
           </Card>
         </Col>
       </Row>
@@ -214,7 +214,7 @@ const HomePage: React.FC = () => {
             <UnorderedListOutlined style={{ fontSize: 48, color: "var(--card-accent-1)", marginBottom: 16 }} />
             <Title level={4}>Xem phòng trống</Title>
             <Paragraph>Danh sách phòng và đăng ký</Paragraph>
-            <Button type="primary">Xem danh sách</Button>
+            <Button type="primary" onClick={(e) => { e.stopPropagation(); navigate("/student/rooms"); }}>Xem danh sách</Button>
           </Card>
         </Col>
         <Col xs={24} md={8}>
@@ -222,7 +222,7 @@ const HomePage: React.FC = () => {
             <FileAddOutlined style={{ fontSize: 48, color: "var(--card-accent-2)", marginBottom: 16 }} />
             <Title level={4}>Đăng ký của tôi</Title>
             <Paragraph>Đơn đăng ký nội trú</Paragraph>
-            <Button type="primary" ghost>Xem đơn</Button>
+            <Button type="primary" ghost onClick={(e) => { e.stopPropagation(); navigate("/student/my-registrations"); }}>Xem đơn</Button>
           </Card>
         </Col>
         <Col xs={24} md={8}>
@@ -230,7 +230,7 @@ const HomePage: React.FC = () => {
             <DollarOutlined style={{ fontSize: 48, color: "var(--card-accent-3)", marginBottom: 16 }} />
             <Title level={4}>Hóa đơn</Title>
             <Paragraph>Thanh toán hóa đơn</Paragraph>
-            <Button type="primary" ghost>Xem hóa đơn</Button>
+            <Button type="primary" ghost onClick={(e) => { e.stopPropagation(); navigate("/student/my-bills"); }}>Xem hóa đơn</Button>
           </Card>
         </Col>
       </Row>

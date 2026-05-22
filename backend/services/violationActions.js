@@ -1,24 +1,20 @@
 const Contract = require("../models/Contract");
-const Room = require("../models/Room");
 const { releaseBedForContractId } = require("./bedOccupancy");
+const { syncOccupancyForRooms } = require("./roomOccupancySync");
 const Bill = require("../models/Bill");
-const Notification = require("../models/Notification");
+const { sendNotification } = require("./notificationService");
 const { getIO } = require("../socket");
 
 async function terminateContractDiscipline(contractId) {
   const contract = await Contract.findById(contractId);
   if (!contract) return;
   if (contract.status === "active" || contract.status === "pending_payment") {
-    const room = await Room.findById(contract.room);
-    if (room) {
-      room.currentOccupancy = Math.max(0, (room.currentOccupancy || 0) - 1);
-      room.status = room.currentOccupancy >= room.capacity ? "full" : "available";
-      await room.save();
-    }
+    const roomId = contract.room;
     await releaseBedForContractId(contract._id, null, "Kỷ luật / vi phạm");
     contract.status = "terminated";
     contract.bed = null;
     await contract.save();
+    if (roomId) await syncOccupancyForRooms([roomId]);
   }
 }
 
@@ -52,8 +48,8 @@ async function createPenaltyBill({ contractDoc, violationDoc, userId, roomId, to
   await violationDoc.save();
   const io = getIO();
   io.emit("bill:new", { userId: String(userId), message: "Bạn có hóa đơn phạt vi phạm mới" });
-  await Notification.create({
-    user: userId,
+  await sendNotification({
+    userId,
     title: "Hóa đơn phạt",
     message: `Bạn có khoản phạt/bồi thường ${Math.round(totalAmount).toLocaleString("vi-VN")}đ. Vui lòng xem mục Phạt trong Hóa đơn.`,
     type: "bill_reminder",

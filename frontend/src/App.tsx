@@ -32,7 +32,6 @@ import AreasRoomsPage from "./pages/admin/AreasRoomsPage";
 import ApplicationsPage from "./pages/admin/ApplicationsPage";
 import ContractsPage from "./pages/admin/ContractsPage";
 import BillsPage from "./pages/admin/BillsPage";
-import BillingManagementPage from "./pages/admin/BillingManagementPage";
 import ViolationsPage from "./pages/admin/ViolationsPage";
 import MaintenanceReportsAdminPage from "./pages/admin/MaintenanceReportsAdminPage";
 import ServicesPageAdmin from "./pages/admin/ServicesPage";
@@ -96,7 +95,7 @@ function App() {
                   <Route path="applications" element={<ApplicationsPage />} />
                   <Route path="contracts" element={<ContractsPage />} />
                   <Route path="bills" element={<BillsPage />} />
-                  <Route path="billing" element={<BillingManagementPage />} />
+                  <Route path="billing" element={<Navigate to="/admin/bills" replace />} />
                   <Route path="violations" element={<ViolationsPage />} />
                   <Route path="maintenance-reports" element={<MaintenanceReportsAdminPage />} />
                   <Route path="facilities" element={<Navigate to="/admin/rooms" replace />} />

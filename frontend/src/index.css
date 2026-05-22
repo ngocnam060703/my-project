@@ -49,6 +49,12 @@ code {
   background: #042f2e !important;
 }
 
+/* Lớp phủ modal Bootstrap còn sót — không chặn click */
+body:not(.modal-open) .modal-backdrop {
+  display: none;
+  pointer-events: none;
+}
+
 .ant-menu-dark {
   background: transparent !important;
 }

@@ -2,6 +2,7 @@ const Registration = require("../models/Registration");
 const Contract = require("../models/Contract");
 const Bill = require("../models/Bill");
 const RegistrationPeriod = require("../models/RegistrationPeriod");
+const { findOpenRegistrationPeriod, findNextRegistrationPeriod } = require("../services/registrationPeriodPolicy");
 
 const roomPopulate = { path: "room", populate: { path: "area", select: "name" } };
 
@@ -36,7 +37,7 @@ exports.getDashboard = async (req, res) => {
       Contract.find({ user: userId, status: "active" }).populate(roomPopulate).sort({ endDate: -1 }),
       Contract.find({ user: userId, status: "pending_payment" }).populate(roomPopulate).sort({ createdAt: -1 }),
       Bill.find({ user: userId, status: { $in: ["unpaid", "pending", "overdue"] } }),
-      RegistrationPeriod.findOne({ isActive: true, startDate: { $lte: now }, endDate: { $gte: now } }),
+      findOpenRegistrationPeriod(now),
     ]);
 
     let studentStatus = "not_registered";
@@ -99,9 +100,7 @@ exports.getDashboard = async (req, res) => {
         name: period.name,
       };
     } else {
-      const nextPeriod = await RegistrationPeriod.findOne({ isActive: true, startDate: { $gt: now } })
-        .sort({ startDate: 1 })
-        .select("name startDate endDate");
+      const nextPeriod = await findNextRegistrationPeriod(now);
       registrationPeriodInfo = {
         isOpen: false,
         nextPeriod: nextPeriod || null,

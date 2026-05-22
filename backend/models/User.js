@@ -31,6 +31,16 @@ const userSchema = new mongoose.Schema(
     addressNative: { type: String, default: "" },
     /** Thường trú */
     addressPermanent: { type: String, default: "" },
+    /** Dân tộc */
+    ethnicity: { type: String, default: "" },
+    /** Diện ưu tiên xét nội trú */
+    priorityType: {
+      type: String,
+      enum: ["normal", "martyr_child", "invalid_child", "minority", "disabled"],
+      default: "normal",
+    },
+    /** Link file minh chứng diện ưu tiên */
+    priorityProofUrl: { type: String, default: null },
     /** Tạm trú */
     addressTemporary: { type: String, default: "" },
     /** Tạm vắng (ghi chú địa chỉ khi vắng) */

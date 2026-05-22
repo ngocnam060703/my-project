@@ -48,6 +48,11 @@ exports.getServices = async (req, res) => {
     const filter = {};
     if (type) filter.type = String(type);
     if (activeOnly === "true") filter.isActive = true;
+    /** Dịch vụ điện/nước (kWh/m³) luôn coi là theo chỉ số — sửa dữ liệu cũ lưu nhầm fixed. */
+    await Service.updateMany(
+      { measureUnit: { $in: ["kwh", "m3"] }, tariffType: { $ne: "variable" } },
+      { $set: { tariffType: "variable" } }
+    );
     const services = await Service.find(filter).sort({ type: 1, name: 1 });
     res.json(services);
   } catch (error) {
@@ -67,7 +72,7 @@ exports.createService = async (req, res) => {
     const n = String(name).trim();
     await assertUniqueServiceName(n);
     const mu = measureUnit === "kwh" || measureUnit === "m3" || measureUnit === "month" ? measureUnit : "month";
-    const tt = tariffType === "variable" ? "variable" : "fixed";
+    const tt = mu === "kwh" || mu === "m3" ? "variable" : tariffType === "variable" ? "variable" : "fixed";
     const hybridCfg = sanitizeHybridConfig(req.body);
     if (hybridCfg.billingModel === "hybrid") {
       if (type !== "personal") {
@@ -128,6 +133,10 @@ exports.updateService = async (req, res) => {
     });
     const current = await Service.findById(id);
     if (!current) return res.status(404).json({ message: "Không tìm thấy dịch vụ" });
+    const mergedMeasure = data.measureUnit ?? current.measureUnit;
+    if (mergedMeasure === "kwh" || mergedMeasure === "m3") {
+      data.tariffType = "variable";
+    }
     const merged = {
       type: data.type ?? current.type,
       unit: data.unit ?? current.unit,

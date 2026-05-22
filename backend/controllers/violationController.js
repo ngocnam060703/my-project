@@ -7,6 +7,7 @@ const User = require("../models/User");
 const Notification = require("../models/Notification");
 const { getIO } = require("../socket");
 const { createPenaltyBill, terminateContractDiscipline } = require("../services/violationActions");
+const { normalizeViolationRecord, normalizeAmount } = require("../services/violationDisciplineService");
 
 function isAdmin(user) {
   return user?.role === "admin" || user?.role === "manager";
@@ -116,7 +117,7 @@ exports.getAllViolations = async (req, res) => {
       .skip((Number(page) - 1) * Number(limit))
       .limit(Number(limit));
     const total = await Violation.countDocuments(filter);
-    res.json({ violations: items, total });
+    res.json({ violations: items.map(normalizeViolationRecord), total });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -136,14 +137,14 @@ exports.getViolationById = async (req, res) => {
     if (!doc) return res.status(404).json({ message: "Không tìm thấy vi phạm" });
 
     if (isAdmin(req.user)) {
-      return res.json(doc);
+      return res.json(normalizeViolationRecord(doc));
     }
-    if (req.user.role === "user") {
+    if (req.user.role === "user" || req.user.role === "student") {
       const ownerId = String(doc.user?._id || doc.user || "");
       if (!ownerId || ownerId !== String(req.user._id)) {
         return res.status(403).json({ message: "Không có quyền xem vi phạm này" });
       }
-      return res.json(doc);
+      return res.json(normalizeViolationRecord(doc));
     }
     return res.status(403).json({ message: "Không có quyền" });
   } catch (e) {
@@ -176,7 +177,7 @@ exports.updateViolation = async (req, res) => {
       .populate("room.area", "name")
       .populate("recordedBy", "fullName")
       .populate("resolution.resolvedBy", "fullName");
-    res.json(populated);
+    res.json(normalizeViolationRecord(populated));
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -295,8 +296,8 @@ exports.createViolation = async (req, res) => {
     const room = await Room.findById(roomId);
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
 
-    let fineAmount = Number(fineIn || 0);
-    const compensationAmount = Number(compIn || 0);
+    let fineAmount = normalizeAmount(fineIn);
+    const compensationAmount = normalizeAmount(compIn);
     if (rule.fineMax > 0 && fineAmount > rule.fineMax) fineAmount = rule.fineMax;
     if (rule.fineMin > 0 && fineAmount > 0 && fineAmount < rule.fineMin) {
       return res.status(400).json({ message: `Tiền phạt nên từ ${rule.fineMin.toLocaleString("vi-VN")}đ` });
@@ -439,7 +440,7 @@ exports.createViolation = async (req, res) => {
       .populate("user", "fullName studentId")
       .populate("room", "roomNumber area")
       .populate("room.area", "name");
-    res.status(201).json(populated);
+    res.status(201).json(normalizeViolationRecord(populated));
   } catch (e) {
     if (e?.code === 11000) {
       return res.status(400).json({ message: "Đã có hóa đơn cho vi phạm này" });

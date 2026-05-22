@@ -21,6 +21,7 @@ import {
   Badge,
   Tooltip,
   Tabs,
+  Empty,
 } from "antd";
 import type { TableProps } from "antd";
 import {
@@ -57,6 +58,12 @@ import type {
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import dayjs from "dayjs";
+import { PRIORITY_OPTIONS } from "../../utils/priorityDisplay";
+import PriorityPolicyCard from "../../components/admin/users/PriorityPolicyCard";
+import UserContractsTable from "../../components/admin/users/UserContractsTable";
+import "../../components/admin/users/user-detail.css";
+
+const PRIORITY_FORM_OPTIONS = PRIORITY_OPTIONS;
 
 /** Ưu tiên pricePerPerson; không có thì chia đều phòng/capacity */
 function slotPriceVnd(room: Room | null | undefined): number {
@@ -224,6 +231,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [detailPayload, setDetailPayload] = useState<AdminUserDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailTab, setDetailTab] = useState("profile");
   const [ensureBedLoading, setEnsureBedLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
@@ -429,6 +437,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   }, [openUserFromQuery, setSearchParams]);
 
   const openDetail = async (u: User) => {
+    setDetailTab("profile");
     setDetailPayload({
       user: u,
       currentRoom: null,
@@ -523,6 +532,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
       phone: u.phone,
       role: u.role,
       studentId: u.studentId,
+      className: u.className,
       major: u.major,
       gender: u.gender,
       citizenId: u.citizenId,
@@ -535,6 +545,9 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
       addressPermanent: u.addressPermanent,
       addressTemporary: u.addressTemporary,
       addressAbsent: u.addressAbsent,
+      ethnicity: u.ethnicity,
+      priorityType: u.priorityType || "normal",
+      priorityProofUrl: u.priorityProofUrl || "",
       familyFatherName: u.familyFatherName,
       familyFatherPhone: u.familyFatherPhone,
       familyMotherName: u.familyMotherName,
@@ -814,14 +827,6 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   const detailIsManager = du?.role === "manager";
   const detailIsAdmin = du?.role === "admin";
 
-  const contractAreaName = (c: Contract) => {
-    const r = c.room;
-    if (!r || typeof r !== "object") return "—";
-    const a = r.area;
-    if (a && typeof a === "object" && "name" in a) return String((a as { name?: string }).name || "") || "—";
-    return "—";
-  };
-
   const contractBedCode = (c: Contract) => {
     const b = c.bed;
     if (!b) return "—";
@@ -844,87 +849,6 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
       return formatBedEquipmentVi(String((b as Bed).equipmentStatus || ""));
     return "—";
   };
-
-  const overdueContractIds = contractIdsWithOverdueBills(detailPayload?.financialSummary?.unpaidBills);
-
-  const contractColumns = [
-    { title: "Số HĐ", dataIndex: "contractNumber", key: "cn", render: (v: string) => v || "—" },
-    {
-      title: "Khu",
-      key: "area",
-      width: 160,
-      ellipsis: true,
-      render: (_: unknown, c: Contract) => contractAreaName(c),
-    },
-    {
-      title: "Phòng",
-      key: "room",
-      width: 90,
-      render: (_: unknown, c: Contract) =>
-        typeof c.room === "object" && c.room ? `${c.room.roomNumber}` : "—",
-    },
-    {
-      title: "Giá phòng (nền)",
-      key: "roomFee",
-      width: 150,
-      render: (_: unknown, c: Contract) => {
-        const r = typeof c.room === "object" ? c.room : null;
-        if (!r || r.price == null) return "—";
-        const slots = Math.max(1, Number(r.capacity) || 1);
-        const full = Math.round(Number(r.price));
-        const per = Math.round(full / slots);
-        return (
-          <div style={{ fontSize: 12, lineHeight: 1.4 }}>
-            <div>
-              Tổng: <strong>{full.toLocaleString("vi-VN")}</strong>đ/th
-            </div>
-            <div>
-              {slots} slot → <strong>{per.toLocaleString("vi-VN")}</strong>đ
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      title: "Mã giường",
-      key: "bedSlot",
-      width: 110,
-      ellipsis: true,
-      render: (_: unknown, c: Contract) => contractBedCode(c),
-    },
-    {
-      title: "Tình trạng giường",
-      key: "bedEq",
-      width: 130,
-      ellipsis: true,
-      render: (_: unknown, c: Contract) => contractBedEquipment(c),
-    },
-    {
-      title: "Trạng thái",
-      key: "st",
-      width: 160,
-      render: (_: unknown, c: Contract) => {
-        const { color, text } = contractEnterpriseBadge(c, overdueContractIds);
-        return (
-          <Tag color={color} style={{ fontWeight: 600 }}>
-            {text}
-          </Tag>
-        );
-      },
-    },
-    {
-      title: "Bắt đầu",
-      dataIndex: "startDate",
-      key: "sd",
-      render: (d: string) => dayjs(d).format("DD/MM/YYYY"),
-    },
-    {
-      title: "Kết thúc",
-      dataIndex: "endDate",
-      key: "ed",
-      render: (d: string) => dayjs(d).format("DD/MM/YYYY"),
-    },
-  ];
 
   const pendingColumns: TableProps<User>["columns"] = [
     {
@@ -1201,6 +1125,29 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                     <Col span={12}><Form.Item name="gender" label="Giới tính" rules={[req]}><Select allowClear><Select.Option value="Nam">Nam</Select.Option><Select.Option value="Nữ">Nữ</Select.Option><Select.Option value="Khác">Khác</Select.Option></Select></Form.Item></Col>
                   </Row>
                   <Form.Item name="citizenId" label="CCCD" rules={[req]}><Input /></Form.Item>
+                  <Row gutter={8}>
+                    <Col span={12}><Form.Item name="ethnicity" label="Dân tộc"><Input placeholder="VD: Kinh, Tày..." /></Form.Item></Col>
+                    <Col span={12}>
+                      <Form.Item name="priorityType" label="Đối tượng ưu tiên" initialValue="normal">
+                        <Select options={PRIORITY_FORM_OPTIONS} />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Form.Item noStyle shouldUpdate={(prev, curr) => prev.priorityType !== curr.priorityType}>
+                    {({ getFieldValue }) => {
+                      const pt = String(getFieldValue("priorityType") || "normal");
+                      if (pt === "normal") return null;
+                      return (
+                        <Form.Item
+                          name="priorityProofUrl"
+                          label="Minh chứng ưu tiên (URL)"
+                          rules={[{ required: true, message: "Nhập URL minh chứng hoặc yêu cầu SV cập nhật hồ sơ" }]}
+                        >
+                          <Input placeholder="https://..." allowClear />
+                        </Form.Item>
+                      );
+                    }}
+                  </Form.Item>
                   <Form.Item name="studentId" label="MSSV" rules={[req]}><Input /></Form.Item>
                   <Form.Item name="major" label="Ngành" rules={[req]}>
                     {majorOptions.length ? (
@@ -1283,10 +1230,12 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
       </Modal>
 
       <Modal
+        className="user-detail-modal"
         title={`Chi tiết — ${du?.fullName || ""}`}
         open={!!detailPayload}
         onCancel={() => setDetailPayload(null)}
-        width={980}
+        width={1024}
+        styles={{ body: { paddingTop: 12 } }}
         footer={[
           <Button key="close" onClick={() => setDetailPayload(null)}>
             Đóng
@@ -1327,10 +1276,15 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
               </div>
 
               {detailIsStudent ? (
-                <>
-                  <div style={{ color: "#6b7280", fontSize: 13 }}>
-                    Hồ sơ <strong>sinh viên</strong> và thông tin lưu trú theo hợp đồng KTX.
-                  </div>
+                <Tabs
+                  activeKey={detailTab}
+                  onChange={setDetailTab}
+                  items={[
+                    {
+                      key: "profile",
+                      label: "Hồ sơ",
+                      children: (
+                        <>
                   <Row gutter={[12, 12]}>
                     <Col xs={24} md={12}>
                       <Card size="small" title="Thông tin cá nhân" style={{ borderRadius: 10 }}>
@@ -1342,7 +1296,10 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                           </Descriptions.Item>
                           <Descriptions.Item label="Giới tính">{du?.gender || "—"}</Descriptions.Item>
                           <Descriptions.Item label="CCCD / CMND">{du?.citizenId || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Địa chỉ liên hệ">{du?.address || "—"}</Descriptions.Item>
+                          <Descriptions.Item label="Dân tộc">{du?.ethnicity || "—"}</Descriptions.Item>
+                          <Descriptions.Item label="Địa chỉ liên hệ">
+                            <span className="user-detail-long-text">{du?.address || "—"}</span>
+                          </Descriptions.Item>
                         </Descriptions>
                       </Card>
                     </Col>
@@ -1351,9 +1308,7 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                         <Descriptions column={1} size="small">
                           <Descriptions.Item label="Lớp">{du?.className || "—"}</Descriptions.Item>
                           <Descriptions.Item label="Khoa/nhóm ngành">
-                            {(du as unknown as { facultyGroup?: string })?.facultyGroup ||
-                              inferFacultyGroupFromMajor(du?.major, majorOptions) ||
-                              "—"}
+                            {du?.facultyGroup || inferFacultyGroupFromMajor(du?.major, majorOptions) || "—"}
                           </Descriptions.Item>
                           <Descriptions.Item label="Ngành">{du?.major || "—"}</Descriptions.Item>
                           <Descriptions.Item label="Khóa">{du?.faculty || "—"}</Descriptions.Item>
@@ -1388,6 +1343,12 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                           </Descriptions.Item>
                         </Descriptions>
                       </Card>
+                    </Col>
+                    <Col xs={24}>
+                      <PriorityPolicyCard
+                        priorityType={du?.priorityType}
+                        priorityProofUrl={du?.priorityProofUrl}
+                      />
                     </Col>
                     <Col xs={24}>
                       <Card size="small" title="Lưu trú hiện tại" style={{ borderRadius: 10 }}>
@@ -1547,8 +1508,19 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                       </Button>
                     </Space>
                   </div>
-
-                  <Space wrap>
+                        </>
+                      ),
+                    },
+                    {
+                      key: "contracts",
+                      label: `Hợp đồng KTX (${detailPayload.contracts?.length || 0})`,
+                      children: (
+                        <>
+                  <UserContractsTable
+                    contracts={detailPayload.contracts || []}
+                    overdueBills={detailPayload.financialSummary?.unpaidBills}
+                  />
+                  <Space wrap style={{ marginTop: 12 }}>
                     {detailPayload.currentContract &&
                     ["active", "pending_payment"].includes(
                       String((detailPayload.currentContract as Contract).status)
@@ -1558,24 +1530,18 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                       </Button>
                     ) : null}
                   </Space>
-
-                  <div>
-                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Hợp đồng KTX</div>
-                    <Table<Contract>
-                      size="small"
-                      rowKey="_id"
-                      columns={contractColumns}
-                      dataSource={detailPayload.contracts || []}
-                      pagination={false}
-                      locale={{ emptyText: "Chưa có hợp đồng" }}
-                    />
-                  </div>
-
-                  <div>
-                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Lịch sử cư trú</div>
-                    <p style={{ margin: "0 0 12px 0", color: "#6b7280", fontSize: 13 }}>
-                      Một dòng một hợp đồng; check-in/out theo BedHistory. Chưa check-out → «—».
-                    </p>
+                        </>
+                      ),
+                    },
+                    {
+                      key: "stay",
+                      label: "Lịch sử cư trú",
+                      children: (
+                        <>
+                  <p style={{ margin: "0 0 12px 0", color: "#6b7280", fontSize: 13 }}>
+                    Một dòng một hợp đồng; check-in/out theo BedHistory. Chưa check-out → «—».
+                  </p>
+                  <div className="user-detail-table-wrap">
                     <Table<StayHistoryRow>
                       size="small"
                       rowKey={(r) => String(r.contractId)}
@@ -1669,11 +1635,15 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                       ]}
                     />
                   </div>
-
-                  {detailPayload.financialSummary ? (
-                    <div>
-                      <div style={{ marginBottom: 8, fontWeight: 600 }}>Công nợ & hóa đơn</div>
-                      <div style={{ marginBottom: 8, color: "#6b7280", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                        </>
+                      ),
+                    },
+                    {
+                      key: "finance",
+                      label: "Công nợ",
+                      children: detailPayload.financialSummary ? (
+                        <>
+                  <div style={{ marginBottom: 8, color: "#6b7280", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
                         <span>
                           Tổng còn nợ:{" "}
                           <strong style={{ color: "#b45309" }}>
@@ -1738,13 +1708,17 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                           },
                         ]}
                       />
-                    </div>
-                  ) : null}
-
-                  {detailPayload.violationsRecent && detailPayload.violationsRecent.length > 0 ? (
-                    <div>
-                      <div style={{ marginBottom: 8, fontWeight: 600 }}>Lịch sử vi phạm (gần đây)</div>
-                      <Table<Violation>
+                        </>
+                      ) : (
+                        <Empty description="Không có dữ liệu công nợ" />
+                      ),
+                    },
+                    {
+                      key: "violations",
+                      label: "Vi phạm",
+                      children:
+                        detailPayload.violationsRecent && detailPayload.violationsRecent.length > 0 ? (
+                          <Table<Violation>
                         size="small"
                         rowKey="_id"
                         pagination={false}
@@ -1767,9 +1741,12 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                           },
                         ]}
                       />
-                    </div>
-                  ) : null}
-                </>
+                        ) : (
+                          <Empty description="Chưa có vi phạm ghi nhận" />
+                        ),
+                    },
+                  ]}
+                />
               ) : null}
 
               {detailIsManager ? (

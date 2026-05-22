@@ -14,16 +14,35 @@ const serviceUsageSchema = new mongoose.Schema(
     newIndex: { type: Number, required: true, min: 0 },
     usage: { type: Number, required: true, min: 0 },
     amount: { type: Number, required: true, min: 0 },
-    /** Giá tại thời điểm nhập (đồng / kWh hoặc đồng / m³) */
     priceSnapshot: { type: Number, required: true, min: 0 },
     enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     note: { type: String, default: "" },
-    /** Đã đẩy vào RoomMonthlyCost / hóa đơn (mở rộng sau) */
+    /** recorded = đã nhập chỉ số */
+    serviceStatus: {
+      type: String,
+      enum: ["recorded", "pending"],
+      default: "recorded",
+    },
+    /** open = chưa chốt HĐ | closed = đã chốt kỳ */
+    billingStatus: {
+      type: String,
+      enum: ["open", "closed"],
+      default: "open",
+    },
+    /** none | unpaid | paid | overdue */
+    paymentStatus: {
+      type: String,
+      enum: ["none", "unpaid", "paid", "overdue"],
+      default: "none",
+    },
     appliedToBilling: { type: Boolean, default: false },
+    bill: { type: mongoose.Schema.Types.ObjectId, ref: "Bill", default: null },
+    closedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
 
 serviceUsageSchema.index({ room: 1, service: 1, month: 1, year: 1 }, { unique: true, name: "service_usage_room_period" });
+serviceUsageSchema.index({ room: 1, month: 1, year: 1 });
 
 module.exports = mongoose.model("ServiceUsage", serviceUsageSchema);

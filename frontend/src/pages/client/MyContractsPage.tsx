@@ -4,8 +4,9 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "bootstrap/dist/css/bootstrap.min.css";
+import { message } from "antd";
 import { isAxiosError } from "axios";
-import { contractsApi, dashboardApi } from "../../api";
+import { contractsApi, dashboardApi, extensionPeriodsApi } from "../../api";
 import { useSocket } from "../../contexts/SocketContext";
 import { useAuth } from "../../contexts/AuthContext";
 import type { Contract, ContractExtendRequest, MyContractOverview, Room } from "../../types";
@@ -106,18 +107,26 @@ const MyContractsPage: React.FC = () => {
     } catch (firstErr) {
       /** Backend cũ chưa mount GET /api/my-contract → dùng GET /contracts/my + setting gia hạn */
       try {
-        const [contractsRes, settingRes] = await Promise.all([
+        const [contractsRes, settingRes, periodRes] = await Promise.all([
           contractsApi.getMy(),
           dashboardApi.getContractExtensionSetting().catch(() => ({ data: { enable_contract_extension: true } })),
+          extensionPeriodsApi.getActive().catch(() => ({ data: null })),
         ]);
         const contracts = (contractsRes.data as Contract[]) || [];
+        const globallyEnabled =
+          (settingRes.data as { enable_contract_extension?: boolean } | undefined)?.enable_contract_extension !== false;
+        const periodRaw = periodRes.data as { name?: string; startDate?: string; endDate?: string } | null;
+        const extensionPeriod = periodRaw
+          ? { isOpen: true, name: periodRaw.name, startDate: periodRaw.startDate, endDate: periodRaw.endDate }
+          : { isOpen: false, name: null, startDate: null, endDate: null };
         setData({
           student: null,
           contracts,
           activeContract: contracts.find((c) => c.status === "active") || null,
           extendRequests: [],
-          extensionEnabled:
-            (settingRes.data as { enable_contract_extension?: boolean } | undefined)?.enable_contract_extension !== false,
+          extensionEnabled: globallyEnabled,
+          extensionPeriod,
+          canRequestExtension: globallyEnabled && extensionPeriod.isOpen,
         });
         setErr(null);
       } catch {
@@ -161,6 +170,23 @@ const MyContractsPage: React.FC = () => {
         }
       : null);
 
+  const canExtend = Boolean(data?.canRequestExtension);
+  const extensionHint = useMemo(() => {
+    if (data?.extensionBlockReason) return data.extensionBlockReason;
+    if (!data?.extensionEnabled) return "Chức năng gia hạn đang tắt trên hệ thống.";
+    if (!data?.extensionPeriod?.isOpen) return "Hiện chưa trong đợt gia hạn. Vui lòng chờ Ban quản lý mở đợt.";
+    if (data?.hasPendingExtendRequest) return "Bạn đã gửi yêu cầu gia hạn — đang chờ Ban quản lý duyệt.";
+    const end = data.extensionPeriod.endDate;
+    const daysLeft = data.daysUntilContractEnd;
+    const windowDays = data.eligibilityDays ?? 60;
+    if (typeof daysLeft === "number" && daysLeft > windowDays) {
+      return `Hợp đồng còn ${daysLeft} ngày. Bạn có thể gửi yêu cầu khi còn tối đa ${windowDays} ngày trước hạn.`;
+    }
+    return end
+      ? `Đang trong đợt gia hạn — hết hạn nhận đơn ${new Date(end).toLocaleString("vi-VN")}.`
+      : "Đang trong đợt gia hạn — bạn có thể gửi yêu cầu.";
+  }, [data?.extensionEnabled, data?.extensionPeriod, data?.extensionBlockReason, data?.hasPendingExtendRequest, data?.daysUntilContractEnd, data?.eligibilityDays]);
+
   const countdown = useMemo(() => {
     if (!primary || primary.status !== "active") return null;
     const d = daysRemaining(primary.endDate);
@@ -176,6 +202,7 @@ const MyContractsPage: React.FC = () => {
     try {
       await contractsApi.requestExtend(extendModalContract._id, extendMonths);
       setExtendModalContract(null);
+      message.success("Đã gửi yêu cầu gia hạn — chờ Ban quản lý duyệt.");
       await load();
     } catch (e2) {
       setErr(errMsg(e2));
@@ -187,6 +214,7 @@ const MyContractsPage: React.FC = () => {
   const signContract = async (c: Contract) => {
     try {
       await contractsApi.sign(c._id);
+      message.success("Đã ký xác nhận hợp đồng. Vui lòng chờ admin xác nhận thanh toán.");
       await load();
     } catch (e2) {
       setErr(errMsg(e2));
@@ -220,6 +248,9 @@ const MyContractsPage: React.FC = () => {
         <>
           {countdown && (
             <div className={`alert ${countdown.warn ? "alert-warning" : "alert-light border"} small mb-3`}>{countdown.text}</div>
+          )}
+          {primary.status === "active" && data && (
+            <div className={`alert ${canExtend ? "alert-success" : "alert-secondary"} small mb-3`}>{extensionHint}</div>
           )}
 
           <div className="row g-3 mb-4">
@@ -299,8 +330,14 @@ const MyContractsPage: React.FC = () => {
                       Ký xác nhận hợp đồng
                     </button>
                   )}
-                  {primary.status === "active" && Boolean(data?.extensionEnabled) && (
-                    <button type="button" className="btn btn-outline-primary btn-sm w-100" onClick={() => setExtendModalContract(primary)}>
+                  {primary.status === "active" && (
+                    <button
+                      type="button"
+                      className={`btn btn-sm w-100 ${canExtend ? "btn-outline-primary" : "btn-outline-secondary"}`}
+                      disabled={!canExtend}
+                      title={!canExtend ? extensionHint : undefined}
+                      onClick={() => canExtend && setExtendModalContract(primary)}
+                    >
                       Yêu cầu gia hạn
                     </button>
                   )}

@@ -13,21 +13,39 @@ exports.getByRoom = async (req, res) => {
   }
 };
 
-exports.create = async (req, res) => {
+exports.createReview = async (req, res) => {
   try {
-    const { room, rating, comment } = req.body;
-    const hasContract = await Contract.findOne({ user: req.user._id, room, status: "active" });
-    if (!hasContract) return res.status(403).json({ message: "Chỉ sinh viên đang ở phòng mới được đánh giá" });
-    const existing = await RoomRating.findOne({ room, user: req.user._id });
+    const roomId = req.params.roomId || req.body.room;
+    const { rating, comment } = req.body;
+    const userId = req.user?._id || req.user?.id;
+
+    if (!roomId) {
+      return res.status(400).json({ message: "Thiếu roomId để đánh giá phòng." });
+    }
+
+    const hasActiveContract = await Contract.exists({
+      user: userId,
+      room: roomId,
+      status: "active",
+    });
+    if (!hasActiveContract) {
+      return res.status(403).json({
+        message: "Bạn chỉ có thể đánh giá phòng mình đang lưu trú.",
+      });
+    }
+
+    const existing = await RoomRating.findOne({ room: roomId, user: userId });
     if (existing) {
       existing.rating = rating;
       existing.comment = comment || existing.comment;
       await existing.save();
       return res.json(existing);
     }
-    const r = await RoomRating.create({ room, user: req.user._id, rating, comment });
+    const r = await RoomRating.create({ room: roomId, user: userId, rating, comment });
     res.status(201).json(await r.populate("user", "fullName"));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
+
+exports.create = exports.createReview;

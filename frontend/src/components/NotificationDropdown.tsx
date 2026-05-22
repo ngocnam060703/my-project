@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Badge, Dropdown, List, Button, Empty, Spin } from "antd";
 import { BellOutlined } from "@ant-design/icons";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { notificationsApi } from "../api";
-import type { MenuProps } from "antd";
+import { useSocket } from "../contexts/SocketContext";
+import { useAuth } from "../contexts/AuthContext";
 
 interface Notification {
   _id: string;
@@ -17,12 +18,15 @@ interface Notification {
 
 const NotificationDropdown: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { socket } = useSocket();
+  const { user } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await notificationsApi.getMy({ limit: 15 });
@@ -33,12 +37,29 @@ const NotificationDropdown: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { load(); }, []);
   useEffect(() => {
-    if (open) load();
-  }, [open]);
+    setOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (open) void load();
+  }, [open, load]);
+
+  useEffect(() => {
+    if (!socket || !user) return;
+    const uid = String((user as { _id?: string; id?: string })._id || (user as { id?: string }).id || "");
+    const onNew = (payload: { userId?: string }) => {
+      if (payload.userId && payload.userId !== uid) return;
+      void load();
+    };
+    socket.on("notification:new", onNew);
+    return () => {
+      socket.off("notification:new", onNew);
+    };
+  }, [socket, user, load]);
 
   const normalizeLink = (link?: string): string | undefined => {
     if (!link) return undefined;
@@ -102,7 +123,13 @@ const NotificationDropdown: React.FC = () => {
   );
 
   return (
-    <Dropdown popupRender={() => content} trigger={["click"]} open={open} onOpenChange={setOpen}>
+    <Dropdown
+      dropdownRender={() => content}
+      trigger={["click"]}
+      open={open}
+      onOpenChange={setOpen}
+      destroyPopupOnHide
+    >
       <Badge count={unreadCount} size="small">
         <Button type="text" icon={<BellOutlined />} style={{ color: "white" }} title="Thông báo" />
       </Badge>

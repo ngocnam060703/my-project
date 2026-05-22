@@ -1,10 +1,15 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Table, Button, Modal, Form, Select, InputNumber, message, Tag, Space, Card, Row, Col, Statistic, Input, Popover } from "antd";
-import { PlusOutlined, CheckOutlined, DownloadOutlined, FilterOutlined, EyeOutlined } from "@ant-design/icons";
+import { CheckOutlined, EyeOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { billsApi, client, roomCostsApi, serviceUsageApi } from "../../api";
+import { formatDateTimeVi } from "../../utils/formatDateTime";
+import { billTypeLabel, billTypeShort, billTypeTagColor, billDetailTitle, isSpecialBill } from "../../utils/billTypeLabels";
+import { billPaymentMethodLabel, billPaymentPayerLabel } from "../../utils/billPaymentLabels";
+import { roomSelectLabel } from "../../utils/roomDisplay";
+import BillsFilterToolbar from "../../components/admin/BillsFilterToolbar";
+import { billsApi, client, roomCostsApi, serviceUsageApi, usersApi } from "../../api";
+import { useSocket } from "../../contexts/SocketContext";
 import type { Bill } from "../../types";
-
 const statusMap: Record<string, { color: string; text: string }> = {
   unpaid: { color: "orange", text: "Chưa thanh toán" },
   pending: { color: "orange", text: "Chưa thanh toán" },
@@ -14,13 +19,7 @@ const statusMap: Record<string, { color: string; text: string }> = {
 
 const formatMoney = (v: number | undefined) => (v ?? 0).toLocaleString("vi-VN") + "đ";
 
-const paymentMethodLabel = (m?: string) => {
-  if (m === "online") return "Thanh toán online";
-  if (m === "counter") return "Thu tại quầy";
-  if (m === "manual") return "Xác nhận / chuyển khoản";
-  return "—";
-};
-
+const billCodeDisplay = (b: Bill) => b.billCode || "—";
 type PersonalLine = NonNullable<Bill["personalServiceBreakdown"]>[number];
 
 const formatPersonalServiceLine = (it: PersonalLine) => {
@@ -31,25 +30,43 @@ const formatPersonalServiceLine = (it: PersonalLine) => {
 };
 
 const BillsPage: React.FC = () => {
-  const now = new Date();
-  const currentMonth = now.getMonth() + 1;
+  const { socket } = useSocket();
+  const now = new Date();  const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
 
   const [data, setData] = useState<Bill[]>([]);
   const [total, setTotal] = useState(0);
-  const [rooms, setRooms] = useState<{ _id: string; roomNumber: string; area?: { _id?: string; name?: string }; capacity?: number; price?: number; pricePerPerson?: number }[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState({ unpaidTotal: 0, paidTotal: 0, unpaidCount: 0, paidTotalAllTime: 0 });
+  const [rooms, setRooms] = useState<
+    { _id: string; roomNumber: string; capacity?: number; currentOccupancy?: number; status?: string; price?: number; pricePerPerson?: number }[]
+  >([]);  const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [detailModal, setDetailModal] = useState<Bill | null>(null);
   const [form] = Form.useForm();
   const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filters, setFilters] = useState<{ status?: string; room?: string; month?: number; year?: number; billType?: string }>({
     month: currentMonth,
     year: currentYear,
   });
   const [genMonth, setGenMonth] = useState(new Date().getMonth() + 1);
   const [genYear, setGenYear] = useState(new Date().getFullYear());
-  const [payModal, setPayModal] = useState<{ bill: Bill; method: "counter" | "manual"; reference: string } | null>(null);
+  const [counterOpen, setCounterOpen] = useState(false);
+  const [counterStudentId, setCounterStudentId] = useState<string | null>(null);
+  const [counterBillId, setCounterBillId] = useState<string | null>(null);
+  const [counterBills, setCounterBills] = useState<Bill[]>([]);
+  const [counterLoading, setCounterLoading] = useState(false);
+  const [studentOptions, setStudentOptions] = useState<{ value: string; label: string }[]>([]);
+  const [studentSearchLoading, setStudentSearchLoading] = useState(false);
+
+  const [counterCodeInput, setCounterCodeInput] = useState("");
+  const [counterCodeLoading, setCounterCodeLoading] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchInput.trim()), 400);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -59,35 +76,34 @@ const BillsPage: React.FC = () => {
       if (filters.room) params.room = filters.room;
       if (filters.month) params.month = filters.month;
       if (filters.year) params.year = filters.year;
-      if (filters.billType === "monthly" || filters.billType === "penalty") params.billType = filters.billType;
-      const [billsRes, roomsRes, contractsRes] = await Promise.all([
+      if (filters.billType === "monthly" || filters.billType === "penalty" || filters.billType === "damage_reimbursement") {
+        params.billType = filters.billType;
+      }
+      if (debouncedSearch) params.search = debouncedSearch;
+      const [billsRes, roomsRes] = await Promise.all([
         client.get("/bills", { params }),
         client.get("/rooms", { params: { limit: 500 } }),
-        client.get("/contracts", { params: { limit: 1000, status: "active" } }),
       ]);
       setData(billsRes.data.bills || []);
       setTotal(billsRes.data.total || 0);
-      const allRooms = (roomsRes.data.rooms || []) as { _id: string; roomNumber: string; area?: { _id?: string; name?: string }; capacity?: number; price?: number }[];
-      const contracts = (contractsRes.data.contracts || []) as { room?: string | { _id?: string } }[];
-      const roomIdsWithActiveContracts = new Set(
-        contracts
-          .map((c) => {
-            const r = c.room;
-            if (!r) return "";
-            return typeof r === "string" ? r : String(r._id || "");
-          })
-          .filter(Boolean),
-      );
-      setRooms(allRooms.filter((r) => roomIdsWithActiveContracts.has(String(r._id))));
-    } catch {
+      setSummary(billsRes.data.summary || { unpaidTotal: 0, paidTotal: 0, unpaidCount: 0, paidTotalAllTime: 0 });
+      setRooms((roomsRes.data.rooms || []) as typeof rooms);    } catch {
       message.error("Không tải được dữ liệu");
     } finally {
       setLoading(false);
     }
-  }, [page, filters.status, filters.room, filters.month, filters.year, filters.billType]);
+  }, [page, filters.status, filters.room, filters.month, filters.year, filters.billType, debouncedSearch]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    if (!socket) return;
+    const onBillPaid = () => void load();
+    socket.on("bill:paid", onBillPaid);
+    return () => {
+      socket.off("bill:paid", onBillPaid);
+    };
+  }, [socket, load]);
   const fetchRoomCosts = useCallback(async (roomId: string, month: number, year: number) => {
     try {
       const costRes = await roomCostsApi.getAll({ month, year });
@@ -186,52 +202,30 @@ const BillsPage: React.FC = () => {
   };
 
   const handleMarkPaid = (r: Bill) => {
-    let method: "manual" | "counter" = "counter";
-    let ref = "";
+    const code = billCodeDisplay(r);
     Modal.confirm({
-      title: "Xác nhận thanh toán",
-      width: 520,
+      title: "Xác nhận thanh toán tại quầy",
+      width: 480,
       content: (
         <div>
           <div style={{ marginBottom: 8 }}>
             Xác nhận sinh viên <strong>{(r.user as { fullName?: string })?.fullName || "—"}</strong> đã thanh toán{" "}
             <strong>{formatMoney(r.total)}</strong>
-            {r.billType === "penalty" ? " (hóa đơn phạt)" : ` (hóa đơn ${r.month}/${r.year})`}.
+            {isSpecialBill(r.billType)
+              ? ` (${billTypeLabel(r.billType).toLowerCase()})`
+              : ` (hóa đơn ${r.month}/${r.year})`}.
           </div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ minWidth: 200, flex: 1 }}>
-              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Hình thức</div>
-              <Select
-                defaultValue="counter"
-                style={{ width: "100%" }}
-                onChange={(v) => {
-                  method = v as "manual" | "counter";
-                }}
-                options={[
-                  { value: "counter", label: "Thu tại quầy" },
-                  { value: "manual", label: "Xác nhận / chuyển khoản" },
-                ]}
-              />
-            </div>
-            <div style={{ minWidth: 240, flex: 2 }}>
-              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Mã giao dịch / ghi chú (tuỳ chọn)</div>
-              <Input
-                placeholder="VD: CK-09052026-001"
-                onChange={(e) => {
-                  ref = e.target.value;
-                }}
-              />
-            </div>
+          <div style={{ fontSize: 13, color: "#374151" }}>
+            <div><strong>Mã hóa đơn:</strong> {code}</div>
+            <div><strong>Phương thức:</strong> Sinh viên đã thanh toán tại quầy</div>
           </div>
         </div>
-      ),
-      okText: "Xác nhận",
+      ),      okText: "Xác nhận",
       cancelText: "Hủy",
       onOk: async () => {
         try {
-          await billsApi.markPaid(r._id, { paymentMethod: method, paymentReference: ref?.trim() || undefined });
-          message.success("Đã cập nhật");
-          load();
+          await billsApi.markPaid(r._id, { paymentMethod: "counter", paymentReference: code !== "—" ? code : undefined });
+          message.success("Đã ghi nhận thanh toán tại quầy");          load();
         } catch {
           message.error("Lỗi");
         }
@@ -239,10 +233,122 @@ const BillsPage: React.FC = () => {
     });
   };
 
-  const unpaidTotal = data.filter((b) => b.status === "pending" || b.status === "unpaid" || b.status === "overdue").reduce((s, b) => s + (b.total || 0), 0);
-  const unpaidCount = data.filter((b) => b.status === "pending" || b.status === "unpaid" || b.status === "overdue").length;
+  const searchStudents = async (q: string) => {
+    if (!q.trim()) {
+      setStudentOptions([]);
+      return;
+    }
+    setStudentSearchLoading(true);
+    try {
+      const res = await usersApi.getAll({ role: "user", search: q.trim(), limit: 20 });
+      const list = (res.data as { users?: { _id: string; fullName?: string; studentId?: string }[] })?.users || [];
+      setStudentOptions(
+        list.map((u) => ({
+          value: u._id,
+          label: `${u.fullName || "—"}${u.studentId ? ` (${u.studentId})` : ""}`,
+        })),
+      );
+    } catch {
+      setStudentOptions([]);
+    } finally {
+      setStudentSearchLoading(false);
+    }
+  };
+
+  const loadCounterBills = async (studentId: string) => {
+    setCounterLoading(true);
+    setCounterBillId(null);
+    try {
+      const res = await billsApi.getAll({ user: studentId, limit: 50 });
+      const list = ((res.data as { bills?: Bill[] })?.bills || []).filter(
+        (b) => b.status === "pending" || b.status === "unpaid" || b.status === "overdue",
+      );
+      setCounterBills(list);
+    } catch {
+      message.error("Không tải được hóa đơn của sinh viên");
+      setCounterBills([]);
+    } finally {
+      setCounterLoading(false);
+    }
+  };
+
+  const submitCounterPay = async () => {
+    const bill = counterBills.find((b) => b._id === counterBillId);
+    if (!bill) {
+      message.warning("Chọn hóa đơn cần xác nhận");
+      return;
+    }
+    const code = billCodeDisplay(bill);
+    try {
+      await billsApi.markPaid(bill._id, { paymentMethod: "counter", paymentReference: code !== "—" ? code : undefined });      message.success(`Đã xác nhận thanh toán hóa đơn ${code}`);
+      setCounterOpen(false);
+      setCounterStudentId(null);
+      setCounterBillId(null);
+      setCounterBills([]);
+      load();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+    }
+  };
+
+  const lookupBillByCode = async () => {
+    const code = counterCodeInput.trim();
+    if (!code) {
+      message.warning("Nhập mã hóa đơn");
+      return;
+    }
+    setCounterCodeLoading(true);
+    setCounterBillId(null);
+    setCounterBills([]);
+    setCounterStudentId(null);
+    try {
+      const res = await billsApi.getAll({ search: code, limit: 20 });
+      const list = ((res.data as { bills?: Bill[] })?.bills || []).filter(
+        (b) => b.status === "pending" || b.status === "unpaid" || b.status === "overdue",
+      );
+      if (!list.length) {
+        message.warning("Không tìm thấy hóa đơn chưa thanh toán với mã này");
+        return;
+      }
+      const exact = list.find((b) => (b.billCode || "").toUpperCase() === code.toUpperCase()) || list[0];
+      setCounterBills(list);
+      setCounterBillId(exact._id);
+      const uid = (exact.user as { _id?: string })?._id;
+      if (uid) setCounterStudentId(String(uid));
+      if (list.length > 1) {
+        message.info(`Tìm thấy ${list.length} hóa đơn — đã chọn mã khớp nhất`);
+      }
+    } catch {
+      message.error("Không tra cứu được mã hóa đơn");
+    } finally {
+      setCounterCodeLoading(false);
+    }
+  };
+
+  const billToExcelRow = (b: Bill) => ({
+    "Mã HĐ": b.billCode || "",
+    "Loại": billTypeShort(b.billType),
+    "Tháng/Năm": `${b.month}/${b.year}`,
+    "Sinh viên": (b.user as { fullName?: string })?.fullName,
+    "MSSV": (b.user as { studentId?: string })?.studentId || "",
+    "Phòng": (b.room as { roomNumber?: string })?.roomNumber,
+    "Tổng": b.total,
+    "Hạn TT": new Date(b.dueDate).toLocaleDateString("vi-VN"),
+    "Ngày tạo hóa đơn": formatDateTimeVi(b.createdAt),
+    "Ngày đã thanh toán": formatDateTimeVi(b.paidAt),
+    "Phương thức thanh toán": b.status === "paid" ? billPaymentMethodLabel(b.paymentMethod) : "",
+    "Người thanh toán": billPaymentPayerLabel(b),    "Trạng thái": statusMap[b.status]?.text || b.status,
+  });
+
+  const selectedCounterBill = counterBills.find((b) => b._id === counterBillId) || null;
 
   const cols = [
+    {
+      title: "Mã HĐ",
+      dataIndex: "billCode",
+      key: "billCode",
+      width: 130,
+      render: (v: string, r: Bill) => v || billCodeDisplay(r),    },
     {
       title: "Tháng/Năm",
       key: "my",
@@ -253,16 +359,25 @@ const BillsPage: React.FC = () => {
       title: "Loại",
       key: "billType",
       width: 100,
-      render: (_: unknown, r: Bill) =>
-        r.billType === "penalty" ? <Tag color="red">Phạt VP</Tag> : <Tag color="blue">Tháng</Tag>,
+      render: (_: unknown, r: Bill) => (
+        <Tag color={billTypeTagColor(r.billType)}>{billTypeShort(r.billType)}</Tag>
+      ),
     },
     {
       title: "Sinh viên",
-      dataIndex: ["user", "fullName"],
       key: "user",
       width: 200,
       fixed: "left" as const,
       ellipsis: true,
+      render: (_: unknown, r: Bill) => {
+        const u = r.user as { fullName?: string; studentId?: string } | undefined;
+        return (
+          <div>
+            <div>{u?.fullName || "—"}</div>
+            {u?.studentId ? <div style={{ fontSize: 11, color: "#6b7280" }}>{u.studentId}</div> : null}
+          </div>
+        );
+      },
     },
     {
       title: "Phòng",
@@ -276,9 +391,11 @@ const BillsPage: React.FC = () => {
       width: 150,
       render: (_: unknown, r: Bill) => {
         const content =
-          r.billType === "penalty" ? (
+          isSpecialBill(r.billType) ? (
             <div style={{ minWidth: 260 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết phạt</div>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                {r.billType === "damage_reimbursement" ? "Chi tiết bồi thường" : "Chi tiết phạt"}
+              </div>
               {(r.penaltyBreakdown || []).length ? (
                 <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
                   {(r.penaltyBreakdown || []).map((line, idx) => (
@@ -335,8 +452,35 @@ const BillsPage: React.FC = () => {
       render: (d: string) => new Date(d).toLocaleDateString("vi-VN"),
     },
     {
-      title: "Trạng thái",
-      dataIndex: "status",
+      title: "Ngày tạo hóa đơn",
+      dataIndex: "createdAt",
+      key: "createdAt",
+      width: 140,
+      render: (d: string) => formatDateTimeVi(d),
+    },
+    {
+      title: "Ngày thanh toán",
+      dataIndex: "paidAt",
+      key: "paidAt",
+      width: 170,
+      render: (d?: string) => formatDateTimeVi(d),
+    },
+    {
+      title: "Phương thức TT",
+      key: "payMethod",
+      width: 200,
+      ellipsis: true,
+      render: (_: unknown, r: Bill) =>
+        r.status === "paid" ? billPaymentMethodLabel(r.paymentMethod) : "—",
+    },
+    {
+      title: "Người thanh toán",
+      key: "payer",
+      width: 140,
+      render: (_: unknown, r: Bill) => billPaymentPayerLabel(r),
+    },
+    {
+      title: "Trạng thái",      dataIndex: "status",
       key: "status",
       width: 130,
       render: (s: string) => <Tag color={statusMap[s]?.color} style={{ fontWeight: 500 }}>{statusMap[s]?.text || s}</Tag>,
@@ -365,17 +509,22 @@ const BillsPage: React.FC = () => {
       </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} lg={6}>
           <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
-            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Tổng chưa thu</span>} value={unpaidTotal} formatter={(v) => formatMoney(Number(v))} valueStyle={{ color: "#fff", fontSize: 20 }} />
+            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Tổng chưa thu (theo bộ lọc)</span>} value={summary.unpaidTotal} formatter={(v) => formatMoney(Number(v))} valueStyle={{ color: "#fff", fontSize: 20 }} />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card bordered={false} style={{ background: "linear-gradient(135deg, #059669 0%, #047857 100%)", color: "white" }}>
+            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Tổng doanh thu (toàn hệ thống)</span>} value={summary.paidTotalAllTime} formatter={(v) => formatMoney(Number(v))} valueStyle={{ color: "#fff", fontSize: 20 }} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="Hóa đơn chưa thanh toán" value={unpaidCount} suffix="đơn" />
+            <Statistic title="Hóa đơn chưa thanh toán" value={summary.unpaidCount} suffix="đơn" />
           </Card>
         </Col>
-        <Col xs={24} sm={8}>
+        <Col xs={24} sm={12} lg={6}>
           <Card>
             <Statistic title="Tổng hóa đơn" value={total} suffix="đơn" />
           </Card>
@@ -383,77 +532,42 @@ const BillsPage: React.FC = () => {
       </Row>
 
       <Card style={{ borderRadius: 12 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20, alignItems: "center" }}>
-          <FilterOutlined style={{ color: "#6b7280" }} />
-          <Select
-            placeholder="Trạng thái"
-            allowClear
-            style={{ width: 150 }}
-            value={filters.status}
-            onChange={(v) => { setFilters((f) => ({ ...f, status: v })); setPage(1); }}
-          >
-            <Select.Option value="unpaid">Chưa thanh toán (unpaid)</Select.Option>
-            <Select.Option value="pending">Chưa thanh toán (legacy)</Select.Option>
-            <Select.Option value="paid">Đã thanh toán</Select.Option>
-            <Select.Option value="overdue">Quá hạn</Select.Option>
-          </Select>
-          <Select
-            placeholder="Loại HĐ"
-            allowClear
-            style={{ width: 140 }}
-            value={filters.billType}
-            onChange={(v) => { setFilters((f) => ({ ...f, billType: v })); setPage(1); }}
-          >
-            <Select.Option value="monthly">Hóa đơn tháng</Select.Option>
-            <Select.Option value="penalty">Hóa đơn phạt</Select.Option>
-          </Select>
-          <InputNumber placeholder="Tháng" min={1} max={12} style={{ width: 90 }} value={filters.month} onChange={(v) => { setFilters((f) => ({ ...f, month: v || undefined })); setPage(1); }} />
-          <InputNumber placeholder="Năm" min={2020} style={{ width: 100 }} value={filters.year} onChange={(v) => { setFilters((f) => ({ ...f, year: v || undefined })); setPage(1); }} />
-          <Input placeholder="Lọc phòng" style={{ width: 120 }} value={filters.room} onChange={(e) => { setFilters((f) => ({ ...f, room: e.target.value || undefined })); setPage(1); }} />
-          <Button onClick={() => { setFilters({ month: currentMonth, year: currentYear }); setPage(1); }}>Xóa bộ lọc</Button>
-          <div style={{ flex: 1 }} />
-          <Space>
-            <Button icon={<DownloadOutlined />} onClick={() => exportToExcel(data.map((b) => ({
-              "Loại": b.billType === "penalty" ? "Phạt VP" : "Tháng",
-              "Tháng/Năm": `${b.month}/${b.year}`,
-              "Sinh viên": (b.user as { fullName?: string })?.fullName,
-              "Phòng": (b.room as { roomNumber?: string })?.roomNumber,
-              "Tiền phòng": b.billType === "penalty" ? "" : b.roomFee,
-              "Điện": b.billType === "penalty" ? "" : b.electricityFee,
-              "Nước": b.billType === "penalty" ? "" : b.waterFee,
-              "Wifi": b.billType === "penalty" ? "" : b.sharedCommonFee,
-              "Dịch vụ cá nhân / Phạt": b.billType === "penalty"
-                ? (b.penaltyBreakdown || []).map((x) => `${x.label || "Mục"}: ${x.amount ?? 0}`).join("; ")
-                : (b.personalServiceBreakdown || []).map((x) => formatPersonalServiceLine(x)).join("; "),
-              "Phí dịch vụ cá nhân": b.personalServiceFee || 0,
-              "Phí khác": b.billType === "penalty" ? "" : b.otherFee,
-              "Tổng": b.total,
-              "Hạn": new Date(b.dueDate).toLocaleDateString("vi-VN"),
-              "Trạng thái": statusMap[b.status]?.text || b.status,
-            })), "danh-sach-hoa-don", "Hóa đơn")}>Xuất Excel</Button>
-            <InputNumber value={genMonth} min={1} max={12} onChange={(v) => setGenMonth(Number(v || 1))} placeholder="Tháng" style={{ width: 90 }} />
-            <InputNumber value={genYear} min={2020} onChange={(v) => setGenYear(Number(v || new Date().getFullYear()))} placeholder="Năm" style={{ width: 100 }} />
-            <Button onClick={async () => {
-              try {
-                const r = await billsApi.generate({ month: genMonth, year: genYear });
-                message.success(`Tạo hóa đơn xong: ${r.data?.created || 0}, bỏ qua: ${r.data?.skipped || 0}`);
-                load();
-              } catch (err: unknown) {
-                message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được hóa đơn tháng");
-              }
-            }}>Tạo theo tháng</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>Tạo hóa đơn</Button>
-          </Space>
-        </div>
+        <BillsFilterToolbar
+          filters={filters}
+          searchInput={searchInput}
+          currentMonth={currentMonth}
+          currentYear={currentYear}
+          genMonth={genMonth}
+          genYear={genYear}
+          onFiltersChange={setFilters}
+          onSearchChange={setSearchInput}
+          onPageReset={() => setPage(1)}
+          onClearFilters={() => {
+            setSearchInput("");
+            setPage(1);
+          }}
+          onGenMonthChange={setGenMonth}
+          onGenYearChange={setGenYear}
+          onGenerateMonth={async () => {
+            try {
+              const r = await billsApi.generate({ month: genMonth, year: genYear });
+              message.success(`Tạo hóa đơn xong: ${r.data?.created || 0}, bỏ qua: ${r.data?.skipped || 0}`);
+              void load();
+            } catch (err: unknown) {
+              message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được hóa đơn tháng");
+            }
+          }}
+          onOpenCounter={() => setCounterOpen(true)}
+          onExportExcel={() => exportToExcel(data.map(billToExcelRow), "danh-sach-hoa-don", "Hóa đơn")}
+          onOpenCreate={() => setModalOpen(true)}
+        />
 
-        <Table
-          columns={cols}
+        <Table          columns={cols}
           dataSource={data}
           rowKey="_id"
           loading={loading}
           pagination={{ total, current: page, pageSize: 10, onChange: setPage, showSizeChanger: false, showTotal: (t) => `Tổng ${t} hóa đơn` }}
-          scroll={{ x: 980 }}
-          size="middle"
+          scroll={{ x: 1400 }}          size="middle"
         />
       </Card>
 
@@ -466,39 +580,21 @@ const BillsPage: React.FC = () => {
             }
           }
         }}>
-          <Form.Item name="areaId" label="Khu (lọc phòng)">
-            <Select allowClear placeholder="Chọn khu để lọc phòng">
-              {Array.from(new Map(rooms.filter((r) => r.area?._id).map((r) => [String(r.area?._id), r.area])).values()).map((a) => (
-                <Select.Option key={a?._id} value={a?._id}>
-                  {a?.name}
+          <Form.Item name="roomId" label="Phòng" rules={[{ required: true, message: "Chọn phòng" }]}>
+            <Select
+              placeholder="Chọn phòng để tạo hóa đơn"
+              showSearch
+              optionFilterProp="children"
+              onChange={(rid) => {
+                const room = rooms.find((r) => r._id === rid);
+                form.setFieldsValue({ roomFeePreview: getRoomPricePerPerson(room) });
+              }}
+            >
+              {rooms.map((r) => (
+                <Select.Option key={r._id} value={r._id}>
+                  {roomSelectLabel(r)}
                 </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item shouldUpdate noStyle>
-            {() => {
-              const areaId = form.getFieldValue("areaId") as string | undefined;
-              const filteredRooms = areaId ? rooms.filter((r) => String(r.area?._id || "") === String(areaId)) : rooms;
-              return (
-                <Form.Item name="roomId" label="Phòng" rules={[{ required: true, message: "Chọn phòng" }]}>
-                  <Select
-                    placeholder="Chọn phòng để tạo hóa đơn"
-                    showSearch
-                    optionFilterProp="children"
-                    onChange={(rid) => {
-                      const room = rooms.find((r) => r._id === rid);
-                      form.setFieldsValue({ roomFeePreview: getRoomPricePerPerson(room) });
-                    }}
-                  >
-                    {filteredRooms.map((r) => (
-                      <Select.Option key={r._id} value={r._id}>
-                        Phòng {r.roomNumber} {r.area?.name ? `- Khu ${r.area.name}` : ""} {r.capacity ? `(${r.capacity} người)` : ""}
-                      </Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-              );
-            }}
+              ))}            </Select>
           </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
@@ -530,62 +626,78 @@ const BillsPage: React.FC = () => {
       </Modal>
 
       <Modal
-        title={payModal ? `Xác nhận thanh toán hóa đơn ${payModal.bill.month}/${payModal.bill.year}` : "Xác nhận thanh toán"}
-        open={!!payModal}
-        onCancel={() => setPayModal(null)}
-        onOk={async () => {
-          if (!payModal) return;
-          try {
-            await billsApi.markPaid(payModal.bill._id, {
-              paymentMethod: payModal.method,
-              paymentReference: payModal.reference.trim() || undefined,
-            });
-            message.success("Đã ghi nhận thanh toán");
-            setPayModal(null);
-            void load();
-          } catch (err: unknown) {
-            message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
-          }
+        title="Thu tiền tại quầy"
+        open={counterOpen}
+        onCancel={() => {
+          setCounterOpen(false);
+          setCounterStudentId(null);
+          setCounterBillId(null);
+          setCounterBills([]);
+          setCounterCodeInput("");
         }}
+        onOk={() => void submitCounterPay()}
+        okText="Xác nhận thu tại quầy"        cancelText="Hủy"
+        okButtonProps={{ disabled: !counterBillId }}
+        width={560}
       >
-        {payModal && (
-          <div style={{ display: "grid", gap: 12 }}>
-            <div>
-              <strong>Sinh viên:</strong> {(payModal.bill.user as { fullName?: string })?.fullName || "—"}
-            </div>
-            <div>
-              <strong>Số tiền:</strong> {formatMoney(payModal.bill.total)}
-            </div>
-            <div>
-              <strong>Phương thức thu:</strong>
-              <Select
-                style={{ width: "100%", marginTop: 6 }}
-                value={payModal.method}
-                onChange={(v) =>
-                  setPayModal((prev) => (prev ? { ...prev, method: v as "counter" | "manual" } : null))
-                }
-              >
-                <Select.Option value="counter">Thu tại quầy</Select.Option>
-                <Select.Option value="manual">Chuyển khoản / xác nhận thủ công</Select.Option>
-              </Select>
-            </div>
-            <div>
-              <strong>Mã tham chiếu (không bắt buộc):</strong>
+        <div style={{ display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ marginBottom: 6, fontWeight: 600 }}>Tra cứu theo mã hóa đơn</div>
+            <Space.Compact style={{ width: "100%" }}>
               <Input
-                placeholder="Ví dụ: FT240518-001"
-                style={{ marginTop: 6 }}
-                value={payModal.reference}
-                onChange={(e) =>
-                  setPayModal((prev) => (prev ? { ...prev, reference: e.target.value } : null))
-                }
+                placeholder="VD: HD20260001"                value={counterCodeInput}
+                onChange={(e) => setCounterCodeInput(e.target.value)}
+                onPressEnter={() => void lookupBillByCode()}
               />
-            </div>
+              <Button loading={counterCodeLoading} onClick={() => void lookupBillByCode()}>
+                Tìm
+              </Button>
+            </Space.Compact>
           </div>
-        )}
+          <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12 }}>— hoặc —</div>
+          <div>
+            <div style={{ marginBottom: 6, fontWeight: 600 }}>Chọn sinh viên</div>
+            <Select
+              showSearch
+              placeholder="Nhập tên hoặc MSSV"
+              filterOption={false}
+              style={{ width: "100%" }}
+              loading={studentSearchLoading}
+              options={studentOptions}
+              value={counterStudentId}
+              onSearch={(v) => void searchStudents(v)}
+              onChange={(v) => {
+                setCounterStudentId(v);
+                setCounterCodeInput("");
+                void loadCounterBills(v);
+              }}
+            />
+          </div>
+          <div>
+            <div style={{ marginBottom: 6, fontWeight: 600 }}>Hóa đơn chưa thanh toán</div>
+            <Select
+              placeholder={counterBills.length ? "Chọn hóa đơn" : "Chọn sinh viên hoặc tra mã HĐ trước"}
+              style={{ width: "100%" }}
+              loading={counterLoading || counterCodeLoading}
+              disabled={counterBills.length === 0}
+              value={counterBillId}
+              onChange={setCounterBillId}
+              options={counterBills.map((b) => ({
+                value: b._id,
+                label: `${billCodeDisplay(b)} — ${formatMoney(b.total)} (${b.month}/${b.year})`,              }))}
+            />
+          </div>
+          {selectedCounterBill && (
+            <div style={{ padding: 12, background: "#f0fdf4", borderRadius: 8, fontSize: 13 }}>
+              <div><strong>Mã hóa đơn:</strong> {billCodeDisplay(selectedCounterBill)}</div>
+              <div><strong>Số tiền:</strong> {formatMoney(selectedCounterBill.total)}</div>
+              <div><strong>Phương thức:</strong> Sinh viên đã thanh toán tại quầy</div>            </div>
+          )}
+        </div>
       </Modal>
 
       <Modal
-        title={`Chi tiết hóa đơn ${detailModal ? (detailModal.billType === "penalty" ? "phạt vi phạm" : `${detailModal.month}/${detailModal.year}`) : ""}`}
+        title={`Chi tiết hóa đơn ${detailModal ? billDetailTitle(detailModal.billType, detailModal.month, detailModal.year) : ""}`}
         open={!!detailModal}
         onCancel={() => setDetailModal(null)}
         footer={[
@@ -598,11 +710,11 @@ const BillsPage: React.FC = () => {
       >
         {detailModal && (
           <div style={{ lineHeight: 2 }}>
-            <p><strong>Sinh viên:</strong> {(detailModal.user as { fullName?: string })?.fullName}</p>
-            <p><strong>Phòng:</strong> {(detailModal.room as { roomNumber?: string })?.roomNumber} — {(detailModal.room as { area?: { name?: string } })?.area?.name || ""}</p>
-            {detailModal.billType === "penalty" ? (
+            <p><strong>Sinh viên:</strong> {(detailModal.user as { fullName?: string; studentId?: string })?.fullName}{(detailModal.user as { studentId?: string })?.studentId ? ` (${(detailModal.user as { studentId?: string }).studentId})` : ""}</p>
+            <p><strong>Mã hóa đơn:</strong> {billCodeDisplay(detailModal)}</p>
+            <p><strong>Phòng:</strong> {roomSelectLabel((detailModal.room as { roomNumber?: string; capacity?: number; currentOccupancy?: number; status?: string }) || {})}</p>            {isSpecialBill(detailModal.billType) ? (
               <>
-                <p><strong>Loại:</strong> <Tag color="red">Hóa đơn phạt vi phạm</Tag></p>
+                <p><strong>Loại:</strong> <Tag color={billTypeTagColor(detailModal.billType)}>{billTypeLabel(detailModal.billType)}</Tag></p>
                 {(detailModal.penaltyBreakdown?.length || 0) > 0 && (
                   <div style={{ marginTop: 8 }}>
                     <strong>Mục phạt / bồi thường:</strong>
@@ -641,11 +753,12 @@ const BillsPage: React.FC = () => {
             <p><strong>Tổng cộng:</strong> <span style={{ fontSize: 18, color: "#0d9488" }}>{formatMoney(detailModal.total)}</span></p>
             <hr style={{ margin: "12px 0" }} />
             <p><strong>Hạn thanh toán:</strong> {new Date(detailModal.dueDate).toLocaleDateString("vi-VN")}</p>
-            {detailModal.paidAt && <p><strong>Ngày thanh toán:</strong> {new Date(detailModal.paidAt).toLocaleDateString("vi-VN")}</p>}
+            <p><strong>Ngày tạo:</strong> {formatDateTimeVi(detailModal.createdAt)}</p>
+            {detailModal.paidAt && <p><strong>Ngày thanh toán:</strong> {formatDateTimeVi(detailModal.paidAt)}</p>}
             {detailModal.status === "paid" && (
               <>
-                <p><strong>Phương thức thanh toán:</strong> {paymentMethodLabel(detailModal.paymentMethod)}</p>
-                {detailModal.paymentReference ? (
+                <p><strong>Phương thức thanh toán:</strong> {billPaymentMethodLabel(detailModal.paymentMethod)}</p>
+                <p><strong>Người thanh toán:</strong> {billPaymentPayerLabel(detailModal)}</p>                {detailModal.paymentReference ? (
                   <p><strong>Mã tham chiếu:</strong> {detailModal.paymentReference}</p>
                 ) : null}
               </>

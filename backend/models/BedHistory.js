@@ -17,6 +17,8 @@ const bedHistorySchema = new mongoose.Schema(
     fromStatus: { type: String, default: "" },
     toStatus: { type: String, default: "" },
     note: { type: String, default: "" },
+    fromRoom: { type: mongoose.Schema.Types.ObjectId, ref: "Room", default: null },
+    toRoom: { type: mongoose.Schema.Types.ObjectId, ref: "Room", default: null },
     performedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: true }

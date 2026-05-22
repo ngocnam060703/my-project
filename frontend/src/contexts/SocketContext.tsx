@@ -17,39 +17,66 @@ export const SocketProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   useEffect(() => {
     const userId = (user as { id?: string; _id?: string })?.id || (user as { id?: string; _id?: string })?._id;
     if (!userId) return;
-    // Kết nối qua dev proxy (/socket.io) để tránh lệch cổng 3000/3001/5000 do env cục bộ.
-    const s = io("/", {
-      path: "/socket.io",
-      transports: ["websocket", "polling"],
-      withCredentials: true,
-    });
-    setSocket(s);
-    s.on("registration:approved", (data: { userId?: string; message?: string }) => {
-      if (data.userId === userId) message.success(data.message || "Đơn đăng ký đã được duyệt");
-    });
-    s.on("registration:rejected", (data: { userId?: string; message?: string }) => {
-      if (data.userId === userId) message.warning(data.message || "Đơn đăng ký bị từ chối");
-    });
-    s.on("application:approved", (data: { userId?: string; message?: string }) => {
-      if (data.userId === userId) message.success(data.message || "Đơn KTX của bạn đã được duyệt");
-    });
-    s.on("application:rejected", (data: { userId?: string; message?: string }) => {
-      if (data.userId === userId) message.warning(data.message || "Đơn KTX của bạn đã bị từ chối");
-    });
-    s.on("contract:extended", (data: { userId?: string; message?: string }) => {
-      if (data.userId === userId) message.success(data.message || "Hợp đồng đã được gia hạn");
-    });
-    s.on("bill:new", (data: { userId?: string; message?: string }) => {
-      if (data.userId === userId) message.info(data.message || "Bạn có hóa đơn mới");
-    });
-    s.on("bill:paid", (data: { userId?: string }) => {
-      if (data.userId === userId) message.success("Hóa đơn đã được thanh toán");
-    });
+
+    let socket: Socket | null = null;
+    let disposed = false;
+
+    const timer = window.setTimeout(() => {
+      if (disposed) return;
+      socket = io("/", {
+        path: "/socket.io",
+        transports: ["polling", "websocket"],
+        withCredentials: true,
+        reconnection: true,
+        reconnectionAttempts: 5,
+      });
+      if (disposed) {
+        socket.disconnect();
+        return;
+      }
+      setSocket(socket);
+
+      const onApproved = (data: { userId?: string; message?: string }) => {
+        if (data.userId === userId) message.success(data.message || "Đơn đăng ký đã được duyệt");
+      };
+      const onRejected = (data: { userId?: string; message?: string }) => {
+        if (data.userId === userId) message.warning(data.message || "Đơn đăng ký bị từ chối");
+      };
+      const onAppApproved = (data: { userId?: string; message?: string }) => {
+        if (data.userId === userId) message.success(data.message || "Đơn KTX của bạn đã được duyệt");
+      };
+      const onAppRejected = (data: { userId?: string; message?: string }) => {
+        if (data.userId === userId) message.warning(data.message || "Đơn KTX của bạn đã bị từ chối");
+      };
+      const onExtended = (data: { userId?: string; message?: string }) => {
+        if (data.userId === userId) message.success(data.message || "Hợp đồng đã được gia hạn");
+      };
+      const onBillNew = (data: { userId?: string; message?: string }) => {
+        if (data.userId === userId) message.info(data.message || "Bạn có hóa đơn mới");
+      };
+      const onBillPaid = (data: { userId?: string }) => {
+        if (data.userId === userId) message.success("Hóa đơn đã được thanh toán");
+      };
+
+      socket.on("registration:approved", onApproved);
+      socket.on("registration:rejected", onRejected);
+      socket.on("application:approved", onAppApproved);
+      socket.on("application:rejected", onAppRejected);
+      socket.on("contract:extended", onExtended);
+      socket.on("bill:new", onBillNew);
+      socket.on("bill:paid", onBillPaid);
+    }, 0);
+
     return () => {
-      s.disconnect();
+      disposed = true;
+      window.clearTimeout(timer);
+      if (socket) {
+        socket.removeAllListeners();
+        socket.disconnect();
+      }
       setSocket(null);
     };
-  }, [user]);
+  }, [user, message]);
 
   return <SocketContext.Provider value={{ socket }}>{children}</SocketContext.Provider>;
 };

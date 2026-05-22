@@ -4,6 +4,7 @@ const { auth } = require("../middleware/auth");
 
 const router = express.Router();
 router.get("/room/:roomId", ratingController.getByRoom);
-router.post("/", auth, ratingController.create);
+router.post("/room/:roomId", auth, ratingController.createReview);
+router.post("/", auth, ratingController.createReview);
 
 module.exports = router;

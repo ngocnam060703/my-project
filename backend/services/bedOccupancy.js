@@ -3,14 +3,11 @@ const Bed = require("../models/Bed");
 const BedHistory = require("../models/BedHistory");
 const Contract = require("../models/Contract");
 const Room = require("../models/Room");
+const { recountRoomOccupancyForRoom } = require("./roomOccupancySync");
 
 async function decrementRoomOccupancy(roomId) {
   if (!roomId) return;
-  const room = await Room.findById(roomId);
-  if (!room) return;
-  room.currentOccupancy = Math.max(0, (room.currentOccupancy || 0) - 1);
-  room.status = room.currentOccupancy >= room.capacity ? "full" : "available";
-  await room.save();
+  await recountRoomOccupancyForRoom(roomId);
 }
 
 /**
@@ -75,9 +72,9 @@ async function syncExpiredActiveContracts(limit = 80) {
 
   let count = 0;
   for (const c of list) {
-    await decrementRoomOccupancy(c.room);
     await releaseBedForContractId(c._id, null, "Tự động: hết hạn hợp đồng");
     await Contract.updateOne({ _id: c._id }, { $set: { status: "expired", bed: null } });
+    await recountRoomOccupancyForRoom(c.room);
     count += 1;
   }
   return count;

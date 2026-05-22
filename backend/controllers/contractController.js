@@ -4,15 +4,24 @@ const Room = require("../models/Room");
 const User = require("../models/User");
 const Notification = require("../models/Notification");
 const ContractExtendRequest = require("../models/ContractExtendRequest");
-const ContractExtensionSetting = require("../models/ContractExtensionSetting");
+const {
+  getExtensionPolicy,
+} = require("../services/contractExtensionPolicy");
+const {
+  createStudentExtendRequest,
+  listExtendRequests: listExtendRequestsService,
+  approveExtendRequest: approveExtendRequestService,
+  rejectExtendRequest: rejectExtendRequestService,
+  buildStudentExtensionContext,
+} = require("../services/contractExtensionService");
 const Bill = require("../models/Bill");
 const Violation = require("../models/Violation");
 const MaintenanceReport = require("../models/MaintenanceReport");
 const { getIO } = require("../socket");
 const { tryAutoAssignBed } = require("../services/bedAllocation");
 const { releaseBedForContractId } = require("../services/bedOccupancy");
+const { recountRoomOccupancyForRoom } = require("../services/roomOccupancySync");
 
-const CONTRACT_EXT_SETTING_KEY = "contract_extension";
 const CONTRACT_STATUSES = ["pending_payment", "active", "expired", "terminated"];
 const HOLD_SLOT_STATUSES = new Set(["pending_payment", "active"]);
 const ALLOWED_STATUS_TRANSITIONS = {
@@ -21,11 +30,6 @@ const ALLOWED_STATUS_TRANSITIONS = {
   expired: ["terminated"],
   terminated: [],
 };
-
-async function isContractExtensionGloballyEnabled() {
-  const doc = await ContractExtensionSetting.findOne({ key: CONTRACT_EXT_SETTING_KEY });
-  return doc?.enable_contract_extension !== false;
-}
 
 function addCalendarMonths(date, months) {
   const d = new Date(date);
@@ -51,19 +55,19 @@ function canUpdateCoreContractData(contract) {
   return contract.status !== "active" && contract.status !== "expired" && contract.status !== "terminated";
 }
 
-async function notifyAdminsNewExtendRequest({ studentName, contractNumber, months }) {
+async function notifyAdminsStudentSigned({ studentName, contractNumber, contractId }) {
   const io = getIO();
   const admins = await User.find({ $or: [{ role: "admin" }, { role: "manager" }] }).select("_id");
   if (!admins.length) return;
-  const title = "Yêu cầu gia hạn hợp đồng";
-  const message = `${studentName || "Sinh viên"} xin gia hạn HĐ ${contractNumber || ""} thêm ${months} tháng.`;
-  const link = "/admin/contracts";
+  const title = "Sinh viên đã ký xác nhận hợp đồng";
+  const message = `${studentName || "Sinh viên"} đã ký HĐ ${contractNumber || ""}. Vui lòng upload PDF và xác nhận thanh toán.`;
+  const link = contractId ? `/admin/contracts?openContract=${contractId}` : "/admin/contracts";
   await Notification.insertMany(
     admins.map((a) => ({
       user: a._id,
       title,
       message,
-      type: "contract_renewal",
+      type: "contract_pending_admin_confirm",
       link,
     }))
   );
@@ -72,13 +76,8 @@ async function notifyAdminsNewExtendRequest({ studentName, contractNumber, month
   }
 }
 
-async function decrementRoomOccupancy(roomId) {
-  if (!roomId) return;
-  const room = await Room.findById(roomId);
-  if (!room) return;
-  room.currentOccupancy = Math.max(0, room.currentOccupancy - 1);
-  room.status = room.currentOccupancy >= room.capacity ? "full" : "available";
-  await room.save();
+async function syncRoomAfterContractChange(roomId) {
+  if (roomId) await recountRoomOccupancyForRoom(roomId);
 }
 
 function statusHoldsSlot(status) {
@@ -175,6 +174,8 @@ exports.getAll = async (req, res) => {
                   contractNumber: 1,
                   terms: 1,
                   signedAt: 1,
+                  signedPdfUrl: 1,
+                  studentConfirmedAt: 1,
                   createdBy: 1,
                   paymentConfirmedAt: 1,
                   paymentConfirmedBy: 1,
@@ -267,12 +268,13 @@ exports.create = async (req, res) => {
       });
     }
     if (statusHoldsSlot(st)) {
-      if (roomDoc.currentOccupancy >= roomDoc.capacity) {
+      const held = await Contract.countDocuments({
+        room: roomDoc._id,
+        status: { $in: ["active", "pending_payment"] },
+      });
+      if (held >= roomDoc.capacity) {
         return res.status(400).json({ message: "Phòng đã đầy" });
       }
-      roomDoc.currentOccupancy += 1;
-      roomDoc.status = roomDoc.currentOccupancy >= roomDoc.capacity ? "full" : "available";
-      await roomDoc.save();
     }
     let registrationRef = null;
     if (regId) {
@@ -293,6 +295,9 @@ exports.create = async (req, res) => {
       contractNumber,
       createdBy: req.user._id,
     });
+    if (statusHoldsSlot(st)) {
+      await syncRoomAfterContractChange(room);
+    }
     const populated = await Contract.findById(contract._id)
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
@@ -335,6 +340,9 @@ exports.update = async (req, res) => {
       if (dateErr) return res.status(400).json({ message: dateErr });
     }
 
+    let roomNeedSync = false;
+    const roomId = contract.room;
+
     if (newStatus !== undefined) {
       if (!CONTRACT_STATUSES.includes(newStatus)) {
         return res.status(400).json({ message: "Trạng thái không hợp lệ" });
@@ -347,27 +355,33 @@ exports.update = async (req, res) => {
         if (!allowed.includes(newStatus)) {
           return res.status(400).json({ message: `Không thể chuyển trạng thái từ ${contract.status} sang ${newStatus}` });
         }
-      }
-      const oldHolds = statusHoldsSlot(contract.status);
-      const nextHolds = statusHoldsSlot(newStatus);
-      if (oldHolds && !nextHolds) {
-        await decrementRoomOccupancy(contract.room);
-      } else if (!oldHolds && nextHolds) {
-        const roomDoc = await Room.findById(contract.room);
-        if (!roomDoc) return res.status(400).json({ message: "Phòng không tồn tại" });
-        if (roomDoc.currentOccupancy >= roomDoc.capacity) {
-          return res.status(400).json({ message: "Phòng đã đầy, không thể đặt trạng thái này" });
+        const oldHolds = statusHoldsSlot(contract.status);
+        const nextHolds = statusHoldsSlot(newStatus);
+        if (oldHolds && !nextHolds) {
+          await releaseBedForContractId(contract._id, req.user?._id, "Hợp đồng đổi trạng thái — không còn giữ slot");
+          contract.bed = null;
+          roomNeedSync = true;
+        } else if (!oldHolds && nextHolds) {
+          const roomDoc = await Room.findById(contract.room);
+          if (!roomDoc) return res.status(400).json({ message: "Phòng không tồn tại" });
+          const preview = await Contract.countDocuments({
+            room: roomDoc._id,
+            status: { $in: ["active", "pending_payment"] },
+            _id: { $ne: contract._id },
+          });
+          if (preview >= roomDoc.capacity) {
+            return res.status(400).json({ message: "Phòng đã đầy, không thể đặt trạng thái này" });
+          }
+          roomNeedSync = true;
         }
-        roomDoc.currentOccupancy += 1;
-        roomDoc.status = roomDoc.currentOccupancy >= roomDoc.capacity ? "full" : "available";
-        await roomDoc.save();
+        contract.status = newStatus;
       }
-      contract.status = newStatus;
     }
     if (startDate !== undefined) contract.startDate = parseDateValue(startDate);
     if (endDate !== undefined) contract.endDate = parseDateValue(endDate);
     if (terms !== undefined) contract.terms = String(terms);
     await contract.save();
+    if (roomNeedSync) await syncRoomAfterContractChange(roomId);
     const populated = await Contract.findById(contract._id)
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
@@ -396,7 +410,8 @@ exports.getById = async (req, res) => {
       });
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
     const ownerId = String(contract.user?._id || contract.user || "");
-    if (req.user.role === "user" && ownerId !== String(req.user._id)) {
+    const isStudent = req.user.role === "user" || req.user.role === "student";
+    if (isStudent && ownerId !== String(req.user._id)) {
       return res.status(403).json({ message: "Không có quyền xem" });
     }
     res.json(contract);
@@ -540,7 +555,6 @@ exports.terminate = async (req, res) => {
       return res.status(400).json({ message: "Hợp đồng đã kết thúc trước đó" });
     }
     if (contract.status === "active" || contract.status === "pending_payment") {
-      await decrementRoomOccupancy(contract.room);
       await releaseBedForContractId(contract._id, req.user?._id, "Hợp đồng chấm dứt");
     }
     const reason = String(req.body?.reason || "").trim();
@@ -548,7 +562,30 @@ exports.terminate = async (req, res) => {
     contract.status = "terminated";
     contract.bed = null;
     await contract.save();
+    await syncRoomAfterContractChange(contract.room);
     res.json(contract);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Admin/Manager: xóa hợp đồng — đồng bộ lại số đang ở của phòng/khu. */
+exports.remove = async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ message: "Mã hợp đồng không hợp lệ" });
+    }
+    const contract = await Contract.findById(id);
+    if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+
+    const roomId = contract.room;
+    if (statusHoldsSlot(contract.status)) {
+      await releaseBedForContractId(contract._id, req.user?._id, "Xóa hợp đồng");
+    }
+    await Contract.findByIdAndDelete(contract._id);
+    await syncRoomAfterContractChange(roomId);
+    res.json({ message: "Đã xóa hợp đồng và cập nhật số đang ở phòng" });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -569,6 +606,12 @@ exports.studentSign = async (req, res) => {
     contract.studentConfirmedBy = req.user._id;
     await contract.save();
 
+    await notifyAdminsStudentSigned({
+      studentName: req.user.fullName,
+      contractNumber: contract.contractNumber,
+      contractId: String(contract._id),
+    });
+
     const io = getIO();
     io.emit("bill:new", {
       userId: req.user._id.toString(),
@@ -577,20 +620,10 @@ exports.studentSign = async (req, res) => {
     await Notification.create({
       user: req.user._id,
       title: "Đã gửi xác nhận thanh toán",
-      message: "Bạn đã xác nhận thanh toán hợp đồng. Vui lòng chờ admin xác nhận.",
+      message: "Bạn đã ký xác nhận hợp đồng. Vui lòng chờ admin xác nhận.",
       type: "contract_signed",
       link: "/student/my-contracts",
     });
-
-    if (contract.createdBy) {
-      await Notification.create({
-        user: contract.createdBy,
-        title: "Sinh viên đã ký xác nhận",
-        message: `Sinh viên đã ký xác nhận hợp đồng ${contract.contractNumber}. Vui lòng xác nhận thanh toán.`,
-        type: "contract_pending_admin_confirm",
-        link: "/admin/contracts",
-      });
-    }
 
     res.json(contract);
   } catch (error) {
@@ -722,8 +755,22 @@ exports.getMyContractOverview = async (req, res) => {
       .populate("contract", "contractNumber status endDate startDate")
       .sort({ createdAt: -1 })
       .lean();
-    const extensionEnabled = await isContractExtensionGloballyEnabled();
-    res.json({ student, contracts, activeContract, extendRequests, extensionEnabled });
+    const extensionPolicy = await getExtensionPolicy();
+    const extensionContext = await buildStudentExtensionContext(req.user._id, activeContract);
+    res.json({
+      student,
+      contracts,
+      activeContract,
+      extendRequests,
+      extensionEnabled: extensionContext.extensionEnabled,
+      extensionPeriod: extensionContext.extensionPeriod,
+      canRequestExtension: extensionContext.canRequestExtension,
+      extensionBlockReason: extensionContext.extensionBlockReason,
+      hasPendingExtendRequest: extensionContext.hasPendingExtendRequest,
+      daysUntilContractEnd: extensionContext.daysUntilContractEnd,
+      eligibilityDays: extensionContext.eligibilityDays,
+      extensionPolicy,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -736,38 +783,14 @@ exports.requestExtend = async (req, res) => {
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({ message: "Mã hợp đồng không hợp lệ" });
     }
-    if (!(await isContractExtensionGloballyEnabled())) {
-      return res.status(400).json({ message: "Chức năng gia hạn hợp đồng hiện đang tắt" });
-    }
     const months = parseInt(req.body?.months, 10);
     if (!Number.isFinite(months) || months < 1 || months > 36) {
       return res.status(400).json({ message: "Số tháng gia hạn phải từ 1 đến 36" });
     }
-    const contract = await Contract.findById(id);
-    if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
-    if (String(contract.user) !== String(req.user._id)) {
-      return res.status(403).json({ message: "Không có quyền với hợp đồng này" });
-    }
-    if (contract.status !== "active") {
-      return res.status(400).json({ message: "Chỉ hợp đồng đang hiệu lực (active) mới được gửi yêu cầu gia hạn" });
-    }
-    const dup = await ContractExtendRequest.findOne({ contract: contract._id, status: "pending" });
-    if (dup) {
-      return res.status(400).json({ message: "Đã có yêu cầu gia hạn đang chờ duyệt cho hợp đồng này" });
-    }
-    const doc = await ContractExtendRequest.create({
-      contract: contract._id,
-      user: req.user._id,
-      months,
-      status: "pending",
-      snapshotEndDate: contract.endDate,
-    });
-    const populated = await ContractExtendRequest.findById(doc._id)
-      .populate("contract", "contractNumber")
-      .lean();
-    await notifyAdminsNewExtendRequest({
-      studentName: req.user.fullName,
-      contractNumber: contract.contractNumber,
+    const populated = await createStudentExtendRequest({
+      contractId: id,
+      userId: req.user._id,
+      userFullName: req.user.fullName,
       months,
     });
     res.status(201).json(populated);
@@ -775,7 +798,8 @@ exports.requestExtend = async (req, res) => {
     if (e && e.code === 11000) {
       return res.status(400).json({ message: "Đã có yêu cầu gia hạn đang chờ duyệt" });
     }
-    res.status(500).json({ message: e.message });
+    const code = e.statusCode || 500;
+    res.status(code).json({ message: e.message });
   }
 };
 
@@ -783,15 +807,8 @@ exports.requestExtend = async (req, res) => {
 exports.listExtendRequests = async (req, res) => {
   try {
     const st = String(req.query.status || "pending");
-    const filter = {};
-    if (st !== "all") filter.status = st;
-    const rows = await ContractExtendRequest.find(filter)
-      .populate("user", "fullName email studentId")
-      .populate("contract", "contractNumber status startDate endDate")
-      .populate("reviewedBy", "fullName")
-      .sort({ createdAt: -1 })
-      .limit(200)
-      .lean();
+    const search = String(req.query.search || "").trim();
+    const rows = await listExtendRequestsService({ status: st, search });
     res.json({ items: rows });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -799,61 +816,16 @@ exports.listExtendRequests = async (req, res) => {
 };
 
 exports.approveExtendRequest = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
   try {
     const rid = String(req.params.requestId || "").trim();
     if (!mongoose.isValidObjectId(rid)) {
-      await session.abortTransaction();
       return res.status(400).json({ message: "ID yêu cầu không hợp lệ" });
     }
-    const reqDoc = await ContractExtendRequest.findById(rid).session(session);
-    if (!reqDoc || reqDoc.status !== "pending") {
-      await session.abortTransaction();
-      return res.status(404).json({ message: "Không tìm thấy yêu cầu hoặc đã xử lý" });
-    }
-    const contract = await Contract.findById(reqDoc.contract).session(session);
-    if (!contract) {
-      await session.abortTransaction();
-      return res.status(400).json({ message: "Hợp đồng không tồn tại" });
-    }
-    if (contract.status !== "active") {
-      await session.abortTransaction();
-      return res.status(400).json({ message: "Hợp đồng không còn active, không thể gia hạn" });
-    }
-    const newEnd = addCalendarMonths(contract.endDate, reqDoc.months);
-    contract.endDate = newEnd;
-    await contract.save({ session });
-    reqDoc.status = "approved";
-    reqDoc.appliedEndDate = newEnd;
-    reqDoc.reviewedBy = req.user._id;
-    reqDoc.reviewedAt = new Date();
-    reqDoc.note = "";
-    await reqDoc.save({ session });
-    await session.commitTransaction();
-
-    const io = getIO();
-    io.emit("contract:extended", {
-      userId: String(contract.user),
-      message: `Yêu cầu gia hạn ${reqDoc.months} tháng đã được duyệt. Ngày kết thúc mới: ${newEnd.toLocaleDateString("vi-VN")}`,
-    });
-    await Notification.create({
-      user: contract.user,
-      title: "Gia hạn hợp đồng được duyệt",
-      message: `Hợp đồng ${contract.contractNumber} đã được gia hạn thêm ${reqDoc.months} tháng.`,
-      type: "contract_renewal",
-      link: "/student/my-contracts",
-    });
-
-    const out = await ContractExtendRequest.findById(reqDoc._id)
-      .populate("contract", "contractNumber endDate")
-      .lean();
-    res.json({ request: out, contract });
+    const result = await approveExtendRequestService({ requestId: rid, reviewerId: req.user._id });
+    res.json(result);
   } catch (e) {
-    await session.abortTransaction();
-    res.status(500).json({ message: e.message });
-  } finally {
-    session.endSession();
+    const code = e.statusCode || 500;
+    res.status(code).json({ message: e.message });
   }
 };
 
@@ -865,29 +837,10 @@ exports.rejectExtendRequest = async (req, res) => {
     }
     const note = String(req.body?.note || "").trim();
     if (!note) return res.status(400).json({ message: "Vui lòng nhập lý do từ chối" });
-    const reqDoc = await ContractExtendRequest.findById(rid);
-    if (!reqDoc || reqDoc.status !== "pending") {
-      return res.status(404).json({ message: "Không tìm thấy yêu cầu hoặc đã xử lý" });
-    }
-    reqDoc.status = "rejected";
-    reqDoc.note = note;
-    reqDoc.reviewedBy = req.user._id;
-    reqDoc.reviewedAt = new Date();
-    await reqDoc.save();
-
-    const contract = await Contract.findById(reqDoc.contract).select("user contractNumber").lean();
-    if (contract?.user) {
-      await Notification.create({
-        user: contract.user,
-        title: "Yêu cầu gia hạn bị từ chối",
-        message: `Hợp đồng ${contract.contractNumber}: ${note}`,
-        type: "contract_renewal",
-        link: "/student/my-contracts",
-      });
-    }
-
-    res.json(await ContractExtendRequest.findById(reqDoc._id).populate("contract", "contractNumber").lean());
+    const out = await rejectExtendRequestService({ requestId: rid, reviewerId: req.user._id, note });
+    res.json(out);
   } catch (e) {
-    res.status(500).json({ message: e.message });
+    const code = e.statusCode || 500;
+    res.status(code).json({ message: e.message });
   }
 };

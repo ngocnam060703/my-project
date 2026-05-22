@@ -26,6 +26,9 @@ const dashboardRoutes = require("./routes/dashboardRoutes");
 const ratingRoutes = require("./routes/ratingRoutes");
 const studentDashboardRoutes = require("./routes/studentDashboardRoutes");
 const registrationPeriodRoutes = require("./routes/registrationPeriodRoutes");
+const { autoCloseExpiredPeriods } = require("./controllers/registrationPeriodController");
+const extensionPeriodRoutes = require("./routes/extensionPeriodRoutes");
+const { autoCloseExpiredExtensionPeriods } = require("./services/contractExtensionPolicy");
 const notificationRoutes = require("./routes/notificationRoutes");
 const damageReportRoutes = require("./routes/damageReportRoutes");
 const facilityRoutes = require("./routes/facilityRoutes");
@@ -98,6 +101,7 @@ app.use("/api/bills", billRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/student-dashboard", studentDashboardRoutes);
 app.use("/api/registration-periods", registrationPeriodRoutes);
+app.use("/api/extension-periods", extensionPeriodRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/damage-reports", damageReportRoutes);
 app.use("/api/facilities", facilityRoutes);
@@ -157,6 +161,11 @@ async function start() {
     process.exit(1);
   }
   httpServer.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
+  /** Tự tắt đợt đăng ký hết hạn — không phụ thuộc admin mở lại dashboard. */
+  setInterval(() => {
+    autoCloseExpiredPeriods().catch((e) => console.error("autoCloseExpiredPeriods:", e?.message || e));
+    autoCloseExpiredExtensionPeriods().catch((e) => console.error("autoCloseExpiredExtensionPeriods:", e?.message || e));
+  }, 30000);
 }
 
 start();

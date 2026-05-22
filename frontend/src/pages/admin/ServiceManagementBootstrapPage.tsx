@@ -5,8 +5,19 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { isAxiosError } from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
+import { useSocket } from "../../contexts/SocketContext";
 import { roomsApi, servicesApi, roomServicesApi, serviceUsageApi } from "../../api";
 import type { Room } from "../../types";
+import {
+  BILLING_STATUS_CLASS,
+  BILLING_STATUS_LABEL,
+  meterDisplayStatus,
+  meterPeriodLockedMessage,
+  PAYMENT_STATUS_CLASS,
+  PAYMENT_STATUS_LABEL,
+  type MeterBillingStatus,
+  type MeterPaymentStatus,
+} from "../../utils/meterServiceDisplay";
 
 type Svc = {
   _id: string;
@@ -22,24 +33,63 @@ type Svc = {
 
 type RoomSvcRow = {
   _id: string;
-  room?: { roomNumber?: string; _id?: string };
-  service?: { name?: string; measureUnit?: string; tariffType?: string; price?: number };
+  room?: { roomNumber?: string; _id?: string } | string;
+  service?: { _id?: string; name?: string; measureUnit?: string; tariffType?: string; price?: number };
   isActive?: boolean;
 };
 
 type UsageRow = {
   _id: string;
-  room?: { roomNumber?: string };
-  service?: { name?: string; measureUnit?: string };
+  room?: { roomNumber?: string; _id?: string };
+  service?: { name?: string; measureUnit?: string; _id?: string };
   month: number;
   year: number;
   oldIndex: number;
   newIndex: number;
   usage: number;
   amount: number;
+  serviceStatus?: string;
+  billingStatus?: MeterBillingStatus;
+  paymentStatus?: MeterPaymentStatus;
+  isEditable?: boolean;
+  billId?: string | null;
+  bill?: { billCode?: string; status?: string };
+};
+
+type PeriodStatus = {
+  billingStatus?: MeterBillingStatus;
+  paymentStatus?: MeterPaymentStatus;
+  isEditable?: boolean;
+  billCount?: number;
+  usageCount?: number;
 };
 
 const fmt = (n: number) => `${Math.round(n || 0).toLocaleString("vi-VN")}đ`;
+
+function isMeterService(s: Svc): boolean {
+  return s.isActive !== false && (s.measureUnit === "kwh" || s.measureUnit === "m3");
+}
+
+function rowRoomId(row: RoomSvcRow): string {
+  const r = row.room;
+  if (!r) return "";
+  if (typeof r === "string") return r;
+  return String(r._id || "");
+}
+
+function rowRoomNumber(row: RoomSvcRow): string {
+  const r = row.room;
+  if (!r) return "—";
+  if (typeof r === "string") return "—";
+  return r.roomNumber || "—";
+}
+
+function rowServiceId(row: RoomSvcRow): string {
+  const s = row.service;
+  if (!s) return "";
+  if (typeof s === "string") return s;
+  return String((s as { _id?: string })._id || "");
+}
 
 /** Tránh crash overlay CRA khi API 404 (backend cũ / chưa mount route). */
 function apiErrMessage(e: unknown): string {
@@ -58,6 +108,7 @@ function apiErrMessage(e: unknown): string {
 }
 
 const ServiceManagementBootstrapPage: React.FC = () => {
+  const { socket } = useSocket();
   const [tab, setTab] = useState<"svc" | "room" | "usage">("svc");
   const [services, setServices] = useState<Svc[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -65,6 +116,15 @@ const ServiceManagementBootstrapPage: React.FC = () => {
   const [usageRows, setUsageRows] = useState<UsageRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [periodStatus, setPeriodStatus] = useState<PeriodStatus | null>(null);
+  const [usageFilter, setUsageFilter] = useState({
+    room: "",
+    month: "" as string | number,
+    year: "" as string | number,
+    billingStatus: "",
+    paymentStatus: "",
+  });
 
   const [form, setForm] = useState({
     name: "",
@@ -109,13 +169,40 @@ const ServiceManagementBootstrapPage: React.FC = () => {
   }, []);
 
   const loadUsage = useCallback(async () => {
+    setUsageLoading(true);
     setErr(null);
     try {
-      const res = await serviceUsageApi.list({ limit: 100 });
-      setUsageRows((res.data as { items?: UsageRow[] })?.items || []);
+      const params: Record<string, string | number> = { limit: 200 };
+      if (usageFilter.room) params.room = usageFilter.room;
+      if (usageFilter.month) params.month = Number(usageFilter.month);
+      if (usageFilter.year) params.year = Number(usageFilter.year);
+      const res = await serviceUsageApi.list(params);
+      let rows = (res.data as { items?: UsageRow[] })?.items || [];
+      if (usageFilter.billingStatus) {
+        rows = rows.filter((r) => r.billingStatus === usageFilter.billingStatus);
+      }
+      if (usageFilter.paymentStatus) {
+        rows = rows.filter((r) => r.paymentStatus === usageFilter.paymentStatus);
+      }
+      setUsageRows(rows);
     } catch (e) {
       setErr(apiErrMessage(e));
       setUsageRows([]);
+    } finally {
+      setUsageLoading(false);
+    }
+  }, [usageFilter.room, usageFilter.month, usageFilter.year, usageFilter.billingStatus, usageFilter.paymentStatus]);
+
+  const loadPeriodStatus = useCallback(async (room: string, month: number, year: number) => {
+    if (!room) {
+      setPeriodStatus(null);
+      return;
+    }
+    try {
+      const res = await serviceUsageApi.getPeriodStatus({ room, month, year });
+      setPeriodStatus(res.data as PeriodStatus);
+    } catch {
+      setPeriodStatus(null);
     }
   }, []);
 
@@ -129,8 +216,35 @@ const ServiceManagementBootstrapPage: React.FC = () => {
 
   useEffect(() => {
     if (tab === "room") void loadRoomServices();
-    if (tab === "usage") void loadUsage();
+    if (tab === "usage") {
+      void loadUsage();
+      void loadRoomServices();
+    }
   }, [tab, loadRoomServices, loadUsage]);
+
+  useEffect(() => {
+    if (tab !== "usage" || !usForm.room) {
+      setPeriodStatus(null);
+      return;
+    }
+    void loadPeriodStatus(usForm.room, Number(usForm.month), Number(usForm.year));
+  }, [tab, usForm.room, usForm.month, usForm.year, loadPeriodStatus]);
+
+  useEffect(() => {
+    if (!socket || tab !== "usage") return;
+    const refresh = () => {
+      void loadUsage();
+      if (usForm.room) {
+        void loadPeriodStatus(usForm.room, Number(usForm.month), Number(usForm.year));
+      }
+    };
+    socket.on("bill:new", refresh);
+    socket.on("bill:paid", refresh);
+    return () => {
+      socket.off("bill:new", refresh);
+      socket.off("bill:paid", refresh);
+    };
+  }, [socket, tab, loadUsage, loadPeriodStatus, usForm.room, usForm.month, usForm.year]);
 
   const submitService = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -148,7 +262,7 @@ const ServiceManagementBootstrapPage: React.FC = () => {
         price: p,
         unit: form.unit,
         measureUnit: form.measureUnit,
-        tariffType: form.tariffType,
+        tariffType: form.measureUnit === "kwh" || form.measureUnit === "m3" ? "variable" : form.tariffType,
         description: form.description,
         isActive: true,
       });
@@ -198,7 +312,7 @@ const ServiceManagementBootstrapPage: React.FC = () => {
   const submitUsage = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr(null);
-    setLoading(true);
+    setUsageLoading(true);
     try {
       await serviceUsageApi.create({
         room: usForm.room,
@@ -211,14 +325,48 @@ const ServiceManagementBootstrapPage: React.FC = () => {
       });
       setUsForm((f) => ({ ...f, oldIndex: "", newIndex: "", note: "" }));
       await loadUsage();
+      if (usForm.room) {
+        await loadPeriodStatus(usForm.room, Number(usForm.month), Number(usForm.year));
+      }
     } catch (ex: unknown) {
       setErr((ex as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi nhập chỉ số");
     } finally {
-      setLoading(false);
+      setUsageLoading(false);
     }
   };
 
-  const variableServices = services.filter((s) => s.tariffType === "variable" && (s.measureUnit === "kwh" || s.measureUnit === "m3"));
+  const meterCatalog = services.filter(isMeterService);
+  const assignedMeterIdsForRoom = usForm.room
+    ? new Set(
+        roomRows
+          .filter((row) => row.isActive !== false && rowRoomId(row) === usForm.room)
+          .map((row) => rowServiceId(row))
+          .filter(Boolean)
+      )
+    : new Set<string>();
+
+  /** Luôn hiển thị toàn bộ dịch vụ đồng hồ — không ẩn sau khi tạo HĐ */
+  const meterServicesForDropdown = meterCatalog;
+
+  const periodLocked =
+    periodStatus?.billingStatus === "closed" || periodStatus?.isEditable === false;
+  const lockMessage = meterPeriodLockedMessage(periodStatus?.billingStatus);
+
+  let meterServiceHint: string | null = null;
+  if (meterCatalog.length === 0) {
+    meterServiceHint = "Chưa có dịch vụ điện/nước. Tạo ở tab «Danh mục dịch vụ» với đơn vị đo kWh hoặc m³.";
+  } else if (!usForm.room) {
+    meterServiceHint = "Chọn phòng và kỳ để nhập chỉ số.";
+  } else if (assignedMeterIdsForRoom.size > 0) {
+    const unassigned = meterCatalog.filter((s) => !assignedMeterIdsForRoom.has(s._id));
+    if (unassigned.length > 0) {
+      meterServiceHint = "Một số dịch vụ chưa gán phòng — vẫn có thể chọn từ danh mục. Nên gán ở tab «Gán dịch vụ — phòng».";
+    }
+  } else {
+    meterServiceHint = "Phòng chưa gán dịch vụ đồng hồ — hiển thị toàn danh mục điện/nước.";
+  }
+
+  const filteredUsageRows = usageRows;
 
   return (
     <div className="container-fluid px-0">
@@ -281,7 +429,18 @@ const ServiceManagementBootstrapPage: React.FC = () => {
                   <div className="row g-2 mt-1">
                     <div className="col-6">
                       <label className="form-label">Đơn vị đo</label>
-                      <select className="form-select form-select-sm" value={form.measureUnit} onChange={(e) => setForm({ ...form, measureUnit: e.target.value as "month" | "kwh" | "m3" })}>
+                      <select
+                        className="form-select form-select-sm"
+                        value={form.measureUnit}
+                        onChange={(e) => {
+                          const measureUnit = e.target.value as "month" | "kwh" | "m3";
+                          setForm({
+                            ...form,
+                            measureUnit,
+                            tariffType: measureUnit === "kwh" || measureUnit === "m3" ? "variable" : form.tariffType,
+                          });
+                        }}
+                      >
                         <option value="month">Tháng</option>
                         <option value="kwh">kWh</option>
                         <option value="m3">m³</option>
@@ -392,7 +551,7 @@ const ServiceManagementBootstrapPage: React.FC = () => {
               <tbody>
                 {roomRows.map((r) => (
                   <tr key={r._id}>
-                    <td>{r.room?.roomNumber}</td>
+                    <td>{rowRoomNumber(r)}</td>
                     <td>{r.service?.name}</td>
                     <td>
                       <button type="button" className="btn btn-sm btn-outline-danger" onClick={() => roomServicesApi.remove(r._id).then(() => loadRoomServices())}>
@@ -411,12 +570,28 @@ const ServiceManagementBootstrapPage: React.FC = () => {
         <div className="row">
           <div className="col-lg-5 mb-3">
             <div className="card border-primary">
-              <div className="card-header">Nhập chỉ số (variable + kWh/m³)</div>
+              <div className="card-header d-flex justify-content-between align-items-center">
+                <span>Nhập chỉ số (kWh / m³)</span>
+                {periodStatus?.billingStatus && (
+                  <span className={`badge ${BILLING_STATUS_CLASS[periodStatus.billingStatus]}`}>
+                    {meterDisplayStatus(periodStatus.billingStatus, periodStatus.paymentStatus)}
+                  </span>
+                )}
+              </div>
               <div className="card-body">
+                {periodLocked && lockMessage && (
+                  <div className="alert alert-warning py-2 small mb-3">{lockMessage}</div>
+                )}
                 <form onSubmit={submitUsage}>
                   <div className="mb-2">
                     <label className="form-label">Phòng</label>
-                    <select className="form-select form-select-sm" required value={usForm.room} onChange={(e) => setUsForm({ ...usForm, room: e.target.value })}>
+                    <select
+                      className="form-select form-select-sm"
+                      required
+                      disabled={periodLocked}
+                      value={usForm.room}
+                      onChange={(e) => setUsForm({ ...usForm, room: e.target.value, service: "" })}
+                    >
                       <option value="">—</option>
                       {rooms.map((r) => (
                         <option key={r._id} value={r._id}>
@@ -427,74 +602,216 @@ const ServiceManagementBootstrapPage: React.FC = () => {
                   </div>
                   <div className="mb-2">
                     <label className="form-label">Dịch vụ đồng hồ</label>
-                    <select className="form-select form-select-sm" required value={usForm.service} onChange={(e) => setUsForm({ ...usForm, service: e.target.value })}>
+                    <select
+                      className="form-select form-select-sm"
+                      required
+                      disabled={periodLocked}
+                      value={usForm.service}
+                      onChange={(e) => setUsForm({ ...usForm, service: e.target.value })}
+                    >
                       <option value="">—</option>
-                      {variableServices.map((s) => (
+                      {meterServicesForDropdown.map((s) => (
                         <option key={s._id} value={s._id}>
                           {s.name} ({s.measureUnit} — {fmt(s.price)}/đơn vị)
+                          {assignedMeterIdsForRoom.has(s._id) ? " ✓ đã gán" : ""}
                         </option>
                       ))}
                     </select>
+                    {meterServiceHint && <p className="form-text text-warning mb-0 mt-1">{meterServiceHint}</p>}
+                    <p className="form-text text-muted mb-0 mt-1">
+                      Dịch vụ luôn hiển thị sau khi chốt hóa đơn — chỉ khóa nhập chỉ số.
+                    </p>
                   </div>
                   <div className="row g-2">
                     <div className="col-6">
                       <label className="form-label">Tháng</label>
-                      <input className="form-control form-control-sm" type="number" min={1} max={12} value={usForm.month} onChange={(e) => setUsForm({ ...usForm, month: Number(e.target.value) })} />
+                      <input
+                        className="form-control form-control-sm"
+                        type="number"
+                        min={1}
+                        max={12}
+                        disabled={periodLocked}
+                        value={usForm.month}
+                        onChange={(e) => setUsForm({ ...usForm, month: Number(e.target.value) })}
+                      />
                     </div>
                     <div className="col-6">
                       <label className="form-label">Năm</label>
-                      <input className="form-control form-control-sm" type="number" value={usForm.year} onChange={(e) => setUsForm({ ...usForm, year: Number(e.target.value) })} />
+                      <input
+                        className="form-control form-control-sm"
+                        type="number"
+                        disabled={periodLocked}
+                        value={usForm.year}
+                        onChange={(e) => setUsForm({ ...usForm, year: Number(e.target.value) })}
+                      />
                     </div>
                   </div>
                   <div className="row g-2 mt-1">
                     <div className="col-6">
                       <label className="form-label">Chỉ số cũ</label>
-                      <input className="form-control form-control-sm" required type="number" value={usForm.oldIndex} onChange={(e) => setUsForm({ ...usForm, oldIndex: e.target.value })} />
+                      <input
+                        className="form-control form-control-sm"
+                        required
+                        type="number"
+                        disabled={periodLocked}
+                        value={usForm.oldIndex}
+                        onChange={(e) => setUsForm({ ...usForm, oldIndex: e.target.value })}
+                      />
                     </div>
                     <div className="col-6">
                       <label className="form-label">Chỉ số mới</label>
-                      <input className="form-control form-control-sm" required type="number" value={usForm.newIndex} onChange={(e) => setUsForm({ ...usForm, newIndex: e.target.value })} />
+                      <input
+                        className="form-control form-control-sm"
+                        required
+                        type="number"
+                        disabled={periodLocked}
+                        value={usForm.newIndex}
+                        onChange={(e) => setUsForm({ ...usForm, newIndex: e.target.value })}
+                      />
                     </div>
                   </div>
                   <div className="mb-2 mt-2">
                     <label className="form-label">Ghi chú</label>
-                    <input className="form-control form-control-sm" value={usForm.note} onChange={(e) => setUsForm({ ...usForm, note: e.target.value })} />
+                    <input
+                      className="form-control form-control-sm"
+                      disabled={periodLocked}
+                      value={usForm.note}
+                      onChange={(e) => setUsForm({ ...usForm, note: e.target.value })}
+                    />
                   </div>
                   <p className="small text-muted mb-2">Tiền = (mới − cũ) × đơn giá. Chỉ số cũ phải ≥ chỉ số kết tháng trước.</p>
-                  <button type="submit" className="btn btn-success btn-sm">
-                    Lưu & tính tiền
+                  <button type="submit" className="btn btn-success btn-sm" disabled={periodLocked || usageLoading}>
+                    {periodLocked ? "Đã chốt — không cập nhật" : "Lưu & tính tiền"}
                   </button>
                 </form>
               </div>
             </div>
           </div>
           <div className="col-lg-7">
-            <h6 className="mb-2">Lịch sử nhập</h6>
+            <div className="d-flex flex-wrap gap-2 align-items-end mb-3">
+              <div>
+                <label className="form-label small mb-0">Lọc phòng</label>
+                <select
+                  className="form-select form-select-sm"
+                  value={usageFilter.room}
+                  onChange={(e) => setUsageFilter((f) => ({ ...f, room: e.target.value }))}
+                >
+                  <option value="">Tất cả</option>
+                  {rooms.map((r) => (
+                    <option key={r._id} value={r._id}>
+                      {r.roomNumber}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="form-label small mb-0">Tháng</label>
+                <input
+                  className="form-control form-control-sm"
+                  type="number"
+                  min={1}
+                  max={12}
+                  placeholder="—"
+                  value={usageFilter.month}
+                  onChange={(e) => setUsageFilter((f) => ({ ...f, month: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="form-label small mb-0">Năm</label>
+                <input
+                  className="form-control form-control-sm"
+                  type="number"
+                  placeholder="—"
+                  value={usageFilter.year}
+                  onChange={(e) => setUsageFilter((f) => ({ ...f, year: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="form-label small mb-0">Chốt kỳ</label>
+                <select
+                  className="form-select form-select-sm"
+                  value={usageFilter.billingStatus}
+                  onChange={(e) => setUsageFilter((f) => ({ ...f, billingStatus: e.target.value }))}
+                >
+                  <option value="">Tất cả</option>
+                  <option value="open">Chưa chốt</option>
+                  <option value="closed">Đã chốt HĐ</option>
+                </select>
+              </div>
+              <div>
+                <label className="form-label small mb-0">Thanh toán</label>
+                <select
+                  className="form-select form-select-sm"
+                  value={usageFilter.paymentStatus}
+                  onChange={(e) => setUsageFilter((f) => ({ ...f, paymentStatus: e.target.value }))}
+                >
+                  <option value="">Tất cả</option>
+                  <option value="none">—</option>
+                  <option value="unpaid">Chờ TT</option>
+                  <option value="paid">Đã TT</option>
+                  <option value="overdue">Quá hạn</option>
+                </select>
+              </div>
+              <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => void loadUsage()}>
+                Làm mới
+              </button>
+            </div>
+
+            <h6 className="mb-2">Lịch sử chỉ số điện / nước</h6>
+            {usageLoading && (
+              <div className="spinner-border spinner-border-sm text-primary mb-2" role="status" />
+            )}
             <div className="table-responsive">
               <table className="table table-sm table-bordered">
                 <thead className="table-light">
                   <tr>
                     <th>Phòng</th>
-                    <th>DV</th>
+                    <th>Dịch vụ</th>
                     <th>Kỳ</th>
+                    <th>CS cũ</th>
+                    <th>CS mới</th>
                     <th>Tiêu thụ</th>
                     <th className="text-end">Tiền</th>
+                    <th>Chốt kỳ</th>
+                    <th>Thanh toán</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {usageRows.map((u) => (
-                    <tr key={u._id}>
-                      <td>{u.room?.roomNumber}</td>
-                      <td>{u.service?.name}</td>
-                      <td>
-                        {u.month}/{u.year}
+                  {filteredUsageRows.length === 0 && !usageLoading && (
+                    <tr>
+                      <td colSpan={9} className="text-center text-muted py-4">
+                        Chưa có dữ liệu chỉ số
                       </td>
-                      <td>
-                        {u.usage} ({u.oldIndex} → {u.newIndex})
-                      </td>
-                      <td className="text-end fw-bold text-primary">{fmt(u.amount)}</td>
                     </tr>
-                  ))}
+                  )}
+                  {filteredUsageRows.map((u) => {
+                    const bs = (u.billingStatus || "open") as MeterBillingStatus;
+                    const ps = (u.paymentStatus || "none") as MeterPaymentStatus;
+                    return (
+                      <tr key={u._id}>
+                        <td>{u.room?.roomNumber}</td>
+                        <td>{u.service?.name}</td>
+                        <td>
+                          {u.month}/{u.year}
+                        </td>
+                        <td>{u.oldIndex}</td>
+                        <td>{u.newIndex}</td>
+                        <td>
+                          {u.usage} {u.service?.measureUnit || ""}
+                        </td>
+                        <td className="text-end fw-bold text-primary">{fmt(u.amount)}</td>
+                        <td>
+                          <span className={`badge ${BILLING_STATUS_CLASS[bs]}`}>{BILLING_STATUS_LABEL[bs]}</span>
+                        </td>
+                        <td>
+                          <span className={`badge ${PAYMENT_STATUS_CLASS[ps]}`}>{PAYMENT_STATUS_LABEL[ps]}</span>
+                          {u.bill?.billCode ? (
+                            <div className="small text-muted">{u.bill.billCode}</div>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

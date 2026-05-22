@@ -1,11 +1,16 @@
-import React, { useState, useEffect } from "react";
-import { App, Row, Col, Card, Statistic, Spin, Progress, Switch, Space, Button, Modal, Form, Input, DatePicker, Select } from "antd";
+import React, { useState, useEffect, useRef } from "react";
+import { App, Row, Col, Card, Spin, Progress, Switch, Space, Button, Modal, Form, Input, DatePicker, Select, Alert } from "antd";
 import { HomeOutlined, TeamOutlined, FileAddOutlined, WarningOutlined } from "@ant-design/icons";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
 import { useNavigate } from "react-router-dom";
-import { dashboardApi, registrationPeriodsApi } from "../../api";
+import { dashboardApi, registrationPeriodsApi, extensionPeriodsApi } from "../../api";
 import dayjs from "dayjs";
 import { exportToExcel } from "../../utils/exportExcel";
+import DashboardStatCard from "../../components/admin/dashboard/DashboardStatCard";
+import RegistrationPeriodStatusCard from "../../components/admin/dashboard/RegistrationPeriodStatusCard";
+import { useNowMs } from "../../hooks/useNowMs";
+import type { RegistrationPeriodLike } from "../../utils/registrationPeriodStatus";
+import "../../components/admin/dashboard/dashboard-stat-card.css";
 
 interface DashboardStats {
   totalRooms?: number;
@@ -70,12 +75,19 @@ interface DashboardStats {
   };
 }
 
-interface RegistrationPeriod {
-  _id: string;
-  name: string;
-  startDate: string;
-  endDate: string;
-  isActive: boolean;
+interface RegistrationPeriod extends RegistrationPeriodLike {}
+
+type PeriodItem = RegistrationPeriod;
+
+function isPeriodOpenNow(period?: PeriodItem | null, nowMs: number = Date.now()): boolean {
+  if (!period || !period.isActive) return false;
+  const now = dayjs(nowMs);
+  return !now.isBefore(dayjs(period.startDate)) && !now.isAfter(dayjs(period.endDate));
+}
+
+function isPeriodExpiredButActive(period?: PeriodItem | null, nowMs: number = Date.now()): boolean {
+  if (!period || !period.isActive) return false;
+  return dayjs(nowMs).isAfter(dayjs(period.endDate));
 }
 
 const DashboardPage: React.FC = () => {
@@ -83,16 +95,26 @@ const DashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const [periods, setPeriods] = useState<RegistrationPeriod[]>([]);
   const [periodsLoading, setPeriodsLoading] = useState(true);
-  const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [periodsError, setPeriodsError] = useState<string | null>(null);
   const [contractExtensionEnabled, setContractExtensionEnabled] = useState<boolean | null>(null);
   const [contractExtensionToggling, setContractExtensionToggling] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createForm] = Form.useForm();
-  const [openModalOpen, setOpenModalOpen] = useState(false);
-  const [openForm] = Form.useForm();
-  const [quickCountdown, setQuickCountdown] = useState<string>("");
+  const nowMs = useNowMs();
+  const [extPeriods, setExtPeriods] = useState<PeriodItem[]>([]);
+  const [extPeriodsLoading, setExtPeriodsLoading] = useState(true);
+  const [extPeriodsError, setExtPeriodsError] = useState<string | null>(null);
+  const [extTogglingId, setExtTogglingId] = useState<string | null>(null);
+  const [extCreateModalOpen, setExtCreateModalOpen] = useState(false);
+  const [extCreateForm] = Form.useForm();
+  const [extOpenModalOpen, setExtOpenModalOpen] = useState(false);
+  const [extOpenForm] = Form.useForm();
+  const [extQuickCountdown, setExtQuickCountdown] = useState<string>("");
+  const refreshedExpiredExtPeriodRef = useRef<string | null>(null);
+  const refreshedExpiredRegPeriodRef = useRef<string | null>(null);
   const [range, setRange] = useState<"7d" | "14d" | "month">("7d");
   const [roomStatus, setRoomStatus] = useState<"all" | "available" | "full" | "maintenance">("all");
   const [billStatus, setBillStatus] = useState<"all" | "unpaid" | "pending" | "overdue" | "paid">("all");
@@ -106,6 +128,7 @@ const DashboardPage: React.FC = () => {
 
   const loadDashboardStats = async () => {
     setLoading(true);
+    setStatsError(null);
     try {
       const res = await dashboardApi.getStats({
         range,
@@ -122,30 +145,65 @@ const DashboardPage: React.FC = () => {
       setStats(res.data);
     } catch (err: unknown) {
       const st = (err as { response?: { status?: number } })?.response?.status;
-      message.error(
+      const msg =
         st === 429
           ? "Quá nhiều yêu cầu (429). Thử lại sau vài phút."
-          : "Không tải được thống kê dashboard",
-      );
+          : "Không tải được thống kê dashboard";
+      setStatsError(msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const loadPeriods = async () => {
+  const loadPeriods = async (opts?: { silent?: boolean }) => {
     setPeriodsLoading(true);
+    if (!opts?.silent) setPeriodsError(null);
     try {
       const res = await registrationPeriodsApi.getAll();
-      setPeriods(res.data || []);
+      const list = (res.data || []) as RegistrationPeriod[];
+      setPeriods(list);
+      setPeriodsError(null);
+      if (!list.some((p) => isPeriodExpiredButActive(p))) {
+        refreshedExpiredRegPeriodRef.current = null;
+      }
     } catch (err: unknown) {
       const st = (err as { response?: { status?: number } })?.response?.status;
-      message.error(
-        st === 429
-          ? "Quá nhiều yêu cầu tới máy chủ. Đợi vài phút hoặc khởi động lại backend (giới hạn API)."
-          : "Không tải được danh sách đợt đăng ký",
-      );
+      const msg =
+        st === 404
+          ? "API đợt đăng ký chưa sẵn sàng — hãy khởi động lại backend (thư mục backend, lệnh node index.js)."
+          : st === 429
+            ? "Quá nhiều yêu cầu tới máy chủ. Đợi vài phút hoặc khởi động lại backend (giới hạn API)."
+            : "Không tải được danh sách đợt đăng ký";
+      setPeriodsError(msg);
+      if (!opts?.silent) setPeriods([]);
     } finally {
       setPeriodsLoading(false);
+    }
+  };
+
+  const loadExtensionPeriods = async (opts?: { silent?: boolean }) => {
+    setExtPeriodsLoading(true);
+    if (!opts?.silent) setExtPeriodsError(null);
+    try {
+      const res = await extensionPeriodsApi.getAll();
+      const list = (res.data || []) as PeriodItem[];
+      setExtPeriods(list);
+      setExtPeriodsError(null);
+      if (!list.some((p) => isPeriodExpiredButActive(p))) {
+        refreshedExpiredExtPeriodRef.current = null;
+      }
+    } catch (err: unknown) {
+      const st = (err as { response?: { status?: number } })?.response?.status;
+      const msg =
+        st === 404
+          ? "API đợt gia hạn chưa sẵn sàng — hãy khởi động lại backend (thư mục backend, lệnh node index.js)."
+          : st === 429
+            ? "Quá nhiều yêu cầu tới máy chủ. Đợi vài phút hoặc khởi động lại backend."
+            : "Không tải được danh sách đợt gia hạn";
+      setExtPeriodsError(msg);
+      if (!opts?.silent) message.error(msg);
+    } finally {
+      setExtPeriodsLoading(false);
     }
   };
 
@@ -162,60 +220,59 @@ const DashboardPage: React.FC = () => {
 
   useEffect(() => {
     void loadDashboardStats();
-    void loadPeriods();
-    void loadContractExtensionSetting();
   }, [range, roomStatus, billStatus, billPeriodType, billYear, billMonth, billQuarter, maintenanceType, maintenanceStatus, violationSeverity]);
 
-  const quickPeriod = periods.find((p) => p.isActive) || periods[0] || null;
-  const activePeriod = periods.find((p) => p.isActive) || null;
+  useEffect(() => {
+    void loadPeriods();
+    void loadExtensionPeriods();
+    void loadContractExtensionSetting();
+  }, []);
+
+  const activeExtPeriod = extPeriods.find((p) => isPeriodOpenNow(p, nowMs)) || null;
+  const expiredButActiveExtPeriod = extPeriods.find((p) => isPeriodExpiredButActive(p, nowMs)) || null;
+  const expiredButActiveRegPeriod = periods.find((p) => isPeriodExpiredButActive(p, nowMs)) || null;
 
   useEffect(() => {
-    if (!quickPeriod?.isActive) {
-      setQuickCountdown("Đang đóng");
+    if (!expiredButActiveRegPeriod) return;
+    if (refreshedExpiredRegPeriodRef.current === expiredButActiveRegPeriod._id) return;
+    refreshedExpiredRegPeriodRef.current = expiredButActiveRegPeriod._id;
+    void loadPeriods({ silent: true });
+  }, [expiredButActiveRegPeriod?._id, nowMs]);
+
+  useEffect(() => {
+    if (!expiredButActiveExtPeriod) return;
+    if (refreshedExpiredExtPeriodRef.current === expiredButActiveExtPeriod._id) return;
+    refreshedExpiredExtPeriodRef.current = expiredButActiveExtPeriod._id;
+    void loadExtensionPeriods({ silent: true });
+  }, [expiredButActiveExtPeriod?._id, nowMs]);
+
+  useEffect(() => {
+    if (!activeExtPeriod) {
+      setExtQuickCountdown("");
       return;
     }
 
     const updateCountdown = () => {
-      const diffMs = dayjs(quickPeriod.endDate).diff(dayjs());
+      const diffMs = dayjs(activeExtPeriod.endDate).diff(dayjs());
       if (diffMs <= 0) {
-        setQuickCountdown("00:00:00");
+        setExtQuickCountdown("00:00:00");
+        if (refreshedExpiredExtPeriodRef.current !== activeExtPeriod._id) {
+          refreshedExpiredExtPeriodRef.current = activeExtPeriod._id;
+          void loadExtensionPeriods({ silent: true });
+        }
         return;
       }
       const totalSeconds = Math.floor(diffMs / 1000);
       const h = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
       const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
       const s = String(totalSeconds % 60).padStart(2, "0");
-      setQuickCountdown(`${h}:${m}:${s}`);
+      setExtQuickCountdown(`${h}:${m}:${s}`);
     };
 
     updateCountdown();
     const timer = window.setInterval(updateCountdown, 1000);
     return () => window.clearInterval(timer);
-  }, [quickPeriod?._id, quickPeriod?.isActive, quickPeriod?.endDate]);
-
-  const handleToggleActive = async (period: RegistrationPeriod, checked: boolean) => {
-    setTogglingId(period._id);
-    try {
-      await registrationPeriodsApi.update(period._id, { isActive: checked });
-      message.success(checked ? "Đã mở đợt đăng ký" : "Đã tắt đợt đăng ký");
-      await loadPeriods();
-    } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không cập nhật được đợt đăng ký");
-    } finally {
-      setTogglingId(null);
-    }
-  };
-
-  const handleMainToggle = async (checked: boolean) => {
-    if (checked) {
-      openForm.setFieldsValue({ endDate: dayjs().add(7, "day") });
-      setOpenModalOpen(true);
-      return;
-    }
-
-    if (!activePeriod) return;
-    await handleToggleActive(activePeriod, false);
-  };
+  }, [activeExtPeriod?._id, activeExtPeriod?.endDate]);
 
   const handleContractExtensionToggle = async (checked: boolean) => {
     const prev = contractExtensionEnabled ?? true;
@@ -238,42 +295,6 @@ const DashboardPage: React.FC = () => {
     }
   };
 
-  const handleConfirmOpen = async (values: { endDate: ReturnType<typeof dayjs> }) => {
-    const end = values.endDate;
-    if (!end || end.isBefore(dayjs())) {
-      message.error("Vui lòng chọn ngày giờ hết hạn lớn hơn hiện tại");
-      return;
-    }
-
-    const now = dayjs();
-    const target = activePeriod || periods[0] || null;
-    setTogglingId(target?._id || "new");
-
-    try {
-      if (target) {
-        await registrationPeriodsApi.update(target._id, {
-          startDate: now.toISOString(),
-          endDate: end.toISOString(),
-          isActive: true,
-        });
-      } else {
-        await registrationPeriodsApi.create({
-          name: `Mở đăng ký ${now.format("DD/MM/YYYY HH:mm")}`,
-          startDate: now.toISOString(),
-          endDate: end.toISOString(),
-        });
-      }
-      message.success("Đã mở đăng ký nội trú");
-      setOpenModalOpen(false);
-      openForm.resetFields();
-      await loadPeriods();
-    } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không mở được đợt đăng ký");
-    } finally {
-      setTogglingId(null);
-    }
-  };
-
   const handleCreatePeriod = async (values: { name: string; startDate: ReturnType<typeof dayjs>; endDate: ReturnType<typeof dayjs> }) => {
     try {
       await registrationPeriodsApi.create({
@@ -290,7 +311,84 @@ const DashboardPage: React.FC = () => {
     }
   };
 
-  if (loading) return <Spin size="large" style={{ display: "block", margin: "40px auto" }} />;
+  const handleToggleExtActive = async (period: PeriodItem, checked: boolean) => {
+    setExtTogglingId(period._id);
+    try {
+      await extensionPeriodsApi.update(period._id, { isActive: checked });
+      message.success(checked ? "Đã mở đợt gia hạn" : "Đã tắt đợt gia hạn");
+      await loadExtensionPeriods();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không cập nhật được đợt gia hạn");
+    } finally {
+      setExtTogglingId(null);
+    }
+  };
+
+  const handleExtMainToggle = async (checked: boolean) => {
+    if (contractExtensionEnabled === false) {
+      message.warning("Bật chức năng gia hạn toàn cục trước khi mở đợt");
+      return;
+    }
+    if (checked) {
+      extOpenForm.setFieldsValue({ endDate: dayjs().add(14, "day") });
+      setExtOpenModalOpen(true);
+      return;
+    }
+    if (!activeExtPeriod) return;
+    await handleToggleExtActive(activeExtPeriod, false);
+  };
+
+  const handleConfirmExtOpen = async (values: { endDate: ReturnType<typeof dayjs> }) => {
+    const end = values.endDate;
+    if (!end || end.isBefore(dayjs())) {
+      message.error("Vui lòng chọn ngày giờ hết hạn lớn hơn hiện tại");
+      return;
+    }
+
+    const now = dayjs();
+    const target = activeExtPeriod || extPeriods[0] || null;
+    setExtTogglingId(target?._id || "new");
+
+    try {
+      if (target) {
+        await extensionPeriodsApi.update(target._id, {
+          startDate: now.toISOString(),
+          endDate: end.toISOString(),
+          isActive: true,
+        });
+      } else {
+        await extensionPeriodsApi.create({
+          name: `Đợt gia hạn ${now.format("DD/MM/YYYY HH:mm")}`,
+          startDate: now.toISOString(),
+          endDate: end.toISOString(),
+        });
+      }
+      message.success("Đã mở đợt gia hạn hợp đồng");
+      setExtOpenModalOpen(false);
+      extOpenForm.resetFields();
+      await loadExtensionPeriods();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không mở được đợt gia hạn");
+    } finally {
+      setExtTogglingId(null);
+    }
+  };
+
+  const handleCreateExtPeriod = async (values: { name: string; startDate: ReturnType<typeof dayjs>; endDate: ReturnType<typeof dayjs> }) => {
+    try {
+      await extensionPeriodsApi.create({
+        name: values.name,
+        startDate: values.startDate.toISOString(),
+        endDate: values.endDate.toISOString(),
+      });
+      message.success("Đã tạo đợt gia hạn");
+      setExtCreateModalOpen(false);
+      extCreateForm.resetFields();
+      await loadExtensionPeriods();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được đợt gia hạn");
+    }
+  };
 
   const s: DashboardStats = stats || {};
   const roomByArea = s.roomByArea || [];
@@ -311,9 +409,33 @@ const DashboardPage: React.FC = () => {
   const billingSummary = s.billing?.summary;
   const incidentSummary = s.incidents?.summary;
 
+  const pendingViolations = incidentSummary?.pendingViolations ?? s.pendingViolations ?? 0;
+
+  const extensionStatusText =
+    contractExtensionEnabled === false
+      ? "Chức năng gia hạn đang tắt toàn cục"
+      : activeExtPeriod
+        ? `Đang mở — hết hạn ${dayjs(activeExtPeriod.endDate).format("DD/MM/YYYY HH:mm")} (còn ${extQuickCountdown || "đang tính..."})`
+        : expiredButActiveExtPeriod
+          ? "Đã hết hạn — hệ thống đang tự đóng đợt"
+          : "Chưa mở đợt gia hạn";
+
   return (
     <div>
       <h2 style={{ marginBottom: 24 }}>Dashboard</h2>
+      {statsError ? (
+        <Alert
+          type="error"
+          showIcon
+          message={statsError}
+          action={
+            <Button size="small" onClick={() => void loadDashboardStats()}>
+              Thử lại
+            </Button>
+          }
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
       <Card style={{ marginBottom: 16 }}>
         <Space wrap>
           <Select value={range} style={{ width: 170 }} onChange={(v) => setRange(v)}>
@@ -403,73 +525,107 @@ const DashboardPage: React.FC = () => {
       </Card>
       <Row gutter={[24, 24]}>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="Đơn chờ duyệt" value={overview.pendingApplications} prefix={<FileAddOutlined />} /></Card>
+          <DashboardStatCard
+            title="Đơn chờ duyệt"
+            value={overview.pendingApplications}
+            prefix={<FileAddOutlined />}
+            to="/admin/applications"
+            loading={loading}
+          />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="Phòng trống" value={overview.availableRooms} prefix={<HomeOutlined />} /></Card>
+          <DashboardStatCard
+            title="Phòng trống"
+            value={overview.availableRooms}
+            prefix={<HomeOutlined />}
+            to="/admin/housing?tab=rooms"
+            loading={loading}
+          />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="SV đang lưu trú" value={overview.residentStudents} prefix={<TeamOutlined />} /></Card>
+          <DashboardStatCard
+            title="SV đang lưu trú"
+            value={overview.residentStudents}
+            prefix={<TeamOutlined />}
+            to="/admin/students"
+            loading={loading}
+          />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="Doanh thu tạm tính" value={overview.estimatedRevenue} formatter={(v) => `${Number(v).toLocaleString("vi-VN")}đ`} /></Card>
+          <DashboardStatCard
+            title="Doanh thu tạm tính"
+            value={overview.estimatedRevenue}
+            to="/admin/bills"
+            loading={loading}
+            formatter={(v) => `${Number(v).toLocaleString("vi-VN")}đ`}
+          />
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate("/admin/violations")} style={{ cursor: "pointer" }}>
-            <Statistic title="Vi phạm chờ xử lý" value={s.pendingViolations ?? 0} prefix={<WarningOutlined />} />
-          </Card>
+          <DashboardStatCard
+            title="Vi phạm chờ xử lý"
+            value={pendingViolations}
+            prefix={<WarningOutlined />}
+            to="/admin/violations"
+            loading={loading}
+          />
         </Col>
       </Row>
       <Row gutter={[24, 24]} style={{ marginTop: 16 }}>
         <Col xs={24} md={12}>
-          <Card title="Tỉ lệ phòng trống">
-            <Progress type="circle" percent={100 - (roomPerf?.occupancyRate ?? s.occupancyRate ?? 0)} format={(p) => `${p}% trống`} />
+          <Card
+            title="Tỉ lệ phòng trống"
+            hoverable
+            className="dashboard-stat-card"
+            onClick={() => navigate("/admin/housing?tab=rooms")}
+            role="link"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                navigate("/admin/housing?tab=rooms");
+              }
+            }}
+          >
+            {loading ? (
+              <Spin />
+            ) : (
+              <Progress type="circle" percent={100 - (roomPerf?.occupancyRate ?? s.occupancyRate ?? 0)} format={(p) => `${p}% trống`} />
+            )}
           </Card>
         </Col>
         <Col xs={24} md={12}>
-          <Card
-            title="Bật/tắt mở đợt đăng ký nội trú"
+          <RegistrationPeriodStatusCard
+            periods={periods}
             loading={periodsLoading}
-            extra={<Button onClick={() => setCreateModalOpen(true)}>Tạo đợt</Button>}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-              <div>
-                <div style={{ fontWeight: 700 }}>Đăng ký nội trú</div>
-                <div style={{ fontSize: 12, color: "#6b7280" }}>
-                  {activePeriod
-                    ? `Đang mở - hết hạn ${dayjs(activePeriod.endDate).format("DD/MM/YYYY HH:mm")} (còn ${quickCountdown || "đang tính..."})`
-                    : "Hiện đang đóng"}
-                </div>
-              </div>
-              <Switch
-                checked={!!activePeriod}
-                checkedChildren="Bật"
-                unCheckedChildren="Tắt"
-                loading={!!togglingId}
-                onChange={handleMainToggle}
-              />
-            </div>
-            {periods.length === 0 ? (
-              <span>Chưa có đợt đăng ký nào. Vui lòng tạo đợt trước khi bật.</span>
-            ) : (
-              <Space orientation="vertical" style={{ width: "100%" }}>
-                <div style={{ color: "#6b7280", fontSize: 12 }}>
-                  Dùng công tắc phía trên để bật/tắt nhanh đợt đăng ký hiện tại.
-                </div>
-              </Space>
-            )}
-          </Card>
+            error={periodsError}
+            nowMs={nowMs}
+            onRetry={() => void loadPeriods()}
+            onCreateClick={() => setCreateModalOpen(true)}
+          />
         </Col>
       </Row>
 
       <Row gutter={[24, 24]} style={{ marginTop: 16 }}>
         <Col xs={24} md={12}>
-          <Card title="Bật/tắt gia hạn hợp đồng" loading={contractExtensionEnabled === null}>
+          <Card title="Gia hạn hợp đồng" loading={contractExtensionEnabled === null || extPeriodsLoading} extra={<Button onClick={() => setExtCreateModalOpen(true)}>Tạo đợt</Button>}>
+            {extPeriodsError ? (
+              <Alert
+                type="error"
+                showIcon
+                message={extPeriodsError}
+                action={
+                  <Button size="small" onClick={() => void loadExtensionPeriods()}>
+                    Thử lại
+                  </Button>
+                }
+                style={{ marginBottom: 12 }}
+              />
+            ) : null}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
               <div>
-                <div style={{ fontWeight: 700 }}>Gia hạn cho sinh viên</div>
+                <div style={{ fontWeight: 700 }}>Cho phép gia hạn (toàn hệ thống)</div>
                 <div style={{ fontSize: 12, color: "#6b7280" }}>
-                  {contractExtensionEnabled === false ? "Tắt — không cho gia hạn" : "Bật — cho phép gia hạn"}
+                  {contractExtensionEnabled === false ? "Tắt — sinh viên không thể gửi yêu cầu" : "Bật — có thể mở đợt gia hạn cho sinh viên"}
                 </div>
               </div>
               <Switch
@@ -480,7 +636,28 @@ const DashboardPage: React.FC = () => {
                 onChange={handleContractExtensionToggle}
               />
             </div>
-            <div style={{ color: "#6b7280", fontSize: 12 }}>Nếu bật: sinh viên được gia hạn. Nếu tắt: không cho gia hạn.</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, paddingTop: 8, borderTop: "1px solid #f3f4f6" }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>Đợt gia hạn hiện tại</div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>{extensionStatusText}</div>
+              </div>
+              <Switch
+                checked={!!activeExtPeriod}
+                checkedChildren="Mở"
+                unCheckedChildren="Đóng"
+                loading={!!extTogglingId}
+                disabled={contractExtensionEnabled === false}
+                onChange={handleExtMainToggle}
+              />
+            </div>
+            {contractExtensionEnabled !== false && extPeriods.length === 0 && (
+              <span style={{ fontSize: 12, color: "#6b7280" }}>Chưa có đợt gia hạn. Tạo đợt rồi bật công tắc phía trên để sinh viên gửi yêu cầu.</span>
+            )}
+            {contractExtensionEnabled !== false && extPeriods.length > 0 && (
+              <div style={{ color: "#6b7280", fontSize: 12 }}>
+                Sinh viên chỉ gửi yêu cầu gia hạn khi chức năng bật và đang trong đợt mở.
+              </div>
+            )}
           </Card>
         </Col>
       </Row>
@@ -644,18 +821,34 @@ const DashboardPage: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
+      <Modal title="Tạo đợt gia hạn hợp đồng" open={extCreateModalOpen} onCancel={() => setExtCreateModalOpen(false)} footer={null}>
+        <Form form={extCreateForm} layout="vertical" onFinish={handleCreateExtPeriod}>
+          <Form.Item name="name" label="Tên đợt" rules={[{ required: true, message: "Nhập tên đợt" }]}>
+            <Input placeholder="VD: Gia hạn HK1 2026" />
+          </Form.Item>
+          <Form.Item name="startDate" label="Ngày bắt đầu" rules={[{ required: true, message: "Chọn ngày bắt đầu" }]}>
+            <DatePicker style={{ width: "100%" }} showTime />
+          </Form.Item>
+          <Form.Item name="endDate" label="Ngày kết thúc" rules={[{ required: true, message: "Chọn ngày kết thúc" }]}>
+            <DatePicker style={{ width: "100%" }} showTime />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit">Tạo đợt</Button>
+          </Form.Item>
+        </Form>
+      </Modal>
       <Modal
-        title="Mở đăng ký nội trú"
-        open={openModalOpen}
-        onCancel={() => setOpenModalOpen(false)}
-        onOk={() => openForm.submit()}
-        okText="Mở đăng ký"
+        title="Mở đợt gia hạn hợp đồng"
+        open={extOpenModalOpen}
+        onCancel={() => setExtOpenModalOpen(false)}
+        onOk={() => extOpenForm.submit()}
+        okText="Mở đợt"
         cancelText="Hủy"
       >
-        <Form form={openForm} layout="vertical" onFinish={handleConfirmOpen}>
+        <Form form={extOpenForm} layout="vertical" onFinish={handleConfirmExtOpen}>
           <Form.Item
             name="endDate"
-            label="Ngày giờ hết hạn nộp đơn"
+            label="Ngày giờ hết hạn nhận yêu cầu gia hạn"
             rules={[{ required: true, message: "Vui lòng chọn ngày giờ hết hạn" }]}
           >
             <DatePicker

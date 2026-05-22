@@ -1,0 +1,33 @@
+.user-detail-modal .ant-modal-body {
+  max-height: min(78vh, 860px);
+  overflow-y: auto;
+}
+
+.user-detail-section {
+  margin-bottom: 0;
+}
+
+.user-detail-section .ant-card-head-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.user-detail-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.user-detail-table-wrap .ant-table {
+  min-width: 960px;
+}
+
+.user-detail-long-text {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 768px) {
+  .user-detail-modal .ant-descriptions-item-label {
+    width: 38%;
+  }
+}

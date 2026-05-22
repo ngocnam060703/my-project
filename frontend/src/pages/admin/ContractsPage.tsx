@@ -31,6 +31,7 @@ import {
 import { exportToExcel } from "../../utils/exportExcel";
 import { contractsApi, client, opsContractsApi } from "../../api";
 import { areasApi } from "../../api";
+import { useSocket } from "../../contexts/SocketContext";
 import type { Area, Contract, ContractExtendRequest, Room, User } from "../../types";
 import dayjs from "dayjs";
 
@@ -66,9 +67,17 @@ function studentMonthlyRentVnd(c: Contract, room: Room | null): number {
   return Math.round(full / roomSlots(room || undefined));
 }
 
+const extendStatusMap: Record<string, { color: string; text: string }> = {
+  pending: { color: "gold", text: "Chờ duyệt" },
+  approved: { color: "green", text: "Đã duyệt" },
+  rejected: { color: "red", text: "Từ chối" },
+};
+
 const ContractsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const openContractId = searchParams.get("openContract")?.trim() || "";
+  const extendTabActive = searchParams.get("tab") === "extend";
+  const { socket } = useSocket();
 
   const [data, setData] = useState<Contract[]>([]);
   const [total, setTotal] = useState(0);
@@ -85,6 +94,9 @@ const ContractsPage: React.FC = () => {
   const [major, setMajor] = useState("");
   const [areas, setAreas] = useState<Array<Pick<Area, "_id" | "name">>>([]);
   const [extendReqs, setExtendReqs] = useState<ContractExtendRequest[]>([]);
+  const [extendStatusFilter, setExtendStatusFilter] = useState<"pending" | "approved" | "rejected" | "all">("pending");
+  const [extendSearch, setExtendSearch] = useState("");
+  const [extendLoading, setExtendLoading] = useState(false);
   const [rejectExt, setRejectExt] = useState<{ id: string; note: string } | null>(null);
   const [confirmModal, setConfirmModal] = useState<{ contract: Contract; signedPdfUrl: string } | null>(null);
   const [ops, setOps] = useState<{
@@ -101,11 +113,20 @@ const ContractsPage: React.FC = () => {
   } | null>(null);
 
   const loadExtendRequests = async () => {
+    setExtendLoading(true);
     try {
-      const res = await contractsApi.listExtendRequests({ status: "pending" });
+      const res = await contractsApi.listExtendRequests({
+        status: extendStatusFilter,
+        search: extendSearch.trim() || undefined,
+      });
       setExtendReqs(res.data?.items || []);
-    } catch {
+    } catch (err: unknown) {
       setExtendReqs([]);
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 403) message.error("Bạn không có quyền xem yêu cầu gia hạn");
+      else message.error("Không tải được danh sách yêu cầu gia hạn");
+    } finally {
+      setExtendLoading(false);
     }
   };
 
@@ -140,7 +161,25 @@ const ContractsPage: React.FC = () => {
 
   useEffect(() => {
     void load();
+    const timer = window.setInterval(() => void loadExtendRequests(), 30000);
+    return () => window.clearInterval(timer);
   }, [page, filters.status, filters.room, filters.area, quick.hasDebt, search, faculty, major]);
+
+  useEffect(() => {
+    void loadExtendRequests();
+  }, [extendStatusFilter, extendSearch]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onNewExtend = () => {
+      void loadExtendRequests();
+      void opsContractsApi.dashboard().then((res) => setOps(res.data?.cards || null)).catch(() => {});
+    };
+    socket.on("contract:extend-request:new", onNewExtend);
+    return () => {
+      socket.off("contract:extend-request:new", onNewExtend);
+    };
+  }, [socket, extendStatusFilter, extendSearch]);
 
   useEffect(() => {
     if (!openContractId) return;
@@ -171,6 +210,13 @@ const ContractsPage: React.FC = () => {
   }, [openContractId, setSearchParams]);
 
   useEffect(() => {
+    if (!extendTabActive) return;
+    window.setTimeout(() => {
+      document.getElementById("extend-requests")?.scrollIntoView({ behavior: "smooth" });
+    }, 200);
+  }, [extendTabActive]);
+
+  useEffect(() => {
     areasApi
       .getAll()
       .then((res) => setAreas((res.data?.areas ?? res.data ?? []) as Array<Pick<Area, "_id" | "name">>))
@@ -187,7 +233,7 @@ const ContractsPage: React.FC = () => {
   const handleTerminate = (c: Contract) => {
     Modal.confirm({
       title: "Chấm dứt hợp đồng",
-      content: `Xác nhận chấm dứt hợp đồng ${c.contractNumber}? Sinh viên sẽ bị trả phòng và không thể hoàn tác.`,
+      content: `Xác nhận chấm dứt hợp đồng ${c.contractNumber}? Sinh viên sẽ bị trả phòng và số đang ở phòng/khu được cập nhật lại.`,
       okText: "Chấm dứt",
       okType: "danger",
       cancelText: "Hủy",
@@ -195,6 +241,26 @@ const ContractsPage: React.FC = () => {
         try {
           await contractsApi.terminate(c._id);
           message.success("Đã chấm dứt hợp đồng");
+          load();
+        } catch (err: unknown) {
+          message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+        }
+      },
+    });
+  };
+
+  const handleDelete = (c: Contract) => {
+    Modal.confirm({
+      title: "Xóa hợp đồng",
+      content: `Xóa vĩnh viễn hợp đồng ${c.contractNumber}? Hệ thống sẽ cập nhật lại số sinh viên đang ở phòng.`,
+      okText: "Xóa",
+      okType: "danger",
+      cancelText: "Hủy",
+      onOk: async () => {
+        try {
+          await contractsApi.remove(c._id);
+          message.success("Đã xóa hợp đồng");
+          setDetailModal(null);
           load();
         } catch (err: unknown) {
           message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
@@ -300,6 +366,19 @@ const ContractsPage: React.FC = () => {
       render: (d: string) => (d ? new Date(d).toLocaleDateString("vi-VN") : "-"),
     },
     {
+      title: "SV ký",
+      key: "signedAt",
+      width: 100,
+      render: (_: unknown, r: Contract) =>
+        r.signedAt ? (
+          <Tag color="green">Đã ký</Tag>
+        ) : r.status === "pending_payment" ? (
+          <Tag color="gold">Chưa ký</Tag>
+        ) : (
+          "—"
+        ),
+    },
+    {
       title: "Trạng thái",
       dataIndex: "status",
       key: "status",
@@ -320,6 +399,8 @@ const ContractsPage: React.FC = () => {
             <Button
               type="link"
               size="small"
+              disabled={!r.signedAt}
+              title={!r.signedAt ? "Sinh viên chưa ký xác nhận" : undefined}
               onClick={() =>
                 setConfirmModal({
                   contract: r,
@@ -378,14 +459,63 @@ const ContractsPage: React.FC = () => {
         </div>
       </Card>
 
-      {extendReqs.length > 0 && (
-        <Card title="Yêu cầu gia hạn từ sinh viên (chờ duyệt)" style={{ marginBottom: 24, borderRadius: 12 }} size="small">
+      <Card
+        id="extend-requests"
+        title={`Quản lý đơn gia hạn (${extendStatusFilter === "pending" ? `${extendReqs.length} hiển thị` : "danh sách"})`}
+        style={{ marginBottom: 24, borderRadius: 12, scrollMarginTop: 80 }}
+        size="small"
+        extra={
+          <Button type="link" size="small" onClick={() => void loadExtendRequests()}>
+            Làm mới
+          </Button>
+        }
+      >
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16, alignItems: "center" }}>
+          <Select
+            value={extendStatusFilter}
+            style={{ width: 160 }}
+            onChange={(v) => setExtendStatusFilter(v)}
+            options={[
+              { value: "pending", label: "Chờ duyệt" },
+              { value: "approved", label: "Đã duyệt" },
+              { value: "rejected", label: "Từ chối" },
+              { value: "all", label: "Tất cả" },
+            ]}
+          />
+          <Input.Search
+            placeholder="Tìm tên, MSSV, số HĐ"
+            allowClear
+            style={{ width: 280, maxWidth: "100%" }}
+            value={extendSearch}
+            onChange={(e) => setExtendSearch(e.target.value)}
+            onSearch={() => void loadExtendRequests()}
+          />
+        </div>
+        {extendTabActive ? (
+          <Alert type="info" showIcon style={{ marginBottom: 12 }} message="Bạn đang xem mục đơn gia hạn từ thông báo hoặc liên kết trực tiếp." />
+        ) : null}
+        {extendLoading ? (
+          <div style={{ padding: 24, textAlign: "center" }}>Đang tải…</div>
+        ) : extendReqs.length === 0 ? (
+          <Alert
+            type="info"
+            showIcon
+            message="Chưa có yêu cầu gia hạn"
+            description="Sinh viên gửi từ «Hợp đồng của tôi» khi Dashboard bật gia hạn, mở đợt, HĐ active và sắp hết hạn (≤60 ngày)."
+          />
+        ) : (
           <Table<ContractExtendRequest>
             rowKey="_id"
-            pagination={false}
+            pagination={{ pageSize: 10, showSizeChanger: false }}
             size="small"
             dataSource={extendReqs}
             columns={[
+              {
+                title: "Thời gian",
+                key: "createdAt",
+                width: 140,
+                render: (_, r) => (r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN") : "—"),
+              },
               {
                 title: "Sinh viên",
                 key: "u",
@@ -401,43 +531,74 @@ const ContractsPage: React.FC = () => {
               },
               { title: "Tháng", dataIndex: "months", width: 70 },
               {
-                title: "Kết thúc hiện tại",
+                title: "Kết thúc (lúc gửi)",
                 key: "end",
+                width: 120,
                 render: (_, r) =>
                   r.snapshotEndDate ? new Date(r.snapshotEndDate).toLocaleDateString("vi-VN") : "—",
+              },
+              {
+                title: "SV ký HĐ",
+                key: "signed",
+                width: 90,
+                render: (_, r) => {
+                  const c = typeof r.contract === "object" ? (r.contract as Contract) : null;
+                  return c?.signedAt ? <Tag color="green">Đã ký</Tag> : <Tag>Chưa ký</Tag>;
+                },
+              },
+              {
+                title: "Trạng thái",
+                key: "status",
+                width: 110,
+                render: (_, r) => {
+                  const m = extendStatusMap[r.status] || { color: "default", text: r.status };
+                  return <Tag color={m.color}>{m.text}</Tag>;
+                },
+              },
+              {
+                title: "Ghi chú",
+                key: "note",
+                ellipsis: true,
+                render: (_, r) =>
+                  r.status === "approved" && r.appliedEndDate
+                    ? `Kết thúc mới: ${new Date(r.appliedEndDate).toLocaleDateString("vi-VN")}`
+                    : r.note || "—",
               },
               {
                 title: "",
                 key: "act",
                 width: 200,
-                render: (_, r) => (
-                  <Space>
-                    <Button
-                      type="primary"
-                      size="small"
-                      onClick={async () => {
-                        try {
-                          await contractsApi.approveExtendRequest(r._id);
-                          message.success("Đã duyệt gia hạn");
-                          void load();
-                          void loadExtendRequests();
-                        } catch (err: unknown) {
-                          message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
-                        }
-                      }}
-                    >
-                      Duyệt
-                    </Button>
-                    <Button danger size="small" onClick={() => setRejectExt({ id: r._id, note: "" })}>
-                      Từ chối
-                    </Button>
-                  </Space>
-                ),
+                render: (_, r) =>
+                  r.status === "pending" ? (
+                    <Space>
+                      <Button
+                        type="primary"
+                        size="small"
+                        onClick={async () => {
+                          try {
+                            await contractsApi.approveExtendRequest(r._id);
+                            message.success("Đã duyệt gia hạn");
+                            void load();
+                            void loadExtendRequests();
+                          } catch (err: unknown) {
+                            message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+                          }
+                        }}
+                      >
+                        Duyệt
+                      </Button>
+                      <Button danger size="small" onClick={() => setRejectExt({ id: r._id, note: "" })}>
+                        Từ chối
+                      </Button>
+                    </Space>
+                  ) : (
+                    "—"
+                  ),
               },
             ]}
           />
-        </Card>
-      )}
+        )}
+      </Card>
 
       <Modal
         title="Từ chối yêu cầu gia hạn"
@@ -497,8 +658,19 @@ const ContractsPage: React.FC = () => {
         </Col>
 
         <Col xs={24} sm={12} md={6}>
-          <Card>
-            <Statistic title={<span><CalendarOutlined /> Yêu cầu gia hạn</span>} value={ops?.pendingRenewalRequests ?? extendReqs.length} suffix="y/c" />
+          <Card
+            hoverable
+            onClick={() => {
+              document.getElementById("extend-requests")?.scrollIntoView({ behavior: "smooth" });
+              setExtendStatusFilter("pending");
+              setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.set("tab", "extend");
+                return next;
+              });
+            }}
+          >
+            <Statistic title={<span><CalendarOutlined /> Yêu cầu gia hạn</span>} value={ops?.pendingRenewalRequests ?? extendReqs.filter((r) => r.status === "pending").length} suffix="y/c" />
           </Card>
         </Col>
         <Col xs={0} md={18} />
@@ -710,6 +882,15 @@ const ContractsPage: React.FC = () => {
               }}
             >
               Chấm dứt hợp đồng
+            </Button>
+          ),
+          detailModal && detailModal.status !== "active" && (
+            <Button
+              key="delete"
+              danger
+              onClick={() => handleDelete(detailModal)}
+            >
+              Xóa hợp đồng
             </Button>
           ),
         ].filter(Boolean) as React.ReactNode[]}

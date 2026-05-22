@@ -48,4 +48,9 @@ exports.listExtendRequestsQuery = [
     .optional({ values: "falsy" })
     .isIn(["pending", "approved", "rejected", "all"])
     .withMessage("status không hợp lệ"),
+  query("search")
+    .optional({ values: "falsy" })
+    .trim()
+    .isLength({ max: 120 })
+    .withMessage("search quá dài"),
 ];

@@ -31,6 +31,10 @@ export interface User {
   homeroomTeacher?: string;
   addressNative?: string;
   addressPermanent?: string;
+  ethnicity?: string;
+  priorityType?: "normal" | "martyr_child" | "invalid_child" | "minority" | "disabled";
+  priorityProofUrl?: string | null;
+  checkInDate?: string | null;
   addressTemporary?: string;
   addressAbsent?: string;
   familyFatherName?: string;
@@ -40,6 +44,39 @@ export interface User {
   familyEmergencyPhone?: string;
   /** Khu KTX được gán cho tài khoản quản lý (ref Area) */
   managedArea?: Area | string | null;
+}
+
+export type StudentPriorityType = "normal" | "martyr_child" | "invalid_child" | "minority" | "disabled";
+
+export interface StudentProfile {
+  _id?: string;
+  fullName?: string;
+  email?: string;
+  studentId?: string;
+  className?: string;
+  major?: string;
+  facultyGroup?: string;
+  gender?: string;
+  phone?: string;
+  address?: string;
+  citizenId?: string;
+  dateOfBirth?: string | null;
+  faculty?: string;
+  enrollmentDate?: string | null;
+  homeroomTeacher?: string;
+  avatar?: string;
+  addressNative?: string;
+  addressPermanent?: string;
+  addressTemporary?: string;
+  ethnicity?: string;
+  priorityType?: StudentPriorityType;
+  priorityProofUrl?: string | null;
+  checkInDate?: string | null;
+  familyFatherName?: string;
+  familyFatherPhone?: string;
+  familyMotherName?: string;
+  familyMotherPhone?: string;
+  familyEmergencyPhone?: string;
 }
 
 /** Một dòng lịch sử cư trú theo hợp đồng (+ BedHistory: check-in/out, ghi chú) */
@@ -102,7 +139,7 @@ export interface AdminUserDetailResponse {
 }
 
 export interface StudentProfileResponse {
-  student: User;
+  student: StudentProfile & User;
   currentRoom: Room | null;
   currentContract: Contract | null;
   contracts: Contract[];
@@ -258,7 +295,7 @@ export interface BedHistory {
 /** Yêu cầu gia hạn hợp đồng (sinh viên → admin duyệt) */
 export interface ContractExtendRequest {
   _id: string;
-  contract: Contract | { _id?: string; contractNumber?: string; status?: string; endDate?: string; startDate?: string };
+  contract: Contract | { _id?: string; contractNumber?: string; status?: string; endDate?: string; startDate?: string; signedAt?: string | null; signedPdfUrl?: string };
   user?: string | User;
   months: number;
   status: "pending" | "approved" | "rejected";
@@ -266,8 +303,17 @@ export interface ContractExtendRequest {
   appliedEndDate?: string | null;
   note?: string;
   reviewedAt?: string | null;
+  reviewedBy?: string | User;
+  extensionPeriod?: { _id?: string; name?: string; startDate?: string; endDate?: string } | string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface ExtensionPeriodInfo {
+  isOpen: boolean;
+  name?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
 }
 
 export interface MyContractOverview {
@@ -276,6 +322,12 @@ export interface MyContractOverview {
   activeContract: Contract | null;
   extendRequests: ContractExtendRequest[];
   extensionEnabled: boolean;
+  extensionPeriod?: ExtensionPeriodInfo;
+  canRequestExtension?: boolean;
+  extensionBlockReason?: string | null;
+  hasPendingExtendRequest?: boolean;
+  daysUntilContractEnd?: number | null;
+  eligibilityDays?: number;
 }
 
 export interface BillPaymentHistoryEntry {
@@ -289,6 +341,7 @@ export interface BillPaymentHistoryEntry {
 
 export interface Bill {
   _id: string;
+  billCode?: string;
   user: User;
   contract?: Contract | string;
   room: Room;
@@ -306,12 +359,14 @@ export interface Bill {
   amount?: number;
   status: "unpaid" | "pending" | "paid" | "overdue" | string;
   dueDate: string;
+  createdAt?: string;
   paidAt?: string;
-  paymentMethod?: "manual" | "online" | "counter";
+  paidBy?: User | string | null;
+  paymentMethod?: "manual" | "online" | "counter" | "vnpay" | "cash";
   paymentReference?: string;
   paymentHistory?: BillPaymentHistoryEntry[];
   note?: string;
-  billType?: "monthly" | "penalty";
+  billType?: "monthly" | "penalty" | "damage_reimbursement";
   violation?: string | { _id?: string; ruleName?: string; description?: string; fineAmount?: number; compensationAmount?: number; createdAt?: string };
   penaltyBreakdown?: Array<{ label?: string; amount?: number }>;
   personalServiceBreakdown?: Array<{
@@ -370,13 +425,18 @@ export interface Violation {
   createdAt?: string;
   recordedBy?: User | string;
   bill?: string | { _id?: string };
+  totalRecordedAmount?: number;
   status?: ViolationStatus;
   resolution?: ViolationResolution | null;
 }
 
 /** Khai báo hư hỏng / sự cố phòng (module Maintenance) */
 export type MaintenanceIncidentType = "electricity" | "water" | "equipment" | "other";
-export type MaintenanceReportStatus = "pending" | "processing" | "resolved";
+export type MaintenanceReportStatus = "pending" | "processing" | "resolved" | "cancelled";
+export type MaintenanceSeverity = "light" | "medium" | "heavy" | "";
+export type MaintenanceDamageCause = "natural_wear" | "student_caused" | "";
+export type MaintenanceResolutionType = "maintenance" | "compensation" | "";
+export type MaintenanceStatus = "none" | "scheduled" | "in_progress" | "completed" | "";
 
 export interface MaintenanceReport {
   _id: string;
@@ -387,6 +447,16 @@ export interface MaintenanceReport {
   images?: string[];
   status: MaintenanceReportStatus;
   adminNote?: string;
+  requestCode?: string;
+  severity?: MaintenanceSeverity;
+  damageCause?: MaintenanceDamageCause;
+  resolutionType?: MaintenanceResolutionType;
+  compensationAmount?: number;
+  maintenanceStatus?: MaintenanceStatus;
+  bill?: Bill | string | null;
+  processedAt?: string | null;
+  processedBy?: User | string | null;
+  cancelledAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

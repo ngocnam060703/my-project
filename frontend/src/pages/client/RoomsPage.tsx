@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Row, Col, Card, Select, InputNumber, Button, Tag, Spin, Empty, message, Space, Skeleton, Statistic } from "antd";
+import { Row, Col, Card, Select, InputNumber, Button, Tag, Spin, Empty, App, Space, Skeleton, Statistic } from "antd";
 import { DeleteOutlined, ApartmentOutlined, FilterOutlined } from "@ant-design/icons";
 import { roomsApi, areasApi, contractsApi } from "../../api";
 import type { Area, Contract, Room } from "../../types";
+import { apiErrorMessage } from "../../utils/apiErrorMessage";
+import { hasToken } from "../../utils/authStorage";
 
 const withoutWifi = (arr: string[] = []) =>
   arr.map((s) => String(s || "").trim()).filter(Boolean).filter((s) => !/^wi-?fi$/i.test(s));
 
 const RoomsPage: React.FC = () => {
+  const { message } = App.useApp();
   const navigate = useNavigate();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
@@ -26,8 +29,12 @@ const RoomsPage: React.FC = () => {
   }>({});
 
   const loadAreas = async () => {
-    const res = await areasApi.getAll();
-    setAreas(res.data?.areas ?? res.data ?? []);
+    try {
+      const res = await areasApi.getAll();
+      setAreas(res.data?.areas ?? res.data ?? []);
+    } catch (e) {
+      message.error(apiErrorMessage(e, "Không tải được danh sách khu"));
+    }
   };
 
   const loadRooms = async () => {
@@ -44,14 +51,18 @@ const RoomsPage: React.FC = () => {
       if (filters.sortOrder) params.sortOrder = filters.sortOrder;
       const res = await roomsApi.getAll(params);
       setRooms(res.data.rooms);
-    } catch {
-      message.error("Không tải được danh sách phòng");
+    } catch (e) {
+      message.error(apiErrorMessage(e, "Không tải được danh sách phòng"));
     } finally {
       setLoading(false);
     }
   };
 
   const loadMembership = async () => {
+    if (!hasToken()) {
+      setActiveContract(null);
+      return;
+    }
     try {
       const res = await contractsApi.getMy();
       const contracts = (res.data || []) as Contract[];
@@ -86,8 +97,13 @@ const RoomsPage: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={8}>
-          <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
-            <Statistic title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Còn trống</span>} value={statsAvailable} suffix="phòng" valueStyle={{ color: "#fff", fontSize: 20 }} />
+          <Card variant="borderless" style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
+            <Statistic
+              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Còn trống</span>}
+              value={statsAvailable}
+              suffix="phòng"
+              styles={{ content: { color: "#fff", fontSize: 20 } }}
+            />
           </Card>
         </Col>
         <Col xs={24} sm={8}>

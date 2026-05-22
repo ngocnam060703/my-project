@@ -35,6 +35,12 @@ import {
 } from "@ant-design/icons";
 import type { UploadFile } from "antd/es/upload/interface";
 import { violationsApi, disciplinaryApi, client } from "../../api";
+import {
+  violationFineDisplay,
+  violationRecordedFine,
+  violationRecordedCompensation,
+  violationRecordedTotal,
+} from "../../utils/violationDisplay";
 import type { ViolationRule, Violation, User, Room } from "../../types";
 
 const severityVi: Record<string, string> = {
@@ -105,6 +111,8 @@ const ViolationsPage: React.FC = () => {
   const [summarySearch, setSummarySearch] = useState("");
   const [rooms, setRooms] = useState<Room[]>([]);
   const [students, setStudents] = useState<User[]>([]);
+  const [roomStudents, setRoomStudents] = useState<User[]>([]);
+  const [roomStudentsLoading, setRoomStudentsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [detail, setDetail] = useState<Violation | null>(null);
@@ -219,13 +227,13 @@ const ViolationsPage: React.FC = () => {
         schoolYear: v.schoolYear,
         description: v.description || "",
         images: imgs,
-        fineAmount: v.fineAmount ?? 0,
-        compensationAmount: v.compensationAmount ?? 0,
+        fineAmount: Number(v.fineAmount) || 0,
+        compensationAmount: Number(v.compensationAmount) || 0,
         splitToRoom: !!v.splitToRoom,
         immediateExpulsion: !!v.immediateExpulsion,
         noIndividualPoints: !!v.noIndividualPoints,
       });
-      message.success("Đã ghi nhận vi phạm");
+      message.success("Đã ghi nhận vi phạm thành công");
       form.resetFields();
       form.setFieldsValue({ semester: "HK1", schoolYear: defaultSchoolYear() });
       setFileList([]);
@@ -249,12 +257,12 @@ const ViolationsPage: React.FC = () => {
       });
 
       const updated = r.data as Violation;
-      // Cập nhật ngay trên UI (không reload trang), đảm bảo dòng chuyển sang “Đã xử lý”.
       setViolations((prev) => prev.map((it) => (it._id === target._id ? updated : it)));
       setDetail((prev) => (prev && prev._id === target._id ? updated : prev));
-      message.success("Đã xử lý");
+      message.success("Đã xử lý vi phạm thành công — trạng thái đã cập nhật");
       setResolveTarget(null);
       resolveForm.resetFields();
+      void loadViolations();
       void loadSummary();
     } catch (e: unknown) {
       message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi xử lý");
@@ -344,8 +352,8 @@ const ViolationsPage: React.FC = () => {
           rec.ruleName || "",
           severityVi[rec.severity] || rec.severity,
           String(rec.points ?? 0),
-          String(rec.fineAmount ?? 0),
-          String(rec.compensationAmount ?? 0),
+          String(violationRecordedFine(rec)),
+          String(violationRecordedCompensation(rec)),
           rec.splitToRoom ? "Có" : "Không",
           rec.description || "",
           by || "",
@@ -402,7 +410,53 @@ const ViolationsPage: React.FC = () => {
   }, [summary, summarySearch]);
 
   const selectedRuleId = Form.useWatch("ruleId", form);
+  const selectedRoomId = Form.useWatch("roomId", form);
   const selectedRule = rules.find((r) => r._id === selectedRuleId);
+  const selectableStudents = selectedRoomId ? roomStudents : [];
+
+  useEffect(() => {
+    const roomId = String(selectedRoomId || "").trim();
+    form.setFieldsValue({ userId: undefined });
+    if (!roomId) {
+      setRoomStudents([]);
+      return;
+    }
+    let mounted = true;
+    const loadRoomStudents = async () => {
+      setRoomStudentsLoading(true);
+      try {
+        let list: User[] = [];
+        try {
+          const res = await client.get(`/rooms/${encodeURIComponent(roomId)}/residents`);
+          const residents = (res.data?.residents || []) as Array<{ user?: User }>;
+          const uniq = new Map<string, User>();
+          residents.forEach((it) => {
+            const u = it.user;
+            if (u?._id) uniq.set(String(u._id), u);
+          });
+          list = Array.from(uniq.values());
+        } catch {
+          const cRes = await client.get("/contracts", { params: { room: roomId, limit: 200, status: "active" } });
+          const contracts = (cRes.data?.contracts || []) as Array<{ user?: User; status?: string }>;
+          const uniq = new Map<string, User>();
+          contracts.forEach((c) => {
+            const u = c.user;
+            if (u && typeof u === "object" && u._id) uniq.set(String(u._id), u);
+          });
+          list = Array.from(uniq.values());
+        }
+        if (mounted) setRoomStudents(list);
+      } catch {
+        if (mounted) setRoomStudents([]);
+      } finally {
+        if (mounted) setRoomStudentsLoading(false);
+      }
+    };
+    void loadRoomStudents();
+    return () => {
+      mounted = false;
+    };
+  }, [selectedRoomId, form]);
 
   const filterToolbar = (
     <Space wrap style={{ marginBottom: 12 }} size="middle">
@@ -705,8 +759,21 @@ const ViolationsPage: React.FC = () => {
                         <Form.Item name="userId" label="Sinh viên vi phạm" rules={[{ required: true, message: "Chọn sinh viên hoặc bật chia phòng" }]}>
                           <Select
                             showSearch
+                            allowClear
                             optionFilterProp="label"
-                            options={students.map((s) => ({
+                            loading={roomStudentsLoading}
+                            placeholder={
+                              selectedRoomId
+                                ? roomStudentsLoading
+                                  ? "Đang tải sinh viên trong phòng..."
+                                  : selectableStudents.length
+                                    ? "Chọn sinh viên trong phòng đã chọn"
+                                    : "Phòng này chưa có sinh viên đang ở"
+                                : "Vui lòng chọn phòng trước"
+                            }
+                            disabled={!selectedRoomId || roomStudentsLoading}
+                            notFoundContent="Không có sinh viên trong phòng này"
+                            options={selectableStudents.map((s) => ({
                               value: s._id,
                               label: `${s.fullName}${s.studentId ? ` (${s.studentId})` : ""}`,
                             }))}
@@ -838,8 +905,19 @@ const ViolationsPage: React.FC = () => {
                           "—"
                         ),
                     },
-                    { title: "Phạt", dataIndex: "fineAmount", width: 100, render: (n: number) => `${(n || 0).toLocaleString("vi-VN")}đ` },
-                    { title: "Bồi thường", dataIndex: "compensationAmount", width: 100, render: (n: number) => `${(n || 0).toLocaleString("vi-VN")}đ` },
+                    { title: "Phạt", key: "fineAmount", width: 100, render: (_: unknown, r: Violation) => `${violationRecordedFine(r).toLocaleString("vi-VN")}đ` },
+                    {
+                      title: "Bồi thường",
+                      key: "compensationAmount",
+                      width: 100,
+                      render: (_: unknown, r: Violation) => `${violationRecordedCompensation(r).toLocaleString("vi-VN")}đ`,
+                    },
+                    {
+                      title: "Tổng ghi nhận",
+                      key: "recordedPenalty",
+                      width: 120,
+                      render: (_: unknown, r: Violation) => `${violationRecordedTotal(r).toLocaleString("vi-VN")}đ`,
+                    },
                     {
                       title: "Ảnh",
                       key: "img",
@@ -860,9 +938,16 @@ const ViolationsPage: React.FC = () => {
                               size="small"
                               icon={<CheckCircleOutlined />}
                               onClick={() => {
+                                const recordedFine = violationRecordedFine(r);
+                                const recordedComp = violationRecordedCompensation(r);
+                                const totalRecorded = violationRecordedTotal(r);
                                 setResolveTarget(r);
                                 resolveForm.resetFields();
-                                resolveForm.setFieldsValue({ actionType: "warning" });
+                                resolveForm.setFieldsValue({
+                                  actionType: totalRecorded > 0 ? "fine" : "warning",
+                                  penaltyAmount: totalRecorded > 0 ? totalRecorded : recordedFine || undefined,
+                                  note: recordedComp > 0 && recordedFine === 0 ? `Bồi thường ghi nhận: ${recordedComp.toLocaleString("vi-VN")}đ` : "",
+                                });
                               }}
                             >
                               Xử lý
@@ -1018,8 +1103,9 @@ const ViolationsPage: React.FC = () => {
               )}
               <Descriptions.Item label="Mức độ">{severityVi[detail.severity] || detail.severity}</Descriptions.Item>
               <Descriptions.Item label="Điểm">{detail.points}</Descriptions.Item>
-              <Descriptions.Item label="Phạt">{(detail.fineAmount || 0).toLocaleString("vi-VN")}đ</Descriptions.Item>
-              <Descriptions.Item label="Bồi thường">{(detail.compensationAmount || 0).toLocaleString("vi-VN")}đ</Descriptions.Item>
+              <Descriptions.Item label="Phạt (ghi nhận)">{violationRecordedFine(detail).toLocaleString("vi-VN")}đ</Descriptions.Item>
+              <Descriptions.Item label="Bồi thường (ghi nhận)">{violationRecordedCompensation(detail).toLocaleString("vi-VN")}đ</Descriptions.Item>
+              <Descriptions.Item label="Tổng ghi nhận">{violationRecordedTotal(detail).toLocaleString("vi-VN")}đ</Descriptions.Item>
               <Descriptions.Item label="Chia phòng">{detail.splitToRoom ? "Có" : "Không"}</Descriptions.Item>
               <Descriptions.Item label="Không cộng điểm cá nhân">{detail.noIndividualPoints ? "Có" : "Không"}</Descriptions.Item>
               <Descriptions.Item label="Kỷ luật nặng (chấm dứt HĐ)">{detail.immediateExpulsion ? "Có" : "Không"}</Descriptions.Item>

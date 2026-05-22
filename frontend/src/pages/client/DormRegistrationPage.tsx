@@ -27,6 +27,7 @@ const REQUIRED_FIELDS = [
   { key: "phone", label: "SĐT" },
   { key: "address", label: "Quê quán/địa chỉ" },
   { key: "major", label: "Chuyên ngành" },
+  { key: "ethnicity", label: "Dân tộc" },
 ] as const;
 
 const DormRegistrationPage: React.FC = () => {
@@ -37,13 +38,29 @@ const DormRegistrationPage: React.FC = () => {
   const [user, setUser] = useState<Record<string, unknown> | null>(null);
   const [period, setPeriod] = useState<{ name?: string; startDate?: string; endDate?: string } | null>(null);
   const [countdown, setCountdown] = useState("00:00:00");
+  const hydrateProfile = (profile: Record<string, unknown> | null) => {
+    setUser(profile || null);
+    form.setFieldsValue({
+      fullName: profile?.fullName || "",
+      studentId: profile?.studentId || "",
+      gender: profile?.gender || "",
+      phone: profile?.phone || "",
+      address: profile?.address || "",
+      major: profile?.major || "",
+    });
+  };
 
   const missingFields = useMemo(() => {
     if (!user) return REQUIRED_FIELDS.map((f) => f.label);
-    return REQUIRED_FIELDS.filter((f) => {
+    const baseMissing: string[] = REQUIRED_FIELDS.filter((f) => {
       const v = user[f.key];
       return !v || String(v).trim() === "";
     }).map((f) => f.label);
+    const priorityType = String(user.priorityType || "normal");
+    if (priorityType !== "normal" && (!user.priorityProofUrl || String(user.priorityProofUrl).trim() === "")) {
+      baseMissing.push("Minh chứng diện ưu tiên");
+    }
+    return baseMissing;
   }, [user]);
 
   useEffect(() => {
@@ -51,16 +68,8 @@ const DormRegistrationPage: React.FC = () => {
       setLoading(true);
       try {
         const [profileRes, periodRes] = await Promise.all([authApi.getProfile(), registrationPeriodsApi.getActive()]);
-        setUser(profileRes.data || null);
+        hydrateProfile((profileRes.data || null) as Record<string, unknown> | null);
         setPeriod(periodRes.data || null);
-        form.setFieldsValue({
-          fullName: profileRes.data?.fullName || "",
-          studentId: profileRes.data?.studentId || "",
-          gender: profileRes.data?.gender || "",
-          phone: profileRes.data?.phone || "",
-          address: profileRes.data?.address || "",
-          major: profileRes.data?.major || "",
-        });
       } catch {
         message.error("Không tải được dữ liệu đăng ký nội trú");
       } finally {
@@ -68,6 +77,15 @@ const DormRegistrationPage: React.FC = () => {
       }
     };
     load();
+  }, [form]);
+
+  useEffect(() => {
+    const onProfileUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<Record<string, unknown>>;
+      hydrateProfile(customEvent.detail || null);
+    };
+    window.addEventListener("student-profile-updated", onProfileUpdated as EventListener);
+    return () => window.removeEventListener("student-profile-updated", onProfileUpdated as EventListener);
   }, [form]);
 
   useEffect(() => {

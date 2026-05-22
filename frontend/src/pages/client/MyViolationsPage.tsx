@@ -1,368 +1,382 @@
-/**
- * Module "Vi phạm của tôi" — Bootstrap 5: danh sách, điểm kỷ luật, chi tiết (chỉ xem).
- * API: GET /api/my-violations | /violations/my, GET /violations/:id (sinh viên chỉ bản ghi của mình).
- */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import "bootstrap/dist/css/bootstrap.min.css";
-import { violationsApi } from "../../api";
+import { useNavigate } from "react-router-dom";
+import { billsApi, violationsApi } from "../../api";
 import { apiErrorMessage } from "../../utils/apiErrorMessage";
-import { useAuth } from "../../contexts/AuthContext";
-import type { User, Violation, ViolationResolution } from "../../types";
 
-/** User từ AuthContext (khác nhẹ so với `types.User` — chỉ dùng fallback hiển thị). */
-type AuthUserLite = {
-  fullName?: string;
-  studentId?: string;
-  email?: string;
+export type ViolationStatus = "unpaid" | "paid" | "resolved";
+
+export interface Violation {
+  id: string;
+  recordedAt: string;
+  violationName: string;
+  penaltyText: string;
+  isFinancialPenalty: boolean;
+  status: ViolationStatus;
+  billId: string | null;
+}
+
+type ApiViolation = {
+  _id?: string;
+  createdAt?: string;
+  ruleName?: string;
+  rule?: { name?: string } | string;
+  fineAmount?: number;
+  compensationAmount?: number;
+  bill?: string | { _id?: string };
+  status?: string;
+  points?: number;
+  schoolYear?: string;
+  semester?: string;
+  description?: string;
 };
 
-type DisciplineStats = {
+type BillLookup = { _id?: string; status?: string; violation?: string | { _id?: string } };
+
+type ViewViolation = Violation & {
+  points: number;
   schoolYear: string;
   semester: string;
-  totalPoints: number;
-  warning: { text: string; severity: string; key?: string };
+  description: string;
 };
 
-function defaultSchoolYear(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = d.getMonth() + 1;
-  return m >= 8 ? `${y}-${y + 1}` : `${y - 1}-${y}`;
+function formatDateTime(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-function severityBadge(sev: string): { cls: string; label: string } {
-  if (sev === "heavy") return { cls: "text-bg-danger", label: "Nghiêm trọng" };
-  if (sev === "medium") return { cls: "text-bg-warning text-dark", label: "Trung bình" };
-  return { cls: "text-bg-success", label: "Nhẹ" };
+function normalizeBillId(input: ApiViolation["bill"]): string | null {
+  if (!input) return null;
+  if (typeof input === "string") return input;
+  return input._id ? String(input._id) : null;
 }
 
-function statusBadge(st?: string): { cls: string; label: string } {
-  const s = st || "pending";
-  if (s === "resolved") return { cls: "text-bg-success", label: "Đã xử lý" };
-  return { cls: "text-bg-warning text-dark", label: "Chờ xử lý" };
+function buildPenaltyText(fine: number, compensation: number): string {
+  const total = Math.max(0, fine || 0) + Math.max(0, compensation || 0);
+  if (total <= 0) return "Nhắc nhở / xử lý nội quy";
+  return `Phạt ${total.toLocaleString("vi-VN")}đ`;
 }
 
-function actionLabel(a?: string): string {
-  if (a === "fine") return "Phạt tiền";
-  if (a === "expulsion") return "Buộc rời KTX";
-  if (a === "warning") return "Nhắc nhở / cảnh cáo";
-  return "—";
+function mapViolation(row: ApiViolation, billStatusMap: Map<string, string>): ViewViolation {
+  const id = String(row._id || "");
+  const billId = normalizeBillId(row.bill);
+  const fine = Number(row.fineAmount || 0);
+  const compensation = Number(row.compensationAmount || 0);
+  const isFinancialPenalty = fine + compensation > 0 || !!billId;
+
+  let status: ViolationStatus = "resolved";
+  if (isFinancialPenalty) {
+    const billStatus = billId ? billStatusMap.get(billId) : undefined;
+    status = billStatus === "paid" ? "paid" : "unpaid";
+  }
+
+  return {
+    id,
+    recordedAt: String(row.createdAt || ""),
+    violationName:
+      String(row.ruleName || (typeof row.rule === "object" && row.rule ? row.rule.name : "") || "Vi phạm nội quy"),
+    penaltyText: buildPenaltyText(fine, compensation),
+    isFinancialPenalty,
+    status,
+    billId,
+    points: Number(row.points || 0),
+    schoolYear: String(row.schoolYear || "Không xác định"),
+    semester: String(row.semester || "Không xác định"),
+    description: String(row.description || ""),
+  };
 }
+
+const FilterBar: React.FC<{
+  schoolYears: string[];
+  semesters: string[];
+  selectedYear: string;
+  selectedSemester: string;
+  onYearChange: (value: string) => void;
+  onSemesterChange: (value: string) => void;
+}> = ({ schoolYears, semesters, selectedYear, selectedSemester, onYearChange, onSemesterChange }) => (
+  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+      <label className="space-y-1">
+        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Năm học</span>
+        <select
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-emerald-500 focus:ring-2"
+          value={selectedYear}
+          onChange={(e) => onYearChange(e.target.value)}
+        >
+          {schoolYears.map((year) => (
+            <option key={year} value={year}>
+              {year}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="space-y-1">
+        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Học kỳ</span>
+        <select
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-emerald-500 focus:ring-2"
+          value={selectedSemester}
+          onChange={(e) => onSemesterChange(e.target.value)}
+        >
+          {semesters.map((semester) => (
+            <option key={semester} value={semester}>
+              {semester}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  </div>
+);
+
+const SummaryCards: React.FC<{
+  pendingCount: number;
+  totalCount: number;
+  totalPoints: number;
+}> = ({ pendingCount, totalCount, totalPoints }) => (
+  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+      <p className="text-xs uppercase tracking-wide text-amber-700">Vi phạm chờ xử lý</p>
+      <p className="mt-1 text-2xl font-bold text-amber-700">{pendingCount}</p>
+    </div>
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <p className="text-xs uppercase tracking-wide text-slate-500">Tổng vi phạm đã ghi</p>
+      <p className="mt-1 text-2xl font-bold text-slate-900">{totalCount}</p>
+    </div>
+    <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
+      <p className="text-xs uppercase tracking-wide text-indigo-700">Điểm kỷ luật tích lũy</p>
+      <p className="mt-1 text-2xl font-bold text-indigo-700">{totalPoints}</p>
+    </div>
+  </div>
+);
+
+const StatusBadge: React.FC<{ row: Violation }> = ({ row }) => {
+  if (!row.isFinancialPenalty) {
+    return <span className="inline-flex rounded-full bg-sky-100 px-2 py-1 text-xs font-medium text-sky-700">Đã xử lý</span>;
+  }
+  if (row.status === "paid") {
+    return <span className="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Đã đóng phạt</span>;
+  }
+  return <span className="inline-flex rounded-full bg-orange-100 px-2 py-1 text-xs font-medium text-orange-700">Chờ thanh toán</span>;
+};
+
+const ViolationsTable: React.FC<{
+  rows: ViewViolation[];
+  onView: (row: ViewViolation) => void;
+  onPay: (row: ViewViolation) => void;
+}> = ({ rows, onView, onPay }) => (
+  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-4 py-3">STT</th>
+            <th className="px-4 py-3">Ngày ghi nhận</th>
+            <th className="px-4 py-3">Loại vi phạm</th>
+            <th className="px-4 py-3">Hình thức xử lý</th>
+            <th className="px-4 py-3">Trạng thái</th>
+            <th className="px-4 py-3 text-right">Thao tác</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={row.id} className="border-t border-slate-100 text-slate-700">
+              <td className="px-4 py-3">{index + 1}</td>
+              <td className="px-4 py-3">{formatDateTime(row.recordedAt)}</td>
+              <td className="px-4 py-3 font-medium text-slate-900">{row.violationName}</td>
+              <td className="px-4 py-3">{row.penaltyText}</td>
+              <td className="px-4 py-3">
+                <StatusBadge row={row} />
+              </td>
+              <td className="px-4 py-3">
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onView(row)}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Xem
+                  </button>
+                  {row.status === "unpaid" && row.billId && (
+                    <button
+                      type="button"
+                      onClick={() => onPay(row)}
+                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+                    >
+                      Thanh toán
+                    </button>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                Không có dữ liệu vi phạm theo bộ lọc đã chọn.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
+
+const ViolationDetailModal: React.FC<{
+  row: ViewViolation | null;
+  open: boolean;
+  onClose: () => void;
+}> = ({ row, open, onClose }) => {
+  if (!open || !row) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b px-6 py-4">
+          <h3 className="text-lg font-semibold text-slate-900">Chi tiết vi phạm</h3>
+          <button type="button" className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50" onClick={onClose}>
+            Đóng
+          </button>
+        </div>
+        <div className="space-y-3 px-6 py-5 text-sm text-slate-700">
+          <InfoLine label="Ngày ghi nhận" value={formatDateTime(row.recordedAt)} />
+          <InfoLine label="Loại vi phạm" value={row.violationName} />
+          <InfoLine label="Hình thức xử lý" value={row.penaltyText} />
+          <InfoLine label="Trạng thái" value={row.status === "paid" ? "Đã đóng phạt" : row.status === "unpaid" ? "Chờ thanh toán" : "Đã xử lý"} />
+          <InfoLine label="Năm học / Học kỳ" value={`${row.schoolYear} / ${row.semester}`} />
+          <InfoLine label="Điểm kỷ luật" value={String(row.points)} />
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">Mô tả</p>
+            <p>{row.description || "—"}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const InfoLine: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="rounded-xl border border-slate-200 p-3">
+    <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+    <p className="mt-1 font-medium text-slate-900">{value || "—"}</p>
+  </div>
+);
 
 const MyViolationsPage: React.FC = () => {
-  const { user: authUser } = useAuth();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [items, setItems] = useState<Violation[]>([]);
-  const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
-  const [semester, setSemester] = useState("HK1");
-  const [stats, setStats] = useState<DisciplineStats | null>(null);
-  const [detailId, setDetailId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<Violation | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [rows, setRows] = useState<ViewViolation[]>([]);
+  const [selectedYear, setSelectedYear] = useState("Tất cả");
+  const [selectedSemester, setSelectedSemester] = useState("Tất cả");
+  const [detailRow, setDetailRow] = useState<ViewViolation | null>(null);
 
-  const load = useCallback(async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
-    setErr(null);
+    setError(null);
     try {
-      let list: Violation[] = [];
+      let violationsRaw: ApiViolation[] = [];
       try {
-        const r = await violationsApi.getMyViolations();
-        list = Array.isArray(r.data) ? (r.data as Violation[]) : [];
+        const res = await violationsApi.getMyViolations();
+        violationsRaw = Array.isArray(res.data) ? (res.data as ApiViolation[]) : [];
       } catch {
-        const r = await violationsApi.getMy();
-        list = Array.isArray(r.data) ? (r.data as Violation[]) : [];
+        const res = await violationsApi.getMy();
+        violationsRaw = Array.isArray(res.data) ? (res.data as ApiViolation[]) : [];
       }
-      setItems(list);
+
+      let billsRaw: BillLookup[] = [];
       try {
-        const st = await violationsApi.getMyStats({ schoolYear, semester });
-        setStats((st.data as DisciplineStats) || null);
+        const billsRes = await billsApi.getMyBills();
+        billsRaw = Array.isArray(billsRes.data) ? (billsRes.data as BillLookup[]) : [];
       } catch {
-        setStats(null);
+        const billsRes = await billsApi.getMy();
+        billsRaw = Array.isArray(billsRes.data) ? (billsRes.data as BillLookup[]) : [];
       }
+
+      const billStatusMap = new Map<string, string>();
+      for (const bill of billsRaw) {
+        if (bill._id) billStatusMap.set(String(bill._id), String(bill.status || ""));
+      }
+
+      const mapped = violationsRaw.map((row) => mapViolation(row, billStatusMap));
+      mapped.sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
+      setRows(mapped);
     } catch (e) {
-      setErr(apiErrorMessage(e, "Không tải được dữ liệu"));
-      setItems([]);
-      setStats(null);
+      setRows([]);
+      setError(apiErrorMessage(e, "Không tải được dữ liệu vi phạm."));
     } finally {
       setLoading(false);
     }
-  }, [schoolYear, semester]);
+  }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadData();
+  }, [loadData]);
 
-  const openDetail = async (id: string) => {
-    setDetailId(id);
-    setDetail(null);
-    setDetailLoading(true);
-    try {
-      const { data } = await violationsApi.getById(id);
-      setDetail(data as Violation);
-    } catch (e) {
-      setErr(apiErrorMessage(e, "Không tải được dữ liệu"));
-      setDetailId(null);
-    } finally {
-      setDetailLoading(false);
-    }
-  };
+  const schoolYearOptions = useMemo(() => {
+    const set = new Set(rows.map((row) => row.schoolYear).filter(Boolean));
+    return ["Tất cả", ...Array.from(set)];
+  }, [rows]);
 
-  const closeDetail = () => {
-    setDetailId(null);
-    setDetail(null);
-    setDetailLoading(false);
-  };
+  const semesterOptions = useMemo(() => {
+    const set = new Set(rows.map((row) => row.semester).filter(Boolean));
+    return ["Tất cả", ...Array.from(set)];
+  }, [rows]);
 
-  const heavyCount = useMemo(() => items.filter((v) => v.severity === "heavy").length, [items]);
-  const hasImmediate = useMemo(() => items.some((v) => v.immediateExpulsion), [items]);
-  const pendingViolationCount = useMemo(() => items.filter((v) => (v.status || "pending") === "pending").length, [items]);
+  const filteredRows = useMemo(
+    () =>
+      rows.filter((row) => {
+        const yearOk = selectedYear === "Tất cả" || row.schoolYear === selectedYear;
+        const semesterOk = selectedSemester === "Tất cả" || row.semester === selectedSemester;
+        return yearOk && semesterOk;
+      }),
+    [rows, selectedYear, selectedSemester],
+  );
 
-  if (loading) {
-    return (
-      <div className="p-5 text-center">
-        <div className="spinner-border text-primary" role="status" />
-      </div>
-    );
-  }
+  const pendingCount = useMemo(() => filteredRows.filter((row) => row.status === "unpaid").length, [filteredRows]);
+  const totalPoints = useMemo(() => filteredRows.reduce((sum, row) => sum + row.points, 0), [filteredRows]);
 
   return (
-    <div className="container pb-5" style={{ maxWidth: 1040 }}>
-      <div className="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
-        <div>
-          <h4 className="mb-1">Vi phạm của tôi</h4>
-          <p className="text-muted small mb-0">
-            Theo dõi vi phạm kỷ luật, trạng thái xử lý và điểm tích lũy theo học kỳ. Bạn chỉ xem được dữ liệu của chính mình.
-          </p>
-        </div>
+    <div className="mx-auto max-w-6xl space-y-4 px-2 pb-8">
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-900">Vi phạm của tôi</h1>
+        <p className="text-sm text-slate-500">Theo dõi vi phạm nội quy, trạng thái xử lý và thanh toán phạt nếu có.</p>
       </div>
 
-      {err && <div className="alert alert-danger py-2">{err}</div>}
+      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
 
-      {(heavyCount > 0 || hasImmediate) && (
-        <div className="alert alert-danger border-danger">
-          <strong>Cảnh báo:</strong>{" "}
-          {hasImmediate
-            ? "Có vi phạm được đánh dấu xử lý nghiêm (có thể liên quan buộc rời KTX). Liên hệ ban quản lý."
-            : `Bạn có ${heavyCount} vi phạm mức nghiêm trọng. Hãy chấn chỉnh hành vi và làm việc với BQL KTX.`}
-        </div>
+      <FilterBar
+        schoolYears={schoolYearOptions}
+        semesters={semesterOptions}
+        selectedYear={selectedYear}
+        selectedSemester={selectedSemester}
+        onYearChange={setSelectedYear}
+        onSemesterChange={setSelectedSemester}
+      />
+
+      <SummaryCards pendingCount={pendingCount} totalCount={filteredRows.length} totalPoints={totalPoints} />
+
+      {loading ? (
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-10 text-center text-slate-500">Đang tải dữ liệu vi phạm…</div>
+      ) : (
+        <ViolationsTable
+          rows={filteredRows}
+          onView={(row) => setDetailRow(row)}
+          onPay={(row) => {
+            if (!row.billId) return;
+            navigate(`/student/my-bills?billId=${encodeURIComponent(row.billId)}`);
+          }}
+        />
       )}
 
-      {items.length >= 3 && heavyCount === 0 && (
-        <div className="alert alert-warning small">Bạn đã có nhiều lần vi phạm được ghi nhận — hãy tuân thủ nội quy để tránh tích lũy điểm kỷ luật.</div>
-      )}
-
-      <div className="card shadow-sm mb-3">
-        <div className="card-body row g-3 align-items-end">
-          <div className="col-md-4">
-            <label className="form-label small mb-0">Năm học</label>
-            <input className="form-control form-control-sm" value={schoolYear} onChange={(e) => setSchoolYear(e.target.value)} placeholder="2025-2026" />
-          </div>
-          <div className="col-md-3">
-            <label className="form-label small mb-0">Học kỳ</label>
-            <select className="form-select form-select-sm" value={semester} onChange={(e) => setSemester(e.target.value)}>
-              <option value="HK1">HK1</option>
-              <option value="HK2">HK2</option>
-              <option value="HK3">HK3</option>
-            </select>
-          </div>
-          <div className="col-md-5 text-md-end small text-muted">Điểm &amp; mức cảnh báo tính theo năm học / học kỳ đã chọn.</div>
-        </div>
-      </div>
-
-      <div className="row g-2 mb-3">
-        <div className="col-sm-6 col-md-4">
-          <div className="card h-100 border-secondary">
-            <div className="card-body py-2">
-              <div className="text-muted small">Chờ xử lý</div>
-              <div className="fs-5 fw-semibold text-warning">{pendingViolationCount}</div>
-            </div>
-          </div>
-        </div>
-        <div className="col-sm-6 col-md-4">
-          <div className="card h-100 border-secondary">
-            <div className="card-body py-2">
-              <div className="text-muted small">Tổng vi phạm (đã ghi)</div>
-              <div className="fs-5 fw-semibold">{items.length}</div>
-            </div>
-          </div>
-        </div>
-        <div className="col-md-4">
-          <div className="card h-100 border-secondary">
-            <div className="card-body py-2">
-              <div className="text-muted small">Điểm kỷ luật (kỳ đã chọn)</div>
-              <div className="fs-5 fw-semibold text-primary">{stats?.totalPoints ?? "—"}</div>
-              <div className="small fw-semibold text-muted mt-1">{stats?.warning?.text || "—"}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {stats && stats.totalPoints >= 5 && (
-        <div className={`alert ${stats.totalPoints >= 7 ? "alert-danger" : "alert-warning"} small`}>
-          {stats.totalPoints >= 7
-            ? "Bạn đạt ngưỡng 7 điểm — BQL KTX có thể xử lý theo quy định (kể cả chấm dứt hợp đồng)."
-            : `Bạn đang có ${stats.totalPoints} điểm. Từ 7 điểm có thể bị buộc rời KTX theo quy định.`}
-        </div>
-      )}
-
-      <div className="card shadow-sm">
-        <div className="card-header bg-white fw-semibold">Danh sách vi phạm</div>
-        <div className="table-responsive">
-          <table className="table table-sm table-hover mb-0 align-middle">
-            <thead className="table-light">
-              <tr>
-                <th>Ngày ghi nhận</th>
-                <th>Loại vi phạm</th>
-                <th>Mức độ</th>
-                <th>Trạng thái</th>
-                <th className="text-end">Thao tác</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((r) => {
-                const sev = severityBadge(r.severity);
-                const st = statusBadge(r.status);
-                return (
-                  <tr key={r._id} className={r.severity === "heavy" ? "table-danger" : undefined}>
-                    <td className="small">{r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN") : "—"}</td>
-                    <td>{r.ruleName || (typeof r.rule === "object" && r.rule ? (r.rule as { name?: string }).name : "—")}</td>
-                    <td>
-                      <span className={`badge ${sev.cls}`}>{sev.label}</span>
-                    </td>
-                    <td>
-                      <span className={`badge ${st.cls}`}>{st.label}</span>
-                    </td>
-                    <td className="text-end">
-                      <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => void openDetail(r._id)}>
-                        Xem
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {items.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="text-center text-muted py-4">
-                    Chưa có vi phạm được ghi nhận.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {(detailId || detailLoading) && (
-        <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.45)" }}>
-          <div className="modal-dialog modal-dialog-scrollable modal-lg">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h5 className="modal-title">Chi tiết vi phạm</h5>
-                <button type="button" className="btn-close" aria-label="Đóng" onClick={closeDetail} />
-              </div>
-              <div className="modal-body">
-                {detailLoading && (
-                  <div className="text-center py-4">
-                    <div className="spinner-border spinner-border-sm text-primary" />
-                  </div>
-                )}
-                {!detailLoading && detail && <ViolationDetailBody v={detail} authUser={authUser as AuthUserLite | null} />}
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={closeDetail}>
-                  Đóng
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <ViolationDetailModal row={detailRow} open={!!detailRow} onClose={() => setDetailRow(null)} />
     </div>
   );
 };
-
-function ViolationDetailBody({ v, authUser }: { v: Violation; authUser: AuthUserLite | null }) {
-  const student = typeof v.user === "object" && v.user ? (v.user as User) : null;
-  const room = typeof v.room === "object" && v.room ? v.room : null;
-  const area = room?.area && typeof room.area === "object" ? (room.area as { name?: string }).name : "";
-  const st = statusBadge(v.status);
-  const sev = severityBadge(v.severity);
-  const res = v.resolution as ViolationResolution | null | undefined;
-
-  return (
-    <div className="small">
-      <h6 className="text-muted text-uppercase">Sinh viên</h6>
-      <ul className="list-unstyled mb-3">
-        <li>
-          <strong>Họ tên:</strong> {student?.fullName || authUser?.fullName || "—"}
-        </li>
-        <li>
-          <strong>Mã SV:</strong> {student?.studentId || authUser?.studentId || "—"}
-        </li>
-        <li>
-          <strong>Email:</strong> {student?.email || authUser?.email || "—"}
-        </li>
-      </ul>
-
-      <h6 className="text-muted text-uppercase">Phòng & kỳ</h6>
-      <ul className="list-unstyled mb-3">
-        <li>
-          <strong>Phòng:</strong> {room?.roomNumber || "—"}
-          {area ? ` — ${area}` : ""}
-        </li>
-        <li>
-          <strong>Học kỳ / năm:</strong> {v.semester} / {v.schoolYear}
-        </li>
-      </ul>
-
-      <h6 className="text-muted text-uppercase">Nội dung vi phạm</h6>
-      <p>
-        <strong>Loại:</strong> {v.ruleName || "—"}
-      </p>
-      <p>
-        <strong>Mô tả:</strong> {v.description?.trim() ? v.description : "—"}
-      </p>
-      <p className="mb-2">
-        <strong>Mức độ:</strong> <span className={`badge ${sev.cls}`}>{sev.label}</span>
-        {v.immediateExpulsion && <span className="badge text-bg-danger ms-1">Xử lý nghiêm</span>}
-      </p>
-      <p>
-        <strong>Điểm trừ (ghi nhận):</strong> {v.points ?? 0}
-      </p>
-      <p>
-        <strong>Phạt / bồi thường (ghi nhận):</strong> {(v.fineAmount || 0).toLocaleString("vi-VN")}đ /{" "}
-        {(v.compensationAmount || 0).toLocaleString("vi-VN")}đ
-      </p>
-
-      <h6 className="text-muted text-uppercase mt-3">Trạng thái & xử lý</h6>
-      <p>
-        <strong>Trạng thái:</strong> <span className={`badge ${st.cls}`}>{st.label}</span>
-      </p>
-      {res ? (
-        <>
-          <p>
-            <strong>Hình thức xử lý:</strong> {actionLabel(res.actionType)}
-          </p>
-          {res.penaltyAmount != null && res.penaltyAmount > 0 && (
-            <p>
-              <strong>Số tiền phạt (quyết định):</strong> {res.penaltyAmount.toLocaleString("vi-VN")}đ
-            </p>
-          )}
-          <p>
-            <strong>Ghi chú từ BQL:</strong> {res.note?.trim() ? res.note : "—"}
-          </p>
-          <p className="text-muted mb-0">
-            <small>
-              Xử lý lúc: {res.resolvedAt ? new Date(res.resolvedAt).toLocaleString("vi-VN") : "—"}
-            </small>
-          </p>
-        </>
-      ) : (
-        <p className="text-muted mb-0">Chưa có quyết định kỷ luật chính thức.</p>
-      )}
-    </div>
-  );
-}
 
 export default MyViolationsPage;

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Layout, Menu, Dropdown, Button, Space } from "antd";
 import {
   UserOutlined,
@@ -22,6 +22,7 @@ import Footer from "../components/Footer";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
+import { clearBlockingOverlays } from "../utils/clearBlockingOverlays";
 import type { MenuProps } from "antd";
 
 const { Header, Sider, Content } = Layout;
@@ -59,6 +60,10 @@ const ClientLayout: React.FC = () => {
       .map((m) => m.key)
       .sort((a, b) => b.length - a.length)
       .find((k) => location.pathname === k || location.pathname.startsWith(`${k}/`)) || "/student";
+
+  useEffect(() => {
+    clearBlockingOverlays();
+  }, [location.pathname]);
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -119,8 +124,8 @@ const ClientLayout: React.FC = () => {
             )}
           </Space>
         </Header>
-        <Content style={{ margin: 24, padding: 24, background: "var(--admin-content-bg)", borderRadius: 12, minHeight: 280 }}>
-          <Outlet />
+        <Content style={{ margin: 24, padding: 24, background: "var(--admin-content-bg)", borderRadius: 12, minHeight: 280, position: "relative" }}>
+          <Outlet key={location.pathname} />
         </Content>
         <Footer />
       </Layout>

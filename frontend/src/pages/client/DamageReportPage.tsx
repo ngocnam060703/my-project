@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { contractsApi, maintenanceReportsApi } from "../../api";
 import { apiErrorMessage } from "../../utils/apiErrorMessage";
+import { clearBlockingOverlays } from "../../utils/clearBlockingOverlays";
 import type { MaintenanceReport, MaintenanceIncidentType, Room } from "../../types";
 
 const INCIDENT_LABEL: Record<MaintenanceIncidentType, string> = {
@@ -17,7 +18,8 @@ const INCIDENT_LABEL: Record<MaintenanceIncidentType, string> = {
 };
 
 function statusBadge(st: string): { cls: string; label: string } {
-  if (st === "resolved") return { cls: "text-bg-success", label: "Đã sửa xong" };
+  if (st === "cancelled") return { cls: "text-bg-secondary", label: "Đã hủy" };
+  if (st === "resolved") return { cls: "text-bg-success", label: "Đã xử lý" };
   if (st === "processing") return { cls: "text-bg-primary", label: "Đang xử lý" };
   return { cls: "text-bg-warning text-dark", label: "Chờ xử lý" };
 }
@@ -82,6 +84,8 @@ const DamageReportPage: React.FC = () => {
   useEffect(() => {
     void loadReports();
   }, [loadReports]);
+
+  useEffect(() => () => clearBlockingOverlays(), []);
 
   const pendingCount = useMemo(() => items.filter((r) => r.status === "pending").length, [items]);
 
@@ -150,6 +154,7 @@ const DamageReportPage: React.FC = () => {
   const closeDetail = () => {
     setDetail(null);
     setDetailLoading(false);
+    clearBlockingOverlays();
   };
 
   const askCancel = async (id: string) => {
@@ -181,7 +186,15 @@ const DamageReportPage: React.FC = () => {
             Báo sự cố trong phòng (điện, nước, thiết bị…). BQL / kỹ thuật sẽ tiếp nhận và cập nhật trạng thái.
           </p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => setShowForm(true)} disabled={!currentRoomLabel || currentRoomLabel === "—"}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => {
+            setShowForm(true);
+            clearBlockingOverlays();
+          }}
+          disabled={!currentRoomLabel || currentRoomLabel === "—"}
+        >
           + Tạo yêu cầu
         </button>
       </div>
@@ -325,7 +338,14 @@ const DamageReportPage: React.FC = () => {
                   )}
                 </div>
                 <div className="modal-footer">
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowForm(false)}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setShowForm(false);
+                      clearBlockingOverlays();
+                    }}
+                  >
                     Đóng
                   </button>
                   <button type="submit" className="btn btn-primary" disabled={submitting}>

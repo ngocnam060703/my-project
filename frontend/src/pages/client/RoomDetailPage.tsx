@@ -4,6 +4,7 @@ import { Card, Descriptions, Button, Tag, Spin, message, Form, Input, Rate, List
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { contractsApi, roomsApi, ratingsApi } from "../../api";
 import { useAuth } from "../../contexts/AuthContext";
+import { hasToken } from "../../utils/authStorage";
 import type { Contract, Room } from "../../types";
 
 const RoomDetailPage: React.FC = () => {
@@ -25,6 +26,10 @@ const RoomDetailPage: React.FC = () => {
     ratingsApi.getByRoom(id).then((res) => setRatings(res.data)).catch(() => {});
   }, [id]);
   useEffect(() => {
+    if (!hasToken()) {
+      setActiveContract(null);
+      return;
+    }
     contractsApi
       .getMy()
       .then((res) => {
@@ -36,6 +41,8 @@ const RoomDetailPage: React.FC = () => {
 
   if (loading || !room) return <Spin size="large" style={{ display: "block", margin: "40px auto" }} />;
   const available = room.currentOccupancy < room.capacity;
+  const currentResidentRoomId = activeContract?.status === "active" ? activeContract.room?._id : undefined;
+  const isCurrentResident = Boolean(user && currentResidentRoomId && currentResidentRoomId === room._id);
 
   return (
     <div>
@@ -53,21 +60,27 @@ const RoomDetailPage: React.FC = () => {
         </Descriptions>
         {user && (
           <Card type="inner" title="Đánh giá phòng (chỉ sinh viên đang ở)" style={{ marginTop: 16 }}>
-            <Form form={ratingForm} layout="inline" onFinish={async (v) => {
-              try {
-                await ratingsApi.create({ room: room._id, rating: v.rating, comment: v.comment });
-                message.success("Đánh giá thành công");
-                const res = await ratingsApi.getByRoom(room._id);
-                setRatings(res.data);
-                ratingForm.resetFields();
-              } catch (e: unknown) {
-                message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
-              }
-            }}>
-              <Form.Item name="rating" rules={[{ required: true }]}><Rate /></Form.Item>
-              <Form.Item name="comment"><Input placeholder="Nhận xét" style={{ width: 200 }} /></Form.Item>
-              <Form.Item><Button type="primary" htmlType="submit">Gửi</Button></Form.Item>
-            </Form>
+            {isCurrentResident ? (
+              <Form form={ratingForm} layout="inline" onFinish={async (v) => {
+                try {
+                  await ratingsApi.create({ room: room._id, rating: v.rating, comment: v.comment });
+                  message.success("Đánh giá thành công");
+                  const res = await ratingsApi.getByRoom(room._id);
+                  setRatings(res.data);
+                  ratingForm.resetFields();
+                } catch (e: unknown) {
+                  message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+                }
+              }}>
+                <Form.Item name="rating" rules={[{ required: true }]}><Rate /></Form.Item>
+                <Form.Item name="comment"><Input placeholder="Nhận xét" style={{ width: 200 }} /></Form.Item>
+                <Form.Item><Button type="primary" htmlType="submit">Gửi</Button></Form.Item>
+              </Form>
+            ) : (
+              <p className="text-sm text-gray-500 italic">
+                📌 Bạn chỉ có thể đọc đánh giá. Chỉ sinh viên đang lưu trú tại đây mới được quyền viết đánh giá.
+              </p>
+            )}
           </Card>
         )}
         {ratings && ratings.ratings.length > 0 && (

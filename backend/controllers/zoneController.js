@@ -2,6 +2,8 @@ const { validationResult } = require("express-validator");
 const Area = require("../models/Area");
 const Room = require("../models/Room");
 const Contract = require("../models/Contract");
+const { contractHoldsRoomSlot } = require("../services/roomOccupancySync");
+const { normalizeGenderPolicy } = require("../utils/genderPolicy");
 
 const notDeleted = { isDeleted: { $ne: true } };
 
@@ -25,9 +27,9 @@ async function loadRoomStatsForAreas(areaDocs) {
   return byArea;
 }
 
-function effectivePlannedCapacity(area, sumRoomCapacity) {
-  const p = area.plannedCapacity;
-  if (p != null && Number(p) > 0) return Number(p);
+function effectivePlannedCapacity(area, sumRoomCapacity, actualRooms) {
+  /** Chưa có phòng thực tế → sức chứa hiệu lực = 0 (tránh hiển thị 1 do quy hoạch). */
+  if (!actualRooms || actualRooms <= 0) return 0;
   return Math.max(0, sumRoomCapacity);
 }
 
@@ -51,11 +53,12 @@ function fillPercent(current, capacity) {
 function toZoneDTO(areaDoc, stats) {
   const a = areaDoc.toObject ? areaDoc.toObject() : { ...areaDoc };
   const agg = stats.get(String(a._id)) || { actualRooms: 0, currentStudents: 0, sumRoomCapacity: 0 };
-  const capacity = effectivePlannedCapacity(a, agg.sumRoomCapacity);
+  const capacity = effectivePlannedCapacity(a, agg.sumRoomCapacity, agg.actualRooms);
   const plannedRoomsDisplay = effectivePlannedRooms(a, agg.actualRooms);
   const status = computeZoneStatus(agg.currentStudents, capacity);
   return {
     ...a,
+    genderPolicy: normalizeGenderPolicy(a.genderPolicy),
     actualTotalRooms: agg.actualRooms,
     /** Hiển thị cột “Tổng phòng”: ưu tiên số phòng thực tế; kèm quy hoạch */
     totalRooms: agg.actualRooms,
@@ -187,8 +190,9 @@ exports.getResidents = async (req, res) => {
       .sort({ createdAt: 1 })
       .lean();
 
+    const now = new Date();
     const residents = contracts
-      .filter((c) => c.user && c.room)
+      .filter((c) => c.user && c.room && contractHoldsRoomSlot(c, now))
       .map((c) => ({
         contractId: c._id,
         status: c.status,
@@ -214,6 +218,13 @@ exports.getResidents = async (req, res) => {
   }
 };
 
+function parseOptionalNonNegInt(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+}
+
 exports.create = async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -227,9 +238,9 @@ exports.create = async (req, res) => {
     const area = await Area.create({
       name: trimmedName,
       description: description != null ? String(description) : "",
-      plannedTotalRooms: Number(plannedTotalRooms),
-      plannedCapacity: Number(plannedCapacity),
-      genderPolicy: genderPolicy || "mixed",
+      plannedTotalRooms: parseOptionalNonNegInt(plannedTotalRooms),
+      plannedCapacity: parseOptionalNonNegInt(plannedCapacity),
+      genderPolicy: normalizeGenderPolicy(genderPolicy || "mixed"),
       manager: manager || null,
     });
 
@@ -256,9 +267,13 @@ exports.update = async (req, res) => {
       existing.name = trimmed;
     }
     if (req.body.description !== undefined) existing.description = String(req.body.description ?? "");
-    if (req.body.plannedTotalRooms !== undefined) existing.plannedTotalRooms = Number(req.body.plannedTotalRooms);
-    if (req.body.plannedCapacity !== undefined) existing.plannedCapacity = Number(req.body.plannedCapacity);
-    if (req.body.genderPolicy !== undefined) existing.genderPolicy = req.body.genderPolicy;
+    if (req.body.plannedTotalRooms !== undefined) {
+      existing.plannedTotalRooms = parseOptionalNonNegInt(req.body.plannedTotalRooms);
+    }
+    if (req.body.plannedCapacity !== undefined) {
+      existing.plannedCapacity = parseOptionalNonNegInt(req.body.plannedCapacity);
+    }
+    if (req.body.genderPolicy !== undefined) existing.genderPolicy = normalizeGenderPolicy(req.body.genderPolicy);
     if (req.body.manager !== undefined) existing.manager = req.body.manager || null;
     if (req.body.isActive !== undefined) existing.isActive = !!req.body.isActive;
 

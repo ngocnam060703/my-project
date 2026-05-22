@@ -36,7 +36,6 @@ import {
   SwapOutlined,
   LoginOutlined,
   LogoutOutlined,
-  DollarOutlined,
   IdcardOutlined,
   MoreOutlined,
   ReloadOutlined,
@@ -250,8 +249,10 @@ const RoomsPage: React.FC = () => {
     roomId?: string;
     contractId?: string;
     fromBedId?: string;
+    targetRoomId?: string;
     targetBedId?: string;
     reason?: string;
+    roomOptions?: Room[];
   }>({ open: false });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
@@ -555,15 +556,7 @@ const RoomsPage: React.FC = () => {
       return;
     }
 
-    void loadBedsForRoom(roomId, true);
-    setTransferModal({
-      open: true,
-      roomId,
-      contractId: openTransferQ,
-      fromBedId,
-      targetBedId: undefined,
-      reason: "",
-    });
+    void openTransferModal(roomId, openTransferQ, fromBedId);
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -655,24 +648,74 @@ const RoomsPage: React.FC = () => {
     });
   };
 
+  const openTransferModal = async (sourceRoomId: string, contractIdStr: string, fromBedId: string) => {
+    void loadBedsForRoom(sourceRoomId, true);
+    const areaId =
+      detailModal?.area && typeof detailModal.area === "object"
+        ? String(detailModal.area._id || "")
+        : typeof detailModal?.area === "string"
+          ? detailModal.area
+          : "";
+    let roomOptions: Room[] = detailModal ? [detailModal] : [];
+    if (areaId) {
+      try {
+        const res = await roomsApi.getAll({ area: areaId, limit: 200 });
+        roomOptions = ((res.data as { rooms?: Room[] })?.rooms || []).filter((r) => r.status !== "maintenance");
+        await Promise.all(roomOptions.map((r) => loadBedsForRoom(r._id, false)));
+      } catch {
+        roomOptions = detailModal ? [detailModal] : [];
+      }
+    }
+    setTransferModal({
+      open: true,
+      roomId: sourceRoomId,
+      contractId: contractIdStr,
+      fromBedId,
+      targetRoomId: sourceRoomId,
+      targetBedId: undefined,
+      reason: "",
+      roomOptions,
+    });
+  };
+
   const submitTransferBed = async () => {
-    const { roomId, contractId, targetBedId, reason } = transferModal;
-    if (!roomId || !contractId || !transferModal.fromBedId || !targetBedId) {
-      message.error("Chọn đủ giường đích");
+    const { roomId, contractId, targetBedId, targetRoomId, reason, fromBedId } = transferModal;
+    if (!roomId || !contractId || !fromBedId || !targetBedId || !targetRoomId) {
+      message.error("Chọn đủ phòng và giường đích");
       return;
     }
-    try {
-      await roomsApi.transferBed(roomId, {
-        contractId,
-        targetBedId,
-        reason: reason?.trim() || undefined,
-      });
-      message.success("Đã chuyển giường");
-      setTransferModal({ open: false });
-      await refreshRoomSnapshot(roomId);
-    } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Chuyển giường thất bại");
-    }
+    const destRoom = (transferModal.roomOptions || []).find((r) => String(r._id) === String(targetRoomId));
+    const destLabel = destRoom?.roomNumber || targetRoomId;
+    Modal.confirm({
+      title: "Xác nhận chuyển giường?",
+      content: (
+        <div>
+          <p>Chuyển sinh viên sang giường đã chọn{targetRoomId !== roomId ? ` (phòng ${destLabel})` : " (cùng phòng)"}.</p>
+          <p style={{ color: "#64748b", fontSize: 13 }}>Giường cũ sẽ trống; cần check-in lại trên giường mới.</p>
+        </div>
+      ),
+      okText: "Lưu",
+      cancelText: "Hủy",
+      onOk: async () => {
+        try {
+          await roomsApi.transferBed(roomId, {
+            contractId,
+            targetBedId,
+            targetRoomId: targetRoomId !== roomId ? targetRoomId : undefined,
+            reason: reason?.trim() || undefined,
+          });
+          message.success("Đã chuyển giường");
+          setTransferModal({ open: false });
+          await refreshRoomSnapshot(roomId);
+          if (targetRoomId !== roomId) await refreshRoomSnapshot(targetRoomId);
+          void load();
+        } catch (err: unknown) {
+          message.error(
+            (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Chuyển giường thất bại"
+          );
+        }
+      },
+    });
   };
 
   const formatDateVi = (v?: string | null) => {
@@ -1208,15 +1251,7 @@ const RoomsPage: React.FC = () => {
                                   icon: <SwapOutlined />,
                                   label: "Chuyển giường",
                                   onClick: () => {
-                                    void loadBedsForRoom(detailModal._id, true);
-                                    setTransferModal({
-                                      open: true,
-                                      roomId: detailModal._id,
-                                      contractId: contractIdStr,
-                                      fromBedId: b._id,
-                                      targetBedId: undefined,
-                                      reason: "",
-                                    });
+                                    void openTransferModal(detailModal._id, contractIdStr, b._id);
                                   },
                                 });
                               }
@@ -1245,15 +1280,6 @@ const RoomsPage: React.FC = () => {
                                   onClick: () => navigate(`/admin/users?openUser=${encodeURIComponent(uid)}`),
                                 });
                               }
-                              if (uid) {
-                                menuItems.push({
-                                  key: "bill",
-                                  icon: <DollarOutlined />,
-                                  label: "Tạo / xem thu phí",
-                                  onClick: () => navigate(`/admin/billing`),
-                                });
-                              }
-
                               const titleTip = (
                                 <div>
                                   <div style={{ fontWeight: 600 }}>
@@ -1347,25 +1373,42 @@ const RoomsPage: React.FC = () => {
       </Modal>
 
       <Modal
-        title="Chuyển giường (cùng phòng)"
+        title="Đổi giường / Chuyển giường"
         open={transferModal.open}
         onCancel={() => setTransferModal({ open: false })}
         onOk={() => void submitTransferBed()}
-        okText="Chuyển"
+        okText="Xác nhận chuyển"
         destroyOnClose
       >
         <p style={{ marginBottom: 8, color: "#64748b", fontSize: 13 }}>
-          Giải phóng giường hiện tại và gán giường đích; check-in sẽ được làm lại trên giường mới.
+          Chọn phòng đích (cùng khu) và giường trống. Hệ thống validate giới tính khu và cập nhật occupancy tự động.
         </p>
         <div style={{ marginBottom: 8 }}>
-          <span style={{ fontWeight: 600 }}>Giường đích</span>
+          <span style={{ fontWeight: 600 }}>Phòng đích</span>
+        </div>
+        <Select
+          style={{ width: "100%", marginBottom: 12 }}
+          placeholder="Chọn phòng"
+          value={transferModal.targetRoomId}
+          onChange={(v) => {
+            const nextRoom = String(v);
+            void loadBedsForRoom(nextRoom, true);
+            setTransferModal((prev) => ({ ...prev, targetRoomId: nextRoom, targetBedId: undefined }));
+          }}
+          options={(transferModal.roomOptions || []).map((r) => ({
+            label: `Phòng ${r.roomNumber} (${r.currentOccupancy ?? 0}/${r.capacity ?? 0})`,
+            value: r._id,
+          }))}
+        />
+        <div style={{ marginBottom: 8 }}>
+          <span style={{ fontWeight: 600 }}>Giường đích (trống)</span>
         </div>
         <Select
           style={{ width: "100%" }}
           placeholder="Chọn giường trống"
           value={transferModal.targetBedId}
           onChange={(v) => setTransferModal((prev) => ({ ...prev, targetBedId: String(v) }))}
-          options={(bedsByRoom[transferModal.roomId || ""] || [])
+          options={(bedsByRoom[transferModal.targetRoomId || transferModal.roomId || ""] || [])
             .filter((x) => x.status === "available" && String(x._id) !== String(transferModal.fromBedId))
             .map((x) => ({ label: x.code, value: x._id }))}
         />

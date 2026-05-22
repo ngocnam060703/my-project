@@ -75,7 +75,8 @@ const StudentBillingPage: React.FC = () => {
     );
   }
 
-  const monthly = rows.filter((b) => b.billType !== "penalty");
+  const monthly = rows.filter((b) => b.billType !== "penalty" && b.billType !== "damage_reimbursement");
+  const special = rows.filter((b) => b.billType === "penalty" || b.billType === "damage_reimbursement");
 
   return (
     <div className="container" style={{ maxWidth: 900 }}>
@@ -132,6 +133,55 @@ const StudentBillingPage: React.FC = () => {
           </tbody>
         </table>
       </div>
+
+      {special.length > 0 && (
+        <>
+          <h5 className="mt-4 mb-2">Phạt / bồi thường</h5>
+          <div className="table-responsive">
+            <table className="table table-bordered table-sm">
+              <thead className="table-light">
+                <tr>
+                  <th>Loại</th>
+                  <th className="text-end">Số tiền</th>
+                  <th>Hạn</th>
+                  <th>Trạng thái</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {special.map((r) => {
+                  const st = statusBadge(r.status);
+                  const typeLabel =
+                    r.billType === "damage_reimbursement" ? "Bồi thường hư hỏng" : "Phạt vi phạm";
+                  return (
+                    <tr key={r._id}>
+                      <td>
+                        <strong>{typeLabel}</strong>
+                        {r.billCode ? <div className="small text-muted">{r.billCode}</div> : null}
+                      </td>
+                      <td className="text-end fw-bold text-primary">{formatMoney(r.total)}</td>
+                      <td>{r.dueDate ? new Date(r.dueDate).toLocaleDateString("vi-VN") : "—"}</td>
+                      <td>
+                        <span className={`badge ${st.cls}`}>{st.text}</span>
+                      </td>
+                      <td>
+                        <button type="button" className="btn btn-sm btn-outline-primary me-1" onClick={() => billsApi.getById(r._id).then((res) => setDetail(res.data as Bill))}>
+                          Xem
+                        </button>
+                        {canPay(r.status) && (
+                          <button type="button" className="btn btn-sm btn-success" disabled={busy === r._id} onClick={() => payOnline(r._id)}>
+                            {busy === r._id ? "…" : "Pay online"}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {detail && (
         <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,.45)" }}>

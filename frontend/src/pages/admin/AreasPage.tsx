@@ -182,13 +182,22 @@ const AreasPage: React.FC = () => {
     return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("vi-VN");
   };
 
+  const renderGender = (v?: string) => {
+    const key = String(v || "").trim().toLowerCase();
+    if (key === "male" || key === "nam") return "Nam";
+    if (key === "female" || key === "nữ" || key === "nu") return "Nữ";
+    if (key === "other" || key === "khác" || key === "khac") return "Khác";
+    const raw = String(v || "").trim();
+    return raw || "—";
+  };
+
   const handleSubmit = async (v: Record<string, unknown>) => {
     try {
       const payload = {
         ...v,
         manager: v.manager || null,
-        plannedTotalRooms: Number(v.plannedTotalRooms),
-        plannedCapacity: Number(v.plannedCapacity),
+        plannedTotalRooms: v.plannedTotalRooms == null ? null : Number(v.plannedTotalRooms),
+        plannedCapacity: v.plannedCapacity == null ? null : Number(v.plannedCapacity),
       };
       if (editingId) {
         await zonesApi.update(editingId, payload);
@@ -212,8 +221,8 @@ const AreasPage: React.FC = () => {
     form.setFieldsValue({
       name: record.name,
       description: record.description,
-      plannedTotalRooms: record.plannedTotalRooms ?? record.actualTotalRooms ?? 1,
-      plannedCapacity: record.plannedCapacity ?? record.effectiveCapacity ?? 1,
+      plannedTotalRooms: record.plannedTotalRooms ?? record.actualTotalRooms ?? null,
+      plannedCapacity: record.plannedCapacity ?? record.effectiveCapacity ?? null,
       manager: managerId || undefined,
       genderPolicy: record.genderPolicy || "mixed",
     });
@@ -244,6 +253,15 @@ const AreasPage: React.FC = () => {
   };
 
   const genderLabel: Record<string, string> = { male: "Nam", female: "Nữ", mixed: "Hỗn hợp" };
+
+  const renderGenderPolicy = (value?: string | null) => {
+    const k = String(value || "mixed")
+      .trim()
+      .toLowerCase();
+    if (k === "male" || k === "nam" || k === "m") return genderLabel.male;
+    if (k === "female" || k === "nu" || k === "nữ" || k === "f") return genderLabel.female;
+    return genderLabel.mixed;
+  };
 
   const tableOnChange: TableProps<Area>["onChange"] = (_pg, _f, sorter) => {
     if (Array.isArray(sorter)) return;
@@ -286,7 +304,11 @@ const AreasPage: React.FC = () => {
       title: "Sức chứa",
       key: "cap",
       width: 100,
-      render: (_: unknown, r: Area) => r.effectiveCapacity ?? r.plannedCapacity ?? "—",
+      render: (_: unknown, r: Area) => {
+        const actualRooms = r.actualTotalRooms ?? r.totalRooms ?? 0;
+        if (actualRooms <= 0) return 0;
+        return r.effectiveCapacity ?? 0;
+      },
     },
     {
       title: "Đang ở",
@@ -308,7 +330,7 @@ const AreasPage: React.FC = () => {
       dataIndex: "genderPolicy",
       key: "genderPolicy",
       width: 100,
-      render: (g: string) => genderLabel[g] || g || "—",
+      render: (g: string) => renderGenderPolicy(g),
     },
     {
       title: "Mô tả",
@@ -439,9 +461,11 @@ const AreasPage: React.FC = () => {
                   data.map((a) => ({
                     "Tên khu": a.name,
                     "Phòng (thực tế)": a.actualTotalRooms ?? a.totalRooms,
-                    "Sức chứa": a.effectiveCapacity ?? a.plannedCapacity,
+                    "Sức chứa":
+                      (a.actualTotalRooms ?? a.totalRooms ?? 0) > 0 ? a.effectiveCapacity ?? 0 : 0,
                     "Đang ở": a.currentStudents,
                     "Trạng thái": a.zoneStatus === "full" ? "Đầy" : "Còn chỗ",
+                    "Giới tính": renderGenderPolicy(a.genderPolicy),
                     "Mô tả": a.description,
                   })),
                   "danh-sach-khu-ktx",
@@ -457,7 +481,7 @@ const AreasPage: React.FC = () => {
               onClick={() => {
                 setEditingId(null);
                 form.resetFields();
-                form.setFieldsValue({ genderPolicy: "mixed", plannedTotalRooms: 1, plannedCapacity: 1 });
+                form.setFieldsValue({ genderPolicy: "mixed", plannedTotalRooms: null, plannedCapacity: null });
                 setModalOpen(true);
               }}
             >
@@ -508,18 +532,20 @@ const AreasPage: React.FC = () => {
               <Form.Item
                 name="plannedTotalRooms"
                 label="Tổng số phòng (quy hoạch)"
-                rules={[{ required: true, type: "number", min: 1, message: "Phải > 0" }]}
+                extra="Tùy chọn — để trống nếu chưa quy hoạch"
+                rules={[{ type: "number", min: 0, message: "Phải >= 0" }]}
               >
-                <InputNumber min={1} style={{ width: "100%" }} />
+                <InputNumber min={0} style={{ width: "100%" }} placeholder="0" />
               </Form.Item>
             </Col>
             <Col span={12}>
               <Form.Item
                 name="plannedCapacity"
-                label="Sức chứa tối đa (SV)"
-                rules={[{ required: true, type: "number", min: 1, message: "Phải > 0" }]}
+                label="Sức chứa quy hoạch (SV)"
+                extra="Chưa có phòng → hiển thị 0; tính theo phòng thực tế"
+                rules={[{ type: "number", min: 0, message: "Phải >= 0" }]}
               >
-                <InputNumber min={1} style={{ width: "100%" }} />
+                <InputNumber min={0} style={{ width: "100%" }} placeholder="0" />
               </Form.Item>
             </Col>
           </Row>
@@ -588,15 +614,20 @@ const AreasPage: React.FC = () => {
                 <Descriptions.Item label="Phòng (thực tế / quy hoạch)">
                   {(z.actualTotalRooms ?? z.totalRooms ?? 0) as number} / {z.plannedTotalRooms ?? "—"}
                 </Descriptions.Item>
-                <Descriptions.Item label="Sức chứa (hiệu lực)">{detail.summary.effectiveCapacity}</Descriptions.Item>
+                <Descriptions.Item label="Sức chứa (theo phòng thực tế)">{detail.summary.effectiveCapacity}</Descriptions.Item>
+                <Descriptions.Item label="Sức chứa quy hoạch">{z.plannedCapacity ?? "—"}</Descriptions.Item>
                 <Descriptions.Item label="Sinh viên đang ở">{detail.summary.currentStudents}</Descriptions.Item>
                 <Descriptions.Item label="Tỷ lệ lấp đầy">{detail.summary.fillPercent}%</Descriptions.Item>
                 <Descriptions.Item label="Trạng thái">
                   {detail.summary.zoneStatus === "full" ? <Tag color="error">Đầy</Tag> : <Tag color="success">Còn chỗ</Tag>}
                 </Descriptions.Item>
-                <Descriptions.Item label="Giới tính">{genderLabel[z.genderPolicy || "mixed"]}</Descriptions.Item>
+                <Descriptions.Item label="Giới tính">{renderGenderPolicy(z.genderPolicy)}</Descriptions.Item>
                 <Descriptions.Item label="Quản lý">
                   {typeof z.manager === "object" ? z.manager?.fullName : "—"}
+                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                    Một quản lý có thể phụ trách nhiều khu (gán qua trường Quản lý trên từng khu). RBAC hiện dùng{" "}
+                    <code>managedArea</code> chính trên tài khoản quản lý.
+                  </div>
                 </Descriptions.Item>
                 <Descriptions.Item label="Ngày tạo">
                   {z.createdAt ? new Date(z.createdAt).toLocaleString("vi-VN") : "—"}
@@ -636,6 +667,7 @@ const AreasPage: React.FC = () => {
                     columns={[
                       { title: "STT", key: "stt", width: 60, render: (_: unknown, __: any, idx: number) => idx + 1 },
                       { title: "Tên", key: "name", render: (_: unknown, it: any) => it.user?.fullName || "-" },
+                      { title: "Giới tính", key: "gender", width: 90, render: (_: unknown, it: any) => renderGender(it.user?.gender) },
                       { title: "Ngành", key: "major", width: 160, render: (_: unknown, it: any) => it.user?.major || "-" },
                       {
                         title: "Khóa",

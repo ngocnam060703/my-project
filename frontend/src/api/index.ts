@@ -201,7 +201,7 @@ export const roomsApi = {
   getBeds: (id: string) => client.get(`/rooms/${id}/beds`),
   assignBed: (roomId: string, payload: { bedId: string; contractId: string }) => client.post(`/rooms/${roomId}/beds/assign`, payload),
   checkInBed: (roomId: string, bedId: string) => client.post(`/rooms/${roomId}/beds/check-in/${encodeURIComponent(bedId)}`),
-  transferBed: (roomId: string, payload: { contractId: string; targetBedId: string; reason?: string }) =>
+  transferBed: (roomId: string, payload: { contractId: string; targetBedId: string; targetRoomId?: string; reason?: string }) =>
     client.post(`/rooms/${roomId}/beds/transfer`, payload),
   setRoomLeader: (id: string, userId: string) => client.put(`/rooms/${id}/room-leader`, { userId }),
   create: (data: Record<string, unknown>) => client.post("/rooms", data),
@@ -311,6 +311,7 @@ export const contractsApi = {
   update: (id: string, data: Record<string, unknown>) => client.put(`/contracts/${encodeURIComponent(String(id))}`, data),
   extend: (id: string, endDate: string) => client.put(`/contracts/${id}/extend`, { endDate }),
   terminate: (id: string) => client.put(`/contracts/${id}/terminate`),
+  remove: (id: string) => client.delete(`/contracts/${id}`),
   uploadSignedPdf: (id: string, signedPdfUrl: string) => client.put(`/contracts/${id}/upload-signed-pdf`, { signedPdfUrl }),
   sign: (id: string) => client.put(`/contracts/${id}/sign`),
   confirmPayment: (id: string) => client.put(`/contracts/${id}/confirm-payment`),
@@ -320,7 +321,7 @@ export const contractsApi = {
   requestExtend: (contractId: string, months: number) =>
     client.post(`/contracts/${encodeURIComponent(contractId)}/request-extend`, { months }),
   /** Admin: danh sách yêu cầu gia hạn */
-  listExtendRequests: (params?: { status?: "pending" | "approved" | "rejected" | "all" }) =>
+  listExtendRequests: (params?: { status?: "pending" | "approved" | "rejected" | "all"; search?: string }) =>
     client.get("/contracts/extend-requests", { params }),
   approveExtendRequest: (requestId: string) => client.patch(`/contracts/extend-requests/${encodeURIComponent(requestId)}/approve`),
   rejectExtendRequest: (requestId: string, note: string) =>
@@ -346,10 +347,11 @@ export const billsApi = {
   getAll: (params?: {
     status?: string;
     search?: string;
+    user?: string;
     room?: string;
     month?: number;
     year?: number;
-    billType?: "monthly" | "penalty";
+    billType?: "monthly" | "penalty" | "damage_reimbursement";
     page?: number;
     limit?: number;
   }) => client.get("/bills", { params }),
@@ -418,7 +420,8 @@ export const dashboardApi = {
 
 export const ratingsApi = {
   getByRoom: (roomId: string) => client.get(`/ratings/room/${roomId}`),
-  create: (data: { room: string; rating: number; comment?: string }) => client.post("/ratings", data),
+  create: (data: { room: string; rating: number; comment?: string }) =>
+    client.post(`/ratings/room/${data.room}`, { rating: data.rating, comment: data.comment }),
 };
 
 export const studentDashboardApi = {
@@ -432,6 +435,15 @@ export const registrationPeriodsApi = {
     client.post("/registration-periods", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/registration-periods/${id}`, data),
   delete: (id: string) => client.delete(`/registration-periods/${id}`),
+};
+
+export const extensionPeriodsApi = {
+  getActive: () => client.get("/extension-periods/active"),
+  getAll: () => client.get("/extension-periods"),
+  create: (data: { name: string; startDate: string; endDate: string; note?: string }) =>
+    client.post("/extension-periods", data),
+  update: (id: string, data: Record<string, unknown>) => client.put(`/extension-periods/${id}`, data),
+  delete: (id: string) => client.delete(`/extension-periods/${id}`),
 };
 
 export const notificationsApi = {
@@ -479,10 +491,28 @@ export const scheduleApi = {
 };
 
 export const maintenanceReportsAdminApi = {
-  list: (params?: { status?: string; page?: number; limit?: number }) =>
-    client.get("/admin/maintenance-reports", { params }),
-  patch: (id: string, data: { status?: string; adminNote?: string }) =>
-    client.patch(`/admin/maintenance-reports/${id}`, data),
+  list: (params?: {
+    status?: string;
+    page?: number;
+    limit?: number;
+    search?: string;
+    month?: number;
+    year?: number;
+    date?: string;
+  }) => client.get("/admin/maintenance-reports", { params }),
+  patch: (
+    id: string,
+    data: {
+      status?: string;
+      adminNote?: string;
+      severity?: string;
+      damageCause?: string;
+      resolutionType?: string;
+      compensationAmount?: number;
+      maintenanceStatus?: string;
+    }
+  ) => client.patch(`/admin/maintenance-reports/${id}`, data),
+  getById: (id: string) => client.get(`/reports/${id}`),
 };
 
 export const facilitiesApi = {
@@ -546,8 +576,16 @@ export const roomServicesApi = {
 };
 
 export const serviceUsageApi = {
-  list: (params?: { room?: string; service?: string; month?: number; year?: number; page?: number; limit?: number }) =>
-    client.get("/service-usage", { params }),
+  list: (params?: {
+    room?: string;
+    service?: string;
+    month?: number;
+    year?: number;
+    page?: number;
+    limit?: number;
+  }) => client.get("/service-usage", { params }),
+  getPeriodStatus: (params: { room: string; month: number; year: number }) =>
+    client.get("/service-usage/period-status", { params }),
   create: (data: { room: string; service: string; month: number; year: number; oldIndex: number; newIndex: number; note?: string }) =>
     client.post("/service-usage", data),
 };

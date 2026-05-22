@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Layout, Menu, Dropdown, Button, Space } from "antd";
 import {
   UserOutlined,
@@ -19,6 +19,8 @@ import {
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
+import NotificationDropdown from "../components/NotificationDropdown";
+import { clearBlockingOverlays } from "../utils/clearBlockingOverlays";
 import type { MenuProps } from "antd";
 
 const { Header, Sider, Content } = Layout;
@@ -38,8 +40,7 @@ const AdminLayout: React.FC = () => {
     { key: "/admin/housing", icon: <HomeOutlined />, label: "Quản lý khu & phòng" },
     { key: "/admin/applications", icon: <FileTextOutlined />, label: "Đơn KTX & xét duyệt đăng ký" },
     { key: "/admin/contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
-    { key: "/admin/bills", icon: <DollarOutlined />, label: "Hóa đơn (Ant)" },
-    { key: "/admin/billing", icon: <DollarOutlined />, label: "Hóa đơn & thanh toán" },
+    { key: "/admin/bills", icon: <DollarOutlined />, label: "Hóa đơn" },
     { key: "/admin/violations", icon: <ExclamationCircleOutlined />, label: "Vi phạm kỷ luật" },
     { key: "/admin/maintenance-reports", icon: <ToolOutlined />, label: "Khai báo hư hỏng" },
     { key: "/admin/services", icon: <AppstoreOutlined />, label: "Dịch vụ (Ant)" },
@@ -49,6 +50,10 @@ const AdminLayout: React.FC = () => {
   const userMenu: MenuProps["items"] = [
     { key: "logout", icon: <LogoutOutlined />, label: "Đăng xuất", onClick: () => { logout(); navigate("/student"); } },
   ];
+
+  useEffect(() => {
+    clearBlockingOverlays();
+  }, [location.pathname]);
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -76,6 +81,7 @@ const AdminLayout: React.FC = () => {
           <Space>
             <Button type="text" icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={() => setCollapsed(!collapsed)} style={{ color: "rgba(255,255,255,0.85)" }} />
             <Button type="text" icon={<BulbOutlined />} onClick={toggleTheme} title={theme === "light" ? "Chế độ tối" : "Chế độ sáng"} style={{ color: "rgba(255,255,255,0.85)" }} />
+            {user && <NotificationDropdown />}
           </Space>
           <Dropdown menu={{ items: userMenu }} placement="bottomRight">
             <Button type="text" style={{ color: "#fff" }}>
@@ -86,8 +92,8 @@ const AdminLayout: React.FC = () => {
             </Button>
           </Dropdown>
         </Header>
-        <Content style={{ margin: 24, padding: 24, background: "var(--admin-content-bg)", borderRadius: 12, minHeight: 280 }}>
-          <Outlet />
+        <Content style={{ margin: 24, padding: 24, background: "var(--admin-content-bg)", borderRadius: 12, minHeight: 280, position: "relative" }}>
+          <Outlet key={location.pathname} />
         </Content>
       </Layout>
     </Layout>

@@ -1,175 +1,199 @@
 /**
- * BQL: danh sách khai báo hư hỏng + cập nhật trạng thái (PATCH).
+ * BQL: quản lý khai báo hư hỏng — layout đồng bộ trang Hóa đơn Admin.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import "bootstrap/dist/css/bootstrap.min.css";
+import { Card, message } from "antd";
 import { isAxiosError } from "axios";
 import { maintenanceReportsAdminApi } from "../../api";
-import type { MaintenanceReport, MaintenanceIncidentType, MaintenanceReportStatus } from "../../types";
+import MaintenanceReportStatsCards from "../../components/admin/maintenance/MaintenanceReportStatsCards";
+import MaintenanceReportFilterBar, {
+  type MaintenanceFilterState,
+} from "../../components/admin/maintenance/MaintenanceReportFilterBar";
+import MaintenanceReportTable from "../../components/admin/maintenance/MaintenanceReportTable";
+import MaintenanceReportDetailModal, {
+  type ProcessFormValues,
+} from "../../components/admin/maintenance/MaintenanceReportDetailModal";
+import type { MaintenanceReport } from "../../types";
 
-const INCIDENT_LABEL: Record<MaintenanceIncidentType, string> = {
-  electricity: "Điện",
-  water: "Nước",
-  equipment: "Thiết bị",
-  other: "Khác",
-};
-
-function statusBadge(st: string): { cls: string; label: string } {
-  if (st === "resolved") return { cls: "text-bg-success", label: "Đã sửa xong" };
-  if (st === "processing") return { cls: "text-bg-primary", label: "Đang xử lý" };
-  return { cls: "text-bg-warning text-dark", label: "Chờ xử lý" };
-}
+const LIMIT = 15;
 
 const MaintenanceReportsAdminPage: React.FC = () => {
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [filters, setFilters] = useState<MaintenanceFilterState>({ status: "all" });
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [items, setItems] = useState<MaintenanceReport[]>([]);
   const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState({
+    totalAll: 0,
+    pendingCount: 0,
+    resolvedCount: 0,
+    cancelledCount: 0,
+    processingCount: 0,
+  });
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const limit = 15;
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"view" | "process">("view");
+  const [selected, setSelected] = useState<MaintenanceReport | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(searchInput.trim()), 400);
+    return () => window.clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, filters.status, filters.month, filters.year, filters.date]);
 
   const load = useCallback(async () => {
     setLoading(true);
-    setErr(null);
     try {
-      const { data } = await maintenanceReportsAdminApi.list({
-        status: statusFilter,
+      const params: Record<string, unknown> = {
+        status: filters.status || "all",
         page,
-        limit,
-      });
-      const body = data as { reports?: MaintenanceReport[]; total?: number };
+        limit: LIMIT,
+      };
+      if (debouncedSearch) params.search = debouncedSearch;
+      if (filters.date) params.date = filters.date;
+      else if (filters.month && filters.year) {
+        params.month = filters.month;
+        params.year = filters.year;
+      }
+      const { data } = await maintenanceReportsAdminApi.list(params);
+      const body = data as {
+        reports?: MaintenanceReport[];
+        total?: number;
+        summary?: typeof summary;
+      };
       setItems(body.reports || []);
       setTotal(body.total || 0);
+      setSummary({
+        totalAll: body.summary?.totalAll ?? 0,
+        pendingCount: body.summary?.pendingCount ?? 0,
+        resolvedCount: body.summary?.resolvedCount ?? 0,
+        cancelledCount: body.summary?.cancelledCount ?? 0,
+        processingCount: body.summary?.processingCount ?? 0,
+      });
     } catch (e) {
-      setErr(isAxiosError(e) ? (e.response?.data as { message?: string })?.message || "Lỗi tải" : "Lỗi tải");
+      message.error(
+        isAxiosError(e) ? (e.response?.data as { message?: string })?.message || "Lỗi tải dữ liệu" : "Lỗi tải dữ liệu"
+      );
       setItems([]);
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, page]);
+  }, [filters.status, filters.month, filters.year, filters.date, page, debouncedSearch]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const patchRow = async (id: string, status: MaintenanceReportStatus, adminNote?: string) => {
-    setErr(null);
+  const openView = (r: MaintenanceReport) => {
+    setSelected(r);
+    setModalMode("view");
+    setModalOpen(true);
+  };
+
+  const openProcess = (r: MaintenanceReport) => {
+    setSelected(r);
+    setModalMode("process");
+    setModalOpen(true);
+  };
+
+  const receiveRow = async (r: MaintenanceReport) => {
     try {
-      await maintenanceReportsAdminApi.patch(id, { status, adminNote });
+      await maintenanceReportsAdminApi.patch(r._id, { status: "processing" });
+      message.success("Đã nhận xử lý đơn");
       await load();
     } catch (e) {
-      setErr(isAxiosError(e) ? (e.response?.data as { message?: string })?.message || "Cập nhật thất bại" : "Lỗi");
+      message.error(
+        isAxiosError(e) ? (e.response?.data as { message?: string })?.message || "Cập nhật thất bại" : "Lỗi"
+      );
     }
   };
 
+  const submitProcess = async (vals: ProcessFormValues) => {
+    if (!selected) return;
+    setSubmitting(true);
+    try {
+      await maintenanceReportsAdminApi.patch(selected._id, {
+        status: "resolved",
+        severity: vals.severity,
+        damageCause: vals.damageCause,
+        resolutionType: vals.resolutionType,
+        compensationAmount: vals.resolutionType === "compensation" ? vals.compensationAmount : 0,
+        maintenanceStatus: vals.resolutionType === "maintenance" ? vals.maintenanceStatus : "",
+        adminNote: vals.adminNote,
+      });
+      message.success(
+        vals.resolutionType === "compensation"
+          ? "Đã xử lý và tạo hóa đơn bồi thường hư hỏng"
+          : "Đã xử lý yêu cầu bảo trì"
+      );
+      setModalOpen(false);
+      setSelected(null);
+      await load();
+    } catch (e) {
+      message.error(
+        isAxiosError(e) ? (e.response?.data as { message?: string })?.message || "Xử lý thất bại" : "Lỗi"
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const clearFilters = () => {
+    setFilters({ status: "all" });
+    setSearchInput("");
+  };
+
   return (
-    <div className="container-fluid py-3">
-      <h4 className="mb-3">Khai báo hư hỏng (BQL)</h4>
-      {err && <div className="alert alert-danger py-2">{err}</div>}
-      <div className="row g-2 mb-3 align-items-end">
-        <div className="col-auto">
-          <label className="form-label small mb-0">Trạng thái</label>
-          <select className="form-select form-select-sm" value={statusFilter} onChange={(e) => { setPage(1); setStatusFilter(e.target.value); }}>
-            <option value="all">Tất cả</option>
-            <option value="pending">Chờ xử lý</option>
-            <option value="processing">Đang xử lý</option>
-            <option value="resolved">Đã xong</option>
-          </select>
-        </div>
-        <div className="col-auto small text-muted">Tổng: {total}</div>
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Quản lý khai báo hư hỏng</h2>
+        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
+          Tiếp nhận, phân loại và xử lý yêu cầu từ sinh viên (bảo trì hoặc bồi thường hư hỏng)
+        </p>
       </div>
 
-      {loading ? (
-        <div className="text-center py-5">
-          <div className="spinner-border text-primary" />
-        </div>
-      ) : (
-        <div className="table-responsive card shadow-sm">
-          <table className="table table-sm table-hover mb-0 align-middle">
-            <thead className="table-light">
-              <tr>
-                <th>Thời gian</th>
-                <th>Sinh viên</th>
-                <th>Phòng</th>
-                <th>Loại</th>
-                <th>Mô tả</th>
-                <th>TT</th>
-                <th>Hành động</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((r) => {
-                const st = statusBadge(r.status);
-                const u = typeof r.user === "object" && r.user ? r.user : null;
-                const room = typeof r.room === "object" && r.room ? r.room : null;
-                const tk = r.incidentType as MaintenanceIncidentType;
-                return (
-                  <tr key={r._id}>
-                    <td className="small text-nowrap">{r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN") : "—"}</td>
-                    <td className="small">
-                      {u?.fullName || "—"}
-                      <br />
-                      <span className="text-muted">{u?.studentId}</span>
-                    </td>
-                    <td>{room?.roomNumber || "—"}</td>
-                    <td>{INCIDENT_LABEL[tk] || r.incidentType}</td>
-                    <td className="small" style={{ maxWidth: 220 }}>
-                      <span className="d-inline-block text-truncate w-100">{r.description}</span>
-                    </td>
-                    <td>
-                      <span className={`badge ${st.cls}`}>{st.label}</span>
-                    </td>
-                    <td className="text-nowrap">
-                      {r.status === "pending" && (
-                        <button type="button" className="btn btn-sm btn-primary me-1" onClick={() => void patchRow(r._id, "processing")}>
-                          Nhận xử lý
-                        </button>
-                      )}
-                      {r.status === "processing" && (
-                        <button type="button" className="btn btn-sm btn-success me-1" onClick={() => void patchRow(r._id, "resolved")}>
-                          Hoàn thành
-                        </button>
-                      )}
-                      {r.status !== "pending" && r.status !== "resolved" && (
-                        <button type="button" className="btn btn-sm btn-outline-secondary me-1" onClick={() => void patchRow(r._id, "pending")}>
-                          Trả về chờ
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {items.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="text-center text-muted py-4">
-                    Không có bản ghi.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <MaintenanceReportStatsCards summary={summary} />
 
-      {total > limit && (
-        <div className="d-flex justify-content-between align-items-center mt-2">
-          <button type="button" className="btn btn-sm btn-outline-secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-            Trước
-          </button>
-          <span className="small text-muted">
-            Trang {page} / {Math.max(1, Math.ceil(total / limit))}
-          </span>
-          <button
-            type="button"
-            className="btn btn-sm btn-outline-secondary"
-            disabled={page >= Math.ceil(total / limit)}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Sau
-          </button>
-        </div>
-      )}
+      <Card style={{ borderRadius: 12 }}>
+        <MaintenanceReportFilterBar
+          filters={filters}
+          searchInput={searchInput}
+          onFiltersChange={setFilters}
+          onSearchChange={setSearchInput}
+          onPageReset={() => setPage(1)}
+          onClearFilters={clearFilters}
+          onReload={() => void load()}
+        />
+
+        <MaintenanceReportTable
+          items={items}
+          loading={loading}
+          page={page}
+          limit={LIMIT}
+          total={total}
+          onPageChange={setPage}
+          onReceive={(r) => void receiveRow(r)}
+          onProcess={openProcess}
+          onView={openView}
+        />
+      </Card>
+
+      <MaintenanceReportDetailModal
+        open={modalOpen}
+        mode={modalMode}
+        report={selected}
+        submitting={submitting}
+        onClose={() => {
+          setModalOpen(false);
+          setSelected(null);
+        }}
+        onSubmit={(vals) => void submitProcess(vals)}
+      />
     </div>
   );
 };

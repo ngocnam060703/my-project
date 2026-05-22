@@ -65,12 +65,13 @@ function getBackendOriginFromRequest(req) {
 }
 
 function resolveReturnUrl(req) {
-  // Ưu tiên origin thực tế của request để tránh lệch port (5000/5001) ở local dev.
-  const requestOrigin = getBackendOriginFromRequest(req);
-  if (requestOrigin) return `${requestOrigin}/api/bills/vnpay-return`;
-
+  // Ưu tiên cấu hình tĩnh để tránh lệch port callback (5000/5001).
   const envReturnUrl = String(process.env.VNPAY_RETURN_URL || "").trim();
   if (envReturnUrl) return envReturnUrl;
+
+  // Fallback theo origin thực tế khi chưa khai báo env.
+  const requestOrigin = getBackendOriginFromRequest(req);
+  if (requestOrigin) return `${requestOrigin}/api/bills/vnpay-return`;
 
   const envPort = String(process.env.PORT || "5000").trim();
   return `http://localhost:${envPort}/api/bills/vnpay-return`;

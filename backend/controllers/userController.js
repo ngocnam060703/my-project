@@ -7,6 +7,7 @@ const Violation = require("../models/Violation");
 const BedHistory = require("../models/BedHistory");
 const { validationResult } = require("express-validator");
 const userApprovalService = require("../services/userApprovalService");
+const { normalizePriorityFields } = require("../utils/normalizePriorityFields");
 
 const PROFILE_FIELDS = [
   "fullName",
@@ -26,6 +27,9 @@ const PROFILE_FIELDS = [
   "addressPermanent",
   "addressTemporary",
   "addressAbsent",
+  "ethnicity",
+  "priorityType",
+  "priorityProofUrl",
   "familyFatherName",
   "familyFatherPhone",
   "familyMotherName",
@@ -414,6 +418,7 @@ exports.create = async (req, res) => {
 
     const profile = pickProfile(req.body);
     if (isStudentRole(targetRole)) {
+      normalizePriorityFields(profile);
       const err = validateRequiredStudentProfile({
         fullName,
         email: normalizedEmail,
@@ -489,6 +494,7 @@ exports.update = async (req, res) => {
     }
 
     if (isStudentRole(newRole)) {
+      normalizePriorityFields(updateData);
       const err = validateRequiredStudentProfile({
         ...existing.toObject(),
         ...updateData,

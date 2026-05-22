@@ -19,6 +19,7 @@ const notificationSchema = new mongoose.Schema(
         "discipline_warning",
         "discipline_admin",
         "discipline_expel",
+        "discipline_resolved",
         "general",
       ],
       default: "general",
