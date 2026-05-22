@@ -6,6 +6,7 @@ const Bill = require("../models/Bill");
 const Violation = require("../models/Violation");
 const BedHistory = require("../models/BedHistory");
 const { validationResult } = require("express-validator");
+const userApprovalService = require("../services/userApprovalService");
 
 const PROFILE_FIELDS = [
   "fullName",
@@ -33,6 +34,11 @@ const PROFILE_FIELDS = [
 ];
 
 const notDeleted = { isDeleted: { $ne: true } };
+const STUDENT_ROLES = ["user", "student"];
+
+function isStudentRole(role) {
+  return STUDENT_ROLES.includes(String(role || ""));
+}
 
 function pickProfile(body) {
   const out = {};
@@ -51,7 +57,10 @@ function pickProfile(body) {
 function buildListFilter(query) {
   const { role, search, status } = query;
   const filter = { ...notDeleted };
-  if (role) filter.role = role;
+  if (role) {
+    if (isStudentRole(role)) filter.role = { $in: STUDENT_ROLES };
+    else filter.role = role;
+  }
   if (status === "active") filter.isActive = true;
   if (status === "locked") filter.isActive = false;
   if (search && String(search).trim()) {
@@ -115,13 +124,14 @@ exports.getAll = async (req, res) => {
         .sort(sort)
         .lean(),
       User.countDocuments(filter),
-      User.countDocuments({ ...filter, role: "user" }),
+      User.countDocuments({ ...filter, role: { $in: STUDENT_ROLES } }),
       User.countDocuments({ ...filter, role: "manager" }),
       User.countDocuments({ ...filter, role: "admin" }),
     ]);
 
     const includeDorm = String(req.query.includeDorm || "").trim();
-    if (includeDorm === "1" && String(filter.role || "") === "user" && users.length) {
+    const roleFilter = String(filter.role || "");
+    if (includeDorm === "1" && (!roleFilter || isStudentRole(roleFilter)) && users.length) {
       const now = new Date();
       const enriched = await Promise.all(
         users.map(async (u) => {
@@ -174,7 +184,7 @@ exports.getById = async (req, res) => {
     let currentContract = null;
     let currentRoom = null;
 
-    if (user.role === "user") {
+    if (isStudentRole(user.role)) {
       contracts = await Contract.find({ user: user._id })
         .populate({
           path: "room",
@@ -201,7 +211,7 @@ exports.getById = async (req, res) => {
     let violationsRecent = [];
     let residencyOperationalStatus = null;
 
-    if (user.role === "user") {
+    if (isStudentRole(user.role)) {
       const unpaidBills = await Bill.find({
         user: user._id,
         status: { $in: ["pending", "unpaid", "overdue"] },
@@ -373,10 +383,10 @@ exports.getById = async (req, res) => {
       currentContract,
       contracts,
       managedAreas: user.role === "manager" ? managedAreas : [],
-      stayHistory: user.role === "user" ? stayHistory : [],
-      financialSummary: user.role === "user" ? financialSummary : null,
-      violationsRecent: user.role === "user" ? violationsRecent : [],
-      residencyOperationalStatus: user.role === "user" ? residencyOperationalStatus : null,
+      stayHistory: isStudentRole(user.role) ? stayHistory : [],
+      financialSummary: isStudentRole(user.role) ? financialSummary : null,
+      violationsRecent: isStudentRole(user.role) ? violationsRecent : [],
+      residencyOperationalStatus: isStudentRole(user.role) ? residencyOperationalStatus : null,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -403,7 +413,7 @@ exports.create = async (req, res) => {
     if (existing) return res.status(400).json({ message: "Email đã tồn tại" });
 
     const profile = pickProfile(req.body);
-    if (targetRole === "user") {
+    if (isStudentRole(targetRole)) {
       const err = validateRequiredStudentProfile({
         fullName,
         email: normalizedEmail,
@@ -443,10 +453,10 @@ exports.update = async (req, res) => {
     }
 
     const newRole = req.body.role !== undefined ? req.body.role : existing.role;
-    if (existing.role === "user" && newRole === "admin") {
+    if (isStudentRole(existing.role) && newRole === "admin") {
       return res.status(403).json({ message: "Không được phép nâng quyền từ sinh viên lên admin" });
     }
-    if (existing.role === "user" && newRole === "manager") {
+    if (isStudentRole(existing.role) && newRole === "manager") {
       return res.status(403).json({ message: "Không được phép nâng quyền từ sinh viên lên quản lý" });
     }
     if (newRole === "admin" && existing.role !== "admin" && !req.user.isSuperAdmin) {
@@ -478,7 +488,7 @@ exports.update = async (req, res) => {
       updateData.password = await bcrypt.hash(String(req.body.password), 10);
     }
 
-    if (newRole === "user") {
+    if (isStudentRole(newRole)) {
       const err = validateRequiredStudentProfile({
         ...existing.toObject(),
         ...updateData,
@@ -576,3 +586,74 @@ exports.resetPassword = async (req, res) => {
 
 /** Tương thích client cũ dùng PUT */
 exports.updatePut = exports.update;
+
+exports.getPendingAccounts = async (req, res) => {
+  try {
+    const users = await userApprovalService.listPendingAccounts();
+    res.json({ users, total: users.length });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.approvePendingAccount = async (req, res) => {
+  try {
+    const result = await userApprovalService.approveAccount({
+      userId: req.params.id,
+      approverId: req.user._id,
+    });
+    if (result.notFound) return res.status(404).json({ message: "Không tìm thấy tài khoản" });
+    if (result.invalidRole) return res.status(400).json({ message: "Chỉ duyệt tài khoản sinh viên" });
+    if (result.invalidStatus) {
+      return res.status(400).json({ message: `Không thể duyệt tài khoản có trạng thái ${result.status}` });
+    }
+    res.json({
+      message: "Đã duyệt tài khoản",
+      user: {
+        _id: String(result.user._id),
+        studentId: result.user.studentId || "",
+        fullName: result.user.fullName || "",
+        email: result.user.email || "",
+        phone: result.user.phone || "",
+        status: result.user.status,
+        approvedAt: result.user.approvedAt,
+        approvedBy: result.user.approvedBy,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.rejectPendingAccount = async (req, res) => {
+  try {
+    const rejectionReason = String(req.body?.rejectionReason || "").trim();
+    if (!rejectionReason) {
+      return res.status(400).json({ message: "Vui lòng nhập lý do từ chối" });
+    }
+    const result = await userApprovalService.rejectAccount({
+      userId: req.params.id,
+      approverId: req.user._id,
+      rejectionReason,
+    });
+    if (result.notFound) return res.status(404).json({ message: "Không tìm thấy tài khoản" });
+    if (result.invalidRole) return res.status(400).json({ message: "Chỉ từ chối tài khoản sinh viên" });
+    if (result.invalidStatus) {
+      return res.status(400).json({ message: `Không thể từ chối tài khoản có trạng thái ${result.status}` });
+    }
+    res.json({
+      message: "Đã từ chối tài khoản",
+      user: {
+        _id: String(result.user._id),
+        studentId: result.user.studentId || "",
+        fullName: result.user.fullName || "",
+        email: result.user.email || "",
+        phone: result.user.phone || "",
+        status: result.user.status,
+        rejectionReason: result.user.rejectionReason || "",
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};

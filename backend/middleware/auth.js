@@ -26,7 +26,12 @@ const auth = async (req, res, next) => {
 const requireRole = (...roles) => {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ message: "Vui lòng đăng nhập" });
-    if (!roles.includes(req.user.role)) {
+    const role = String(req.user.role || "");
+    const normalizedRoles = new Set(roles.map((r) => String(r)));
+    // Tương thích ngược: "student" <-> "user"
+    if (normalizedRoles.has("user")) normalizedRoles.add("student");
+    if (normalizedRoles.has("student")) normalizedRoles.add("user");
+    if (!normalizedRoles.has(role)) {
       return res.status(403).json({ message: "Bạn không có quyền truy cập" });
     }
     next();

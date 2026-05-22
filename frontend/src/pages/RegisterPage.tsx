@@ -1,23 +1,47 @@
 import React, { useState } from "react";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { Form, Input, Button, Card, message } from "antd";
+import { App, Form, Input, Button, Card } from "antd";
 import { UserOutlined, LockOutlined, MailOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { authApi } from "../api";
 
 const RegisterPage: React.FC = () => {
   useDocumentTitle("Đăng ký");
+  const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const onFinish = async (v: { email: string; password: string; fullName: string; phone?: string; confirmPassword?: string }) => {
+  const onFinish = async (v: {
+    studentId: string;
+    fullName: string;
+    email: string;
+    phone: string;
+    password: string;
+    confirmPassword: string;
+  }) => {
     setLoading(true);
     try {
       await authApi.register(v);
-      message.success("Đăng ký thành công! Vui lòng đăng nhập.");
-      navigate("/login");
+      message.success("Tài khoản đang chờ admin phê duyệt.");
+      navigate("/login?pending=1", { replace: true });
     } catch (err: unknown) {
-      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Đăng ký thất bại");
+      const ax = err as {
+        response?: { status?: number; data?: { message?: string; errors?: { msg?: string }[] } };
+        message?: string;
+        code?: string;
+      };
+      if (ax.code === "ECONNABORTED" || String(ax.message || "").toLowerCase().includes("timeout")) {
+        message.error("Máy chủ phản hồi quá chậm, vui lòng thử lại sau ít phút.");
+        return;
+      }
+      if (ax.code === "ERR_NETWORK" || ax.message === "Network Error") {
+        message.error("Không kết nối được máy chủ. Kiểm tra backend đang chạy và cấu hình API.");
+        return;
+      }
+      const fromApi =
+        ax.response?.data?.message ||
+        (Array.isArray(ax.response?.data?.errors) ? ax.response?.data?.errors?.[0]?.msg : "");
+      message.error(fromApi || "Đăng ký thất bại");
     } finally {
       setLoading(false);
     }
@@ -34,6 +58,9 @@ const RegisterPage: React.FC = () => {
     }}>
       <Card title="Đăng ký tài khoản" style={{ maxWidth: 400, width: "100%", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.12)" }}>
         <Form onFinish={onFinish} layout="vertical">
+          <Form.Item name="studentId" rules={[{ required: true, message: "Vui lòng nhập MSSV" }]}>
+            <Input prefix={<UserOutlined />} placeholder="MSSV" />
+          </Form.Item>
           <Form.Item name="fullName" rules={[{ required: true }]}>
             <Input prefix={<UserOutlined />} placeholder="Họ tên" />
           </Form.Item>
@@ -58,7 +85,12 @@ const RegisterPage: React.FC = () => {
           >
             <Input.Password prefix={<LockOutlined />} placeholder="Xác nhận mật khẩu" />
           </Form.Item>
-          <Form.Item name="phone"><Input placeholder="Số điện thoại" /></Form.Item>
+          <Form.Item
+            name="phone"
+            rules={[{ required: true, message: "Vui lòng nhập số điện thoại" }]}
+          >
+            <Input placeholder="Số điện thoại" />
+          </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit" block loading={loading}>Đăng ký</Button>
           </Form.Item>

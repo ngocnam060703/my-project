@@ -37,6 +37,13 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function normalizeUserRole<T extends User | null>(u: T): T {
+  if (!u) return u;
+  const role = String(u.role || "");
+  if (role !== "student") return u;
+  return { ...u, role: "user" } as T;
+}
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,12 +52,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const token = getToken();
     const savedUser = getUserString();
     if (token && savedUser) {
-      setUser(JSON.parse(savedUser));
+      setUser(normalizeUserRole(JSON.parse(savedUser)));
       authApi
         .getProfile()
         .then((res) => {
-          setUser(res.data);
-          setUserString(JSON.stringify(res.data));
+          const normalized = normalizeUserRole(res.data as User);
+          setUser(normalized);
+          setUserString(JSON.stringify(normalized));
         })
         .catch(() => {
           clearSessionAuth();
@@ -90,11 +98,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       fullName: String(u.fullName ?? ""),
       role: String(u.role ?? "user"),
     };
+    const normalized = normalizeUserRole(merged);
 
     setToken(token);
-    setUserString(JSON.stringify(merged));
+    setUserString(JSON.stringify(normalized));
     clearLegacyLocalAuth();
-    setUser(merged);
+    setUser(normalized);
   };
 
   const logout = () => {

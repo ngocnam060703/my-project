@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { App, Form, Input, Button, Card } from "antd";
 import { UserOutlined, LockOutlined } from "@ant-design/icons";
@@ -18,6 +18,12 @@ const LoginPage: React.FC = () => {
   const redirectFromState = (location.state as { from?: { pathname?: string } } | null)?.from
     ?.pathname;
   const rawRedirect = redirectFromQuery || redirectFromState || "";
+
+  useEffect(() => {
+    if (searchParams.get("pending") === "1") {
+      message.info("Tài khoản đã được tạo và đang chờ quản trị viên phê duyệt.");
+    }
+  }, [searchParams, message]);
 
   /** Sau đăng nhập sinh viên: luôn vào cây `/student/...` */
   const normalizeStudentPostLogin = (path: string): string => {

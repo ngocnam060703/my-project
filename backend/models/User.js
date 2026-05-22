@@ -41,7 +41,17 @@ const userSchema = new mongoose.Schema(
     familyMotherPhone: { type: String, default: "" },
     /** SĐT liên hệ khẩn (gia đình) */
     familyEmergencyPhone: { type: String, default: "" },
-    role: { type: String, enum: ["admin", "manager", "user"], default: "user" },
+    role: { type: String, enum: ["admin", "manager", "user", "student"], default: "user" },
+    /**
+     * Vòng đời duyệt tài khoản sinh viên:
+     * - pending: chờ admin duyệt
+     * - approved: được đăng nhập
+     * - rejected: bị từ chối, lưu lý do tại rejectionReason
+     */
+    status: { type: String, enum: ["pending", "approved", "rejected"], default: "approved" },
+    approvedAt: { type: Date, default: null },
+    approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    rejectionReason: { type: String, default: "" },
     /** Chỉ tài khoản admin cấp cao — được phép tạo/cấp quyền admin */
     isSuperAdmin: { type: Boolean, default: false },
     avatar: { type: String, default: "" },
@@ -59,6 +69,18 @@ userSchema.index(
     unique: true,
     partialFilterExpression: { isDeleted: { $ne: true } },
     name: "email_unique_active",
+  }
+);
+
+userSchema.index(
+  { studentId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      isDeleted: { $ne: true },
+      studentId: { $exists: true, $type: "string", $ne: "" },
+    },
+    name: "student_id_unique_active",
   }
 );
 

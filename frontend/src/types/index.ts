@@ -3,6 +3,10 @@ export interface User {
   email: string;
   fullName: string;
   role: string;
+  status?: "pending" | "approved" | "rejected" | string;
+  approvedAt?: string | null;
+  approvedBy?: string | User | null;
+  rejectionReason?: string;
   /** Ảnh đại diện (URL tuyệt đối hoặc path — tuỳ backend) */
   avatar?: string;
   isActive?: boolean;

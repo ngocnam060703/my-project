@@ -380,6 +380,10 @@ export const usersApi = {
   unlock: (id: string) => client.patch(`/users/${id}/unlock`),
   resetPassword: (id: string, newPassword: string) =>
     client.patch(`/users/${id}/reset-password`, { newPassword }),
+  getPendingAccounts: () => client.get("/admin/users/pending"),
+  approveAccount: (id: string) => client.put(`/admin/users/${id}/approve`),
+  rejectAccount: (id: string, rejectionReason: string) =>
+    client.put(`/admin/users/${id}/reject`, { rejectionReason }),
 };
 
 export const studentsApi = {

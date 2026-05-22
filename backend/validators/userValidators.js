@@ -26,7 +26,7 @@ exports.createUserRules = [
     .isLength({ min: 6 })
     .withMessage("Mật khẩu tối thiểu 6 ký tự"),
   optionalAvatarUrl(),
-  body("role").optional().isIn(["user", "manager", "admin"]).withMessage("Vai trò không hợp lệ"),
+  body("role").optional().isIn(["user", "student", "manager", "admin"]).withMessage("Vai trò không hợp lệ"),
 ];
 
 exports.updateUserRules = [
@@ -39,7 +39,7 @@ exports.updateUserRules = [
   }),
   body("fullName").optional().trim().notEmpty().withMessage("Tên không được để trống"),
   optionalAvatarUrl(),
-  body("role").optional().isIn(["user", "manager", "admin"]).withMessage("Vai trò không hợp lệ"),
+  body("role").optional().isIn(["user", "student", "manager", "admin"]).withMessage("Vai trò không hợp lệ"),
   body("password")
     .optional()
     .isString()

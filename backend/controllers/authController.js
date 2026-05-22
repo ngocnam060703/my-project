@@ -27,32 +27,50 @@ exports.register = async (req, res) => {
       return res.status(400).json({ errors: errors.array() });
     }
     const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
-    const { email, password, fullName, phone, studentId } = body;
+    const { email, password, fullName, phone, studentId, confirmPassword } = body;
     const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedStudentId = String(studentId || "").trim();
+    if (!normalizedStudentId) {
+      return res.status(400).json({ message: "MSSV không được để trống" });
+    }
+    if (String(password || "") !== String(confirmPassword || "")) {
+      return res.status(400).json({ message: "Xác nhận mật khẩu không khớp" });
+    }
     const existingUser = await findUserByEmailFlexible(User, normalizedEmail);
     if (existingUser) {
       return res.status(400).json({ message: "Email đã tồn tại" });
+    }
+    const existingStudentId = await User.findOne({
+      studentId: normalizedStudentId,
+      isDeleted: { $ne: true },
+    }).select("_id");
+    if (existingStudentId) {
+      return res.status(400).json({ message: "MSSV đã tồn tại" });
     }
     const user = await User.create({
       email: normalizedEmail,
       password,
       fullName,
       phone,
-      studentId,
-      role: "user",
+      studentId: normalizedStudentId,
+      role: "student",
+      status: "pending",
+      approvedAt: null,
+      approvedBy: null,
+      rejectionReason: "",
     });
-    const token = generateToken(user._id);
     res.status(201).json({
+      message: "Tài khoản đã được tạo và đang chờ quản trị viên phê duyệt.",
       user: {
         id: String(user._id),
         _id: String(user._id),
-        email: user.email,
-        fullName: user.fullName,
-        role: user.role,
-        phone: user.phone ?? "",
         studentId: user.studentId ?? "",
+        fullName: user.fullName,
+        email: user.email,
+        phone: user.phone ?? "",
+        role: user.role,
+        status: user.status,
       },
-      token,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -79,6 +97,12 @@ exports.login = async (req, res) => {
     }
     if (!user) return res.status(401).json({ message: "Email hoặc mật khẩu không đúng" });
     if (!user.isActive) return res.status(401).json({ message: "Tài khoản đã bị khóa" });
+    if (user.role === "student" && user.status === "pending") {
+      return res.status(403).json({ message: "Tài khoản đang chờ phê duyệt." });
+    }
+    if (user.role === "student" && user.status === "rejected") {
+      return res.status(403).json({ message: "Tài khoản đã bị từ chối." });
+    }
 
     const pwdRaw = String(password);
     const pwdVariants = [pwdRaw, pwdRaw.trim()].filter((v, i, a) => v && a.indexOf(v) === i);
@@ -131,6 +155,7 @@ exports.login = async (req, res) => {
       email: String(user.email ?? ""),
       fullName: String(user.fullName ?? ""),
       role: String(user.role ?? "user"),
+      status: String(user.status || "approved"),
       phone: user.phone != null ? String(user.phone) : "",
       studentId: user.studentId != null ? String(user.studentId) : "",
       isSuperAdmin: user.role === "admin" ? !!user.isSuperAdmin : false,

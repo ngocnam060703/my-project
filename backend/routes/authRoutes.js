@@ -11,8 +11,12 @@ router.post(
   "/register",
   authLimiter,
   [
+    body("studentId").trim().notEmpty().withMessage("MSSV không được để trống"),
     body("email").isEmail().withMessage("Email không hợp lệ"),
     body("password").isLength({ min: 6 }).withMessage("Mật khẩu tối thiểu 6 ký tự"),
+    body("confirmPassword")
+      .custom((value, { req }) => String(value || "") === String(req.body?.password || ""))
+      .withMessage("Xác nhận mật khẩu không khớp"),
     body("fullName").notEmpty().withMessage("Họ tên không được để trống"),
   ],
   authController.register
