@@ -97,16 +97,16 @@ const UserContractsTable: React.FC<UserContractsTableProps> = ({ contracts, over
         render: (_: unknown, c) => (typeof c.room === "object" && c.room ? c.room.roomNumber : "—"),
       },
       {
-        title: "Giá phòng",
+        title: "Giá phòng (nền)",
         key: "roomFee",
-        width: 130,
+        width: 150,
         render: (_: unknown, c) => {
           const r = typeof c.room === "object" ? c.room : null;
           if (!r || r.price == null) return "—";
           const slots = Math.max(1, Number(r.capacity) || 1);
           const full = Math.round(Number(r.price));
           const per = Math.round(full / slots);
-          const text = `${full.toLocaleString("vi-VN")}đ · ${per.toLocaleString("vi-VN")}đ/slot`;
+          const text = `Tổng: ${full.toLocaleString("vi-VN")}đ/tháng / ${slots} slot · ${per.toLocaleString("vi-VN")}đ`;
           return (
             <Tooltip title={`Tổng ${full.toLocaleString("vi-VN")}đ/th · ${slots} slot → ${per.toLocaleString("vi-VN")}đ/slot/th`}>
               <span style={{ whiteSpace: "nowrap" }}>{text}</span>
@@ -115,16 +115,16 @@ const UserContractsTable: React.FC<UserContractsTableProps> = ({ contracts, over
         },
       },
       {
-        title: "Giường",
+        title: "Mã giường",
         key: "bedSlot",
-        width: 88,
+        width: 96,
         ellipsis: true,
         render: (_: unknown, c) => contractBedCode(c),
       },
       {
-        title: "TT giường",
+        title: "Tình trạng giường thiết bị",
         key: "bedEq",
-        width: 96,
+        width: 120,
         ellipsis: true,
         render: (_: unknown, c) => {
           const b = c.bed;
@@ -146,18 +146,20 @@ const UserContractsTable: React.FC<UserContractsTableProps> = ({ contracts, over
         },
       },
       {
-        title: "Bắt đầu",
-        dataIndex: "startDate",
-        key: "sd",
-        width: 100,
-        render: (d: string) => (d ? dayjs(d).format("DD/MM/YY") : "—"),
-      },
-      {
-        title: "Kết thúc",
-        dataIndex: "endDate",
-        key: "ed",
-        width: 100,
-        render: (d: string) => (d ? dayjs(d).format("DD/MM/YY") : "—"),
+        title: "Bắt đầu / Kết thúc",
+        key: "period",
+        width: 140,
+        render: (_: unknown, c) => {
+          const start = c.startDate ? dayjs(c.startDate).format("DD/MM/YYYY") : "—";
+          const end = c.endDate ? dayjs(c.endDate).format("DD/MM/YYYY") : "—";
+          return (
+            <span style={{ whiteSpace: "nowrap" }}>
+              {start}
+              <br />
+              {end}
+            </span>
+          );
+        },
       },
     ],
     [overdueIds],

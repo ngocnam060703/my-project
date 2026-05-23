@@ -20,8 +20,8 @@ import {
   Avatar,
   Badge,
   Tooltip,
-  Tabs,
   Empty,
+  Tabs,
 } from "antd";
 import type { TableProps } from "antd";
 import {
@@ -53,14 +53,13 @@ import type {
   Bill,
   Violation,
   Room,
-  StayHistoryRow,
 } from "../../types";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import dayjs from "dayjs";
 import { PRIORITY_OPTIONS } from "../../utils/priorityDisplay";
 import PriorityPolicyCard from "../../components/admin/users/PriorityPolicyCard";
-import UserContractsTable from "../../components/admin/users/UserContractsTable";
+import StudentProfileDetailSections from "../../components/admin/users/StudentProfileDetailSections";
 import "../../components/admin/users/user-detail.css";
 
 const PRIORITY_FORM_OPTIONS = PRIORITY_OPTIONS;
@@ -231,7 +230,6 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   const [modalOpen, setModalOpen] = useState(false);
   const [detailPayload, setDetailPayload] = useState<AdminUserDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [detailTab, setDetailTab] = useState("profile");
   const [ensureBedLoading, setEnsureBedLoading] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
@@ -437,7 +435,6 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   }, [openUserFromQuery, setSearchParams]);
 
   const openDetail = async (u: User) => {
-    setDetailTab("profile");
     setDetailPayload({
       user: u,
       currentRoom: null,
@@ -827,29 +824,6 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   const detailIsManager = du?.role === "manager";
   const detailIsAdmin = du?.role === "admin";
 
-  const contractBedCode = (c: Contract) => {
-    const b = c.bed;
-    if (!b) return "—";
-    if (typeof b === "object" && b !== null && "code" in b) return String((b as Bed).code || "") || "—";
-    return "—";
-  };
-
-  const contractBedComposite = (c: Contract) => {
-    const rn = String((typeof c.room === "object" && c.room ? c.room.roomNumber : "") || "").trim();
-    const bc = contractBedCode(c);
-    if (bc === "—") return "—";
-    if (rn && bc.startsWith(`${rn}-`)) return bc;
-    if (rn) return `${rn}-${bc}`;
-    return bc;
-  };
-
-  const contractBedEquipment = (c: Contract) => {
-    const b = c.bed;
-    if (b && typeof b === "object" && "equipmentStatus" in b)
-      return formatBedEquipmentVi(String((b as Bed).equipmentStatus || ""));
-    return "—";
-  };
-
   const pendingColumns: TableProps<User>["columns"] = [
     {
       title: "STT",
@@ -1231,10 +1205,14 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
 
       <Modal
         className="user-detail-modal"
-        title={`Chi tiết — ${du?.fullName || ""}`}
+        title={
+          detailIsStudent
+            ? `Chi tiết hồ sơ sinh viên${du?.fullName ? ` — ${du.fullName}` : ""}`
+            : `Chi tiết — ${du?.fullName || ""}`
+        }
         open={!!detailPayload}
         onCancel={() => setDetailPayload(null)}
-        width={1024}
+        width={detailIsStudent ? 1080 : 1024}
         styles={{ body: { paddingTop: 12 } }}
         footer={[
           <Button key="close" onClick={() => setDetailPayload(null)}>
@@ -1275,477 +1253,29 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                 </div>
               </div>
 
-              {detailIsStudent ? (
-                <Tabs
-                  activeKey={detailTab}
-                  onChange={setDetailTab}
-                  items={[
-                    {
-                      key: "profile",
-                      label: "Hồ sơ",
-                      children: (
-                        <>
-                  <Row gutter={[12, 12]}>
-                    <Col xs={24} md={12}>
-                      <Card size="small" title="Thông tin cá nhân" style={{ borderRadius: 10 }}>
-                        <Descriptions column={1} size="small">
-                          <Descriptions.Item label="MSSV">{du?.studentId || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="SĐT">{du?.phone || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Ngày sinh">
-                            {du?.dateOfBirth ? dayjs(du.dateOfBirth).format("DD/MM/YYYY") : "—"}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Giới tính">{du?.gender || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="CCCD / CMND">{du?.citizenId || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Dân tộc">{du?.ethnicity || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Địa chỉ liên hệ">
-                            <span className="user-detail-long-text">{du?.address || "—"}</span>
-                          </Descriptions.Item>
-                        </Descriptions>
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={12}>
-                      <Card size="small" title="Thông tin học tập" style={{ borderRadius: 10 }}>
-                        <Descriptions column={1} size="small">
-                          <Descriptions.Item label="Lớp">{du?.className || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Khoa/nhóm ngành">
-                            {du?.facultyGroup || inferFacultyGroupFromMajor(du?.major, majorOptions) || "—"}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Ngành">{du?.major || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Khóa">{du?.faculty || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Giáo viên chủ nhiệm">{du?.homeroomTeacher || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Ngày nhập học">
-                            {du?.enrollmentDate ? dayjs(du.enrollmentDate).format("DD/MM/YYYY") : "—"}
-                          </Descriptions.Item>
-                        </Descriptions>
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={12}>
-                      <Card size="small" title="Địa chỉ" style={{ borderRadius: 10 }}>
-                        <Descriptions column={1} size="small">
-                          <Descriptions.Item label="Quê quán">{du?.addressNative || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Thường trú">{du?.addressPermanent || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Tạm trú">{du?.addressTemporary || "—"}</Descriptions.Item>
-                          <Descriptions.Item label="Tạm vắng">{du?.addressAbsent || "—"}</Descriptions.Item>
-                        </Descriptions>
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={12}>
-                      <Card size="small" title="Gia đình" style={{ borderRadius: 10 }}>
-                        <Descriptions column={1} size="small">
-                          <Descriptions.Item label="Phụ huynh (cha)">
-                            {formatParentLine(du?.familyFatherName, du?.familyFatherPhone)}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Phụ huynh (mẹ)">
-                            {formatParentLine(du?.familyMotherName, du?.familyMotherPhone)}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="SĐT liên hệ khẩn cấp">
-                            {du?.familyEmergencyPhone || "—"}
-                          </Descriptions.Item>
-                        </Descriptions>
-                      </Card>
-                    </Col>
-                    <Col xs={24}>
-                      <PriorityPolicyCard
-                        priorityType={du?.priorityType}
-                        priorityProofUrl={du?.priorityProofUrl}
-                      />
-                    </Col>
-                    <Col xs={24}>
-                      <Card size="small" title="Lưu trú hiện tại" style={{ borderRadius: 10 }}>
-                        <Descriptions column={2} size="small">
-                          <Descriptions.Item label="Phòng đang ở">
-                            {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object" ? (
-                              <Space orientation="vertical" size={2}>
-                                <span>
-                                  Phòng <strong>{detailPayload.currentRoom.roomNumber}</strong>
-                                  {typeof detailPayload.currentRoom.area === "object" && detailPayload.currentRoom.area ? (
-                                    <span> — Khu <strong>{detailPayload.currentRoom.area.name}</strong></span>
-                                  ) : null}
-                                </span>
-                                <span style={{ color: "#6b7280", fontSize: 12 }}>
-                                  Sức chứa: <strong>{detailPayload.currentRoom.capacity ?? "—"}</strong>
-                                  {" · "}Đang ở: <strong>{detailPayload.currentRoom.currentOccupancy ?? "—"}</strong>
-                                </span>
-                              </Space>
-                            ) : (
-                              "—"
-                            )}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Giường được phân">
-                            {detailPayload.currentContract
-                              ? contractBedCode(detailPayload.currentContract as Contract)
-                              : "—"}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Mã slot (phòng–giường)">
-                            {detailPayload.currentContract
-                              ? contractBedComposite(detailPayload.currentContract as Contract)
-                              : "—"}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Trạng thái giường">
-                            {detailPayload.currentContract
-                              ? contractBedEquipment(detailPayload.currentContract as Contract)
-                              : "—"}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Tổng tiền phòng (tháng)">
-                            {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object"
-                              ? `${Math.round(Number(detailPayload.currentRoom.price || 0)).toLocaleString("vi-VN")}đ`
-                              : "—"}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Giá slot / tháng">
-                            {detailPayload.currentRoom && typeof detailPayload.currentRoom === "object"
-                              ? `${slotPriceVnd(detailPayload.currentRoom).toLocaleString("vi-VN")}đ`
-                              : "—"}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Ngày check-in thực tế">
-                            {(() => {
-                              const b = (detailPayload.currentContract as Contract | null)?.bed;
-                              const cin = b && typeof b === "object" ? (b as Bed).checkInAt : null;
-                              return cin ? dayjs(cin).format("DD/MM/YYYY HH:mm") : "—";
-                            })()}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Trạng thái cư trú">
-                            {(() => {
-                              const meta = occupancyOperationalBadgeLarge(
-                                detailPayload.residencyOperationalStatus,
-                                detailPayload.stayHistory?.length || 0
-                              );
-                              if (!meta) return detailPayload.residencyOperationalStatus || "—";
-                              return (
-                                <span
-                                  style={{
-                                    display: "inline-block",
-                                    padding: "6px 12px",
-                                    borderRadius: 8,
-                                    fontWeight: 600,
-                                    background: meta.bg,
-                                    border: `1px solid ${meta.border}`,
-                                  }}
-                                >
-                                  {meta.text}
-                                </span>
-                              );
-                            })()}
-                          </Descriptions.Item>
-                        </Descriptions>
-                      </Card>
-                    </Col>
-                  </Row>
-
-                  <div>
-                    <div style={{ marginBottom: 8, fontWeight: 600 }}>Thao tác nhanh</div>
-                    <Space wrap>
-                      <Button
-                        icon={<HomeOutlined />}
-                        disabled={!detailPayload.currentRoom || typeof detailPayload.currentRoom !== "object"}
-                        onClick={() => {
-                          const room = detailPayload.currentRoom as Room | null;
-                          if (!room?._id) return;
-                          navigate(`/admin/housing?tab=rooms&openRoom=${encodeURIComponent(room._id)}`);
-                          setDetailPayload(null);
-                        }}
-                      >
-                        Xem phòng
-                      </Button>
-                      <Button
-                        icon={<FileTextOutlined />}
-                        disabled={!(detailPayload.currentContract as Contract | null)?._id}
-                        onClick={() => {
-                          const id = String((detailPayload.currentContract as Contract)._id || "");
-                          if (!id) return;
-                          navigate(`/admin/contracts?openContract=${encodeURIComponent(id)}`);
-                          setDetailPayload(null);
-                        }}
-                      >
-                        Xem hợp đồng
-                      </Button>
-                      <Button
-                        type="primary"
-                        icon={<LoginOutlined />}
-                        disabled={
-                          detailPayload.residencyOperationalStatus !== "assigned_pending_checkin" ||
-                          !detailPayload.currentRoom ||
-                          typeof detailPayload.currentRoom !== "object" ||
-                          !(detailPayload.currentContract as Contract)?.bed ||
-                          typeof (detailPayload.currentContract as Contract).bed !== "object"
-                        }
-                        onClick={() => void handleQuickCheckIn()}
-                      >
-                        Check-in
-                      </Button>
-                      <Button
-                        danger
-                        icon={<LogoutOutlined />}
-                        disabled={
-                          detailPayload.residencyOperationalStatus !== "checked_in_staying" ||
-                          !(detailPayload.currentContract as Contract)?.bed ||
-                          typeof (detailPayload.currentContract as Contract).bed !== "object"
-                        }
-                        onClick={handleQuickCheckout}
-                      >
-                        Check-out
-                      </Button>
-                      <Button
-                        icon={<SwapOutlined />}
-                        disabled={
-                          !(detailPayload.currentRoom && typeof detailPayload.currentRoom === "object") ||
-                          !(detailPayload.currentContract as Contract)?._id ||
-                          !(detailPayload.currentContract as Contract)?.bed ||
-                          typeof (detailPayload.currentContract as Contract).bed !== "object" ||
-                          !["assigned_pending_checkin", "checked_in_staying"].includes(
-                            String(detailPayload.residencyOperationalStatus || "")
-                          )
-                        }
-                        onClick={() => {
-                          const room = detailPayload.currentRoom as Room;
-                          const cid = String((detailPayload.currentContract as Contract)._id || "");
-                          navigate(
-                            `/admin/housing?tab=rooms&openRoom=${encodeURIComponent(room._id)}&openTransfer=${encodeURIComponent(cid)}`
-                          );
-                          setDetailPayload(null);
-                        }}
-                      >
-                        Chuyển giường
-                      </Button>
-                    </Space>
-                  </div>
-                        </>
-                      ),
-                    },
-                    {
-                      key: "contracts",
-                      label: `Hợp đồng KTX (${detailPayload.contracts?.length || 0})`,
-                      children: (
-                        <>
-                  <UserContractsTable
-                    contracts={detailPayload.contracts || []}
-                    overdueBills={detailPayload.financialSummary?.unpaidBills}
-                  />
-                  <Space wrap style={{ marginTop: 12 }}>
-                    {detailPayload.currentContract &&
-                    ["active", "pending_payment"].includes(
-                      String((detailPayload.currentContract as Contract).status)
-                    ) ? (
-                      <Button type="primary" loading={ensureBedLoading} onClick={() => void handleEnsureBed()}>
-                        Gán giường / đồng bộ giường
-                      </Button>
-                    ) : null}
-                  </Space>
-                        </>
-                      ),
-                    },
-                    {
-                      key: "stay",
-                      label: "Lịch sử cư trú",
-                      children: (
-                        <>
-                  <p style={{ margin: "0 0 12px 0", color: "#6b7280", fontSize: 13 }}>
-                    Một dòng một hợp đồng; check-in/out theo BedHistory. Chưa check-out → «—».
-                  </p>
-                  <div className="user-detail-table-wrap">
-                    <Table<StayHistoryRow>
-                      size="small"
-                      rowKey={(r) => String(r.contractId)}
-                      pagination={false}
-                      scroll={{ x: 1320 }}
-                      dataSource={detailPayload.stayHistory || []}
-                      locale={{
-                        emptyText:
-                          "Chưa có lịch sử — sinh viên chưa có hợp đồng hoặc chưa ghi nhận slot.",
-                      }}
-                      columns={[
-                        {
-                          title: "Sinh viên",
-                          key: "studentName",
-                          width: 150,
-                          ellipsis: true,
-                          fixed: "left",
-                          render: (_: unknown, r: StayHistoryRow) => r.studentName || du?.fullName || "—",
-                        },
-                        {
-                          title: "MSSV",
-                          key: "studentId",
-                          width: 100,
-                          ellipsis: true,
-                          render: (_: unknown, r: StayHistoryRow) => r.studentId || du?.studentId || "—",
-                        },
-                        {
-                          title: "Khu",
-                          dataIndex: "areaName",
-                          key: "areaName",
-                          width: 130,
-                          ellipsis: true,
-                          render: (v?: string) => v || "—",
-                        },
-                        {
-                          title: "Phòng",
-                          dataIndex: "roomNumber",
-                          key: "roomNumber",
-                          width: 88,
-                          render: (v?: string) => v || "—",
-                        },
-                        {
-                          title: "Giường / Slot",
-                          dataIndex: "bedSlotDisplay",
-                          key: "slot",
-                          width: 110,
-                          ellipsis: true,
-                          render: (_: unknown, r: StayHistoryRow) => r.bedSlotDisplay || r.bedCode || "—",
-                        },
-                        {
-                          title: "Ngày check-in",
-                          key: "checkInAt",
-                          width: 118,
-                          render: (_: unknown, r: StayHistoryRow) => formatStayHistoryDateVi(r.checkInAt ?? null),
-                        },
-                        {
-                          title: "Ngày check-out",
-                          key: "checkOutAt",
-                          width: 118,
-                          render: (_: unknown, r: StayHistoryRow) => formatStayHistoryDateVi(r.checkOutAt ?? null),
-                        },
-                        {
-                          title: "Trạng thái cư trú",
-                          key: "staySt",
-                          width: 150,
-                          render: (_: unknown, r: StayHistoryRow) => {
-                            const m = residencyStayStatusDisplay(r.residencyStayStatus);
-                            return (
-                              <Tag color={m.color} style={{ fontWeight: 600 }}>
-                                {m.emoji ? `${m.emoji} ` : ""}
-                                {m.text}
-                              </Tag>
-                            );
-                          },
-                        },
-                        {
-                          title: "Hợp đồng",
-                          dataIndex: "contractNumber",
-                          key: "contractNumber",
-                          width: 140,
-                          ellipsis: true,
-                          render: (v?: string) => v || "—",
-                        },
-                        {
-                          title: "Ghi chú",
-                          dataIndex: "note",
-                          key: "note",
-                          ellipsis: true,
-                          render: (v?: string) => v || "—",
-                        },
-                      ]}
-                    />
-                  </div>
-                        </>
-                      ),
-                    },
-                    {
-                      key: "finance",
-                      label: "Công nợ",
-                      children: detailPayload.financialSummary ? (
-                        <>
-                  <div style={{ marginBottom: 8, color: "#6b7280", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                        <span>
-                          Tổng còn nợ:{" "}
-                          <strong style={{ color: "#b45309" }}>
-                            {(detailPayload.financialSummary.debtTotal || 0).toLocaleString("vi-VN")}đ
-                          </strong>
-                          {" · "}
-                          Chưa thanh toán:{" "}
-                          <strong>{detailPayload.financialSummary.unpaidCount ?? 0}</strong> hóa đơn
-                        </span>
-                        {(detailPayload.financialSummary.unpaidBills || []).some((x) => String(x.status) === "overdue") ? (
-                          <Tag color="red" icon={<WarningOutlined />} style={{ fontWeight: 600 }}>
-                            Có hóa đơn quá hạn
-                          </Tag>
-                        ) : null}
-                      </div>
-                      <Table<Bill>
-                        size="small"
-                        rowKey="_id"
-                        pagination={false}
-                        dataSource={detailPayload.financialSummary.unpaidBills || []}
-                        locale={{ emptyText: "Không có hóa đơn chưa thanh toán" }}
-                        columns={[
-                          {
-                            title: "Tháng",
-                            key: "period",
-                            render: (_: unknown, b: Bill) =>
-                              `${String(b.month).padStart(2, "0")}/${b.year}`,
-                          },
-                          {
-                            title: "Tổng tiền",
-                            dataIndex: "total",
-                            render: (v: number) => `${Number(v || 0).toLocaleString("vi-VN")}đ`,
-                          },
-                          {
-                            title: "Hạn TT",
-                            dataIndex: "dueDate",
-                            render: (d: string) => (d ? dayjs(d).format("DD/MM/YYYY") : "—"),
-                          },
-                          {
-                            title: "Trạng thái",
-                            dataIndex: "status",
-                            render: (s: string) =>
-                              String(s) === "overdue" ? (
-                                <Tag color="red" icon={<WarningOutlined />} style={{ fontWeight: 600 }}>
-                                  Quá hạn
-                                </Tag>
-                              ) : (
-                                <Tag
-                                  color={
-                                    s === "paid" ? "green" : s === "pending" || s === "unpaid" ? "orange" : "default"
-                                  }
-                                >
-                                  {s === "paid"
-                                    ? "Đã thanh toán"
-                                    : s === "unpaid"
-                                      ? "Chưa TT"
-                                      : s === "pending"
-                                        ? "Chờ TT"
-                                        : s}
-                                </Tag>
-                              ),
-                          },
-                        ]}
-                      />
-                        </>
-                      ) : (
-                        <Empty description="Không có dữ liệu công nợ" />
-                      ),
-                    },
-                    {
-                      key: "violations",
-                      label: "Vi phạm",
-                      children:
-                        detailPayload.violationsRecent && detailPayload.violationsRecent.length > 0 ? (
-                          <Table<Violation>
-                        size="small"
-                        rowKey="_id"
-                        pagination={false}
-                        dataSource={detailPayload.violationsRecent}
-                        columns={[
-                          {
-                            title: "Ngày",
-                            dataIndex: "createdAt",
-                            render: (d?: string) => (d ? dayjs(d).format("DD/MM/YYYY") : "—"),
-                          },
-                          {
-                            title: "Vi phạm",
-                            key: "rule",
-                            render: (_: unknown, r: Violation) => r.ruleName || r.description || "—",
-                          },
-                          {
-                            title: "Mức độ",
-                            dataIndex: "severity",
-                            render: (s: string) => <Tag>{s}</Tag>,
-                          },
-                        ]}
-                      />
-                        ) : (
-                          <Empty description="Chưa có vi phạm ghi nhận" />
-                        ),
-                    },
-                  ]}
+              {detailIsStudent && du ? (
+                <StudentProfileDetailSections
+                  detailPayload={detailPayload}
+                  student={du}
+                  majorOptions={majorOptions}
+                  ensureBedLoading={ensureBedLoading}
+                  onEnsureBed={() => void handleEnsureBed()}
+                  onQuickCheckIn={() => void handleQuickCheckIn()}
+                  onQuickCheckout={handleQuickCheckout}
+                  onOpenRoom={(roomId) => {
+                    navigate(`/admin/housing?tab=rooms&openRoom=${encodeURIComponent(roomId)}`);
+                    setDetailPayload(null);
+                  }}
+                  onOpenContract={(contractId) => {
+                    navigate(`/admin/contracts?openContract=${encodeURIComponent(contractId)}`);
+                    setDetailPayload(null);
+                  }}
+                  onOpenTransfer={(roomId, contractId) => {
+                    navigate(
+                      `/admin/housing?tab=rooms&openRoom=${encodeURIComponent(roomId)}&openTransfer=${encodeURIComponent(contractId)}`,
+                    );
+                    setDetailPayload(null);
+                  }}
                 />
               ) : null}
 
