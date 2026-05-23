@@ -24,6 +24,11 @@ interface DashboardStats {
   timeRange?: { key: string; label: string; start: string; end: string };
   overview?: {
     pendingApplications: number;
+    pendingApplicationsBreakdown?: {
+      dormApplications: number;
+      transferRegistrations: number;
+      contractExtensions: number;
+    };
     availableRooms: number;
     residentStudents: number;
     estimatedRevenue: number;
@@ -410,6 +415,10 @@ const DashboardPage: React.FC = () => {
   const incidentSummary = s.incidents?.summary;
 
   const pendingViolations = incidentSummary?.pendingViolations ?? s.pendingViolations ?? 0;
+  const pendingBd = overview.pendingApplicationsBreakdown;
+  const pendingAppsHint = pendingBd
+    ? `KTX: ${pendingBd.dormApplications} · Chuyển phòng: ${pendingBd.transferRegistrations} · Gia hạn: ${pendingBd.contractExtensions}`
+    : "";
 
   const extensionStatusText =
     contractExtensionEnabled === false
@@ -531,6 +540,7 @@ const DashboardPage: React.FC = () => {
             prefix={<FileAddOutlined />}
             to="/admin/applications"
             loading={loading}
+            description={pendingAppsHint}
           />
         </Col>
         <Col xs={24} sm={12} lg={6}>

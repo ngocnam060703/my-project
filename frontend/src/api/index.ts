@@ -231,9 +231,18 @@ export const registrationsApi = {
     startDate: string;
     registrationType?: "dorm" | "transfer";
   }) => client.post("/registrations", data),
-  createTransfer: (data: { room: string; startDate?: string; semester?: string; schoolYear?: string }) =>
-    client.post("/registrations", { ...data, registrationType: "transfer" }),
+  createTransfer: (data: {
+    room: string;
+    startDate?: string;
+    semester?: string;
+    schoolYear?: string;
+    transferReason?: string;
+    acknowledgeUpcomingCancellation?: boolean;
+  }) => client.post("/registrations", { ...data, registrationType: "transfer" }),
   cancel: (id: string) => client.put(`/registrations/${id}/cancel`),
+  getTransferEligibility: () => client.get("/registrations/transfer-eligibility"),
+  getTransferSummary: (id: string) => client.get(`/registrations/${id}/transfer-summary`),
+  confirmTransfer: (id: string) => client.post(`/registrations/${id}/confirm-transfer`),
   getAll: (params?: { status?: string; page?: number; limit?: number }) =>
     client.get("/registrations", { params }),
   approve: (id: string) => client.put(`/registrations/${id}/approve`),
@@ -266,7 +275,7 @@ export const applicationsApi = {
     schoolYear: string;
     startDate: string;
     preferenceArea?: string;
-    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
+    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach" | "dan_toc_thieu_so";
   }) => client.post<DormApplication>("/applications", data),
   getAll: (params?: {
     status?: string;
@@ -274,7 +283,9 @@ export const applicationsApi = {
     faculty?: string;
     enrollmentYear?: number;
     area?: string;
-    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
+    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach" | "dan_toc_thieu_so";
+    /** Lọc theo priorityType trên hồ sơ User (vd. minority = dân tộc thiểu số) */
+    userPriorityType?: "minority";
     days?: number;
     sortOrder?: "asc" | "desc";
     page?: number;

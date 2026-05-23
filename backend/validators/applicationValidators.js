@@ -32,8 +32,12 @@ exports.listApplications = [
   query("limit").optional({ values: "falsy" }).isInt({ min: 1, max: 100 }).withMessage("limit từ 1 đến 100"),
   query("priorityCategory")
     .optional({ values: "falsy" })
-    .isIn(["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"])
+    .isIn(["none", "ho_ngheo", "con_thuong_binh", "chinh_sach", "dan_toc_thieu_so"])
     .withMessage("priorityCategory không hợp lệ"),
+  query("userPriorityType")
+    .optional({ values: "falsy" })
+    .isIn(["minority"])
+    .withMessage("userPriorityType không hợp lệ"),
   query("faculty").optional({ values: "falsy" }).isString(),
   query("enrollmentYear").optional({ values: "falsy" }).isInt({ min: 1990, max: 2100 }).withMessage("enrollmentYear không hợp lệ"),
   query("area").optional({ values: "falsy" }).isMongoId().withMessage("area không hợp lệ"),

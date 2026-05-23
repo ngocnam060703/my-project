@@ -541,7 +541,6 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
       addressNative: u.addressNative,
       addressPermanent: u.addressPermanent,
       addressTemporary: u.addressTemporary,
-      addressAbsent: u.addressAbsent,
       ethnicity: u.ethnicity,
       priorityType: u.priorityType || "normal",
       priorityProofUrl: u.priorityProofUrl || "",
@@ -1169,7 +1168,6 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
                   <Form.Item name="addressNative" label="Quê quán" rules={[req]}><Input /></Form.Item>
                   <Form.Item name="addressPermanent" label="Địa chỉ thường trú" rules={[req]}><Input /></Form.Item>
                   <Form.Item name="addressTemporary" label="Tạm trú" rules={[req]}><Input /></Form.Item>
-                  <Form.Item name="addressAbsent" label="Tạm vắng" rules={[req]}><Input /></Form.Item>
                   <Row gutter={8}>
                     <Col span={12}><Form.Item name="familyFatherName" label="Tên bố"><Input /></Form.Item></Col>
                     <Col span={12}><Form.Item name="familyMotherName" label="Tên mẹ"><Input /></Form.Item></Col>

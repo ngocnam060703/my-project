@@ -11,6 +11,8 @@ export interface DashboardStatCardProps {
   prefix?: React.ReactNode;
   formatter?: StatisticProps["formatter"];
   loading?: boolean;
+  /** Dòng phụ dưới số liệu (vd. phân loại đơn chờ duyệt) */
+  description?: string;
 }
 
 const DashboardStatCard: React.FC<DashboardStatCardProps> = ({
@@ -20,6 +22,7 @@ const DashboardStatCard: React.FC<DashboardStatCardProps> = ({
   prefix,
   formatter,
   loading = false,
+  description,
 }) => {
   const navigate = useNavigate();
 
@@ -40,7 +43,14 @@ const DashboardStatCard: React.FC<DashboardStatCardProps> = ({
       {loading ? (
         <Skeleton active paragraph={{ rows: 1 }} />
       ) : (
-        <Statistic title={title} value={value} prefix={prefix} formatter={formatter} />
+        <>
+          <Statistic title={title} value={value} prefix={prefix} formatter={formatter} />
+          {description ? (
+            <div className="small text-muted mt-2" style={{ lineHeight: 1.35 }}>
+              {description}
+            </div>
+          ) : null}
+        </>
       )}
     </Card>
   );

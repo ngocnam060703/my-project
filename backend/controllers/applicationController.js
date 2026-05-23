@@ -67,6 +67,7 @@ exports.list = async (req, res) => {
       enrollmentYear,
       area,
       priorityCategory,
+      userPriorityType,
       days,
       sortOrder = "desc",
       page = 1,
@@ -80,8 +81,11 @@ exports.list = async (req, res) => {
       // handled in unified user filter below
     }
 
-    if (priorityCategory && ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"].includes(String(priorityCategory))) {
-      filter.priorityCategory = String(priorityCategory);
+    const priorityCat = priorityCategory ? String(priorityCategory) : "";
+    const filterByMinorityProfile =
+      priorityCat === "dan_toc_thieu_so" || String(userPriorityType || "").trim() === "minority";
+    if (priorityCat && ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"].includes(priorityCat)) {
+      filter.priorityCategory = priorityCat;
     }
 
     if (days) {
@@ -111,8 +115,12 @@ exports.list = async (req, res) => {
         and.push({ enrollmentDate: { $gte: from, $lt: to } });
       }
     }
-    if (and.length > 0) {
-      const users = await User.find({ ...userFilter, $and: and }).select("_id").lean();
+    const userAnd = [...and];
+    if (filterByMinorityProfile) {
+      userAnd.push({ priorityType: "minority" });
+    }
+    if (userAnd.length > 0) {
+      const users = await User.find({ ...userFilter, $and: userAnd }).select("_id").lean();
       filter.user = { $in: users.map((u) => u._id) };
     }
 

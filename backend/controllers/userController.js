@@ -105,7 +105,6 @@ function validateRequiredStudentProfile(profileLike) {
   if (!hasText(profileLike.addressNative)) return "Thiếu thông tin bắt buộc: Quê quán";
   if (!hasText(profileLike.addressPermanent)) return "Thiếu thông tin bắt buộc: Địa chỉ thường trú";
   if (!hasText(profileLike.addressTemporary)) return "Thiếu thông tin bắt buộc: Tạm trú";
-  if (!hasText(profileLike.addressAbsent)) return "Thiếu thông tin bắt buộc: Tạm vắng";
   if (!hasText(profileLike.familyEmergencyPhone)) return "Thiếu thông tin bắt buộc: Số điện thoại liên hệ gia đình";
   const parentName = [profileLike.familyFatherName, profileLike.familyMotherName].find((n) => hasText(n));
   if (!parentName) return "Thiếu thông tin bắt buộc: Tên bố/mẹ";

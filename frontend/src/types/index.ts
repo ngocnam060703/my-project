@@ -213,6 +213,65 @@ export interface DormApplication {
   linkedContract?: Contract | string | null;
 }
 
+export interface TransferEligibilityContext {
+  canTransfer: boolean;
+  hasUpcomingRenewal: boolean;
+  message?: string;
+  warningMessage?: string | null;
+  newContractEndDate?: string;
+  upcomingRefundPreview?: number;
+  activeContract?: {
+    _id: string;
+    contractNumber?: string;
+    endDate?: string;
+    roomNumber?: string;
+  };
+  upcomingContract?: {
+    _id: string;
+    contractNumber?: string;
+    startDate?: string;
+    endDate?: string;
+    status?: string;
+  } | null;
+}
+
+export interface TransferFinancialSnapshot {
+  transferDate?: string;
+  month?: number;
+  year?: number;
+  daysInMonth?: number;
+  daysUsedOld?: number;
+  daysRemaining?: number;
+  oldMonthlySlotPrice?: number;
+  newMonthlySlotPrice?: number;
+  oldActualCharge?: number;
+  newRemainingCharge?: number;
+  amountPaidAtMonthStart?: number;
+  prepaidSurplus?: number;
+  supplementAmount?: number;
+  walletCreditAmount?: number;
+  financialAction?: "none" | "supplement" | "wallet_credit";
+  priceComparison?: "higher" | "lower" | "equal";
+  labels?: {
+    oldRoom?: { roomNumber?: string; areaName?: string };
+    newRoom?: { roomNumber?: string; areaName?: string };
+  };
+  oldContractNumber?: string;
+  registrationDate?: string;
+  approvalDate?: string;
+  newContractStartDate?: string;
+  newContractEndDate?: string;
+  annualNewContractValue?: number;
+  overlapDays?: number;
+  overlapCharge?: number;
+  upcomingRenewal?: {
+    contractId?: string;
+    contractNumber?: string;
+    refundAmount?: number;
+    willCancel?: boolean;
+  } | null;
+}
+
 export interface Registration {
   _id: string;
   user: User;
@@ -220,6 +279,11 @@ export interface Registration {
   registrationType?: "dorm" | "transfer";
   fromRoom?: Room;
   currentContract?: { _id: string; contractNumber?: string; status?: string };
+  newContract?: { _id: string; contractNumber?: string; status?: string };
+  transferPhase?: "awaiting_confirmation" | "completed" | null;
+  financialSnapshot?: TransferFinancialSnapshot | null;
+  studentConfirmedAt?: string;
+  transferExecutedAt?: string;
   semester: string;
   schoolYear: string;
   startDate?: string;
@@ -227,6 +291,7 @@ export interface Registration {
   createdAt: string;
   rejectionReason?: string;
   note?: string;
+  transferReason?: string;
 }
 
 export interface Contract {
@@ -238,6 +303,7 @@ export interface Contract {
   status: string;
   contractNumber?: string;
   signedAt?: string | null;
+  consentAcceptedAt?: string | null;
   studentSignStatus?: "pending" | "student_signed";
   signedPdfUrl?: string;
   studentConfirmedAt?: string | null;
@@ -252,6 +318,7 @@ export interface Contract {
   depositAmount?: number | null;
   renewedFromContract?: string | Contract | null;
   isRenewalContract?: boolean;
+  isTransferContract?: boolean;
   bed?: string | Bed | null;
   financialLockedAt?: string | null;
   displayPricing?: {

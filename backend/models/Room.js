@@ -19,7 +19,8 @@ const roomSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-roomSchema.pre("validate", function syncRoomFields(next) {
+/** Mongoose 9+: middleware không dùng callback `next`. */
+roomSchema.pre("validate", function syncRoomFields() {
   const cp = this.currentPrice != null ? Number(this.currentPrice) : null;
   const p = this.price != null ? Number(this.price) : null;
   if (cp != null && !Number.isNaN(cp)) {
@@ -38,10 +39,9 @@ roomSchema.pre("validate", function syncRoomFields(next) {
     this.capacity = cap;
     this.maxCapacity = cap;
   }
-  if ((this.currentPrice == null && this.price == null) || (this.price == null && this.currentPrice == null)) {
-    return next(new Error("Giá phòng (currentPrice) là bắt buộc"));
+  if (this.currentPrice == null && this.price == null) {
+    throw new Error("Giá phòng (currentPrice) là bắt buộc");
   }
-  next();
 });
 
 roomSchema.index({ area: 1, roomNumber: 1 }, { unique: true });

@@ -66,7 +66,7 @@ const RoomTransferPage: React.FC = () => {
         startDate: values.startDate?.format?.("YYYY-MM-DD"),
       });
       message.success("Đã gửi đơn chuyển phòng. Vui lòng chờ admin duyệt.");
-      navigate("/student/my-registrations");
+      navigate("/student/my-applications?tab=transfer");
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
       if (msg) message.error(msg);

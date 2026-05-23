@@ -41,15 +41,28 @@ function attachContractDisplayPricing(contractLean, roomLean) {
   return { ...contractLean, displayPricing: display };
 }
 
-const CONTRACT_STATUSES = ["pending_payment", "upcoming", "active", "completed", "expired", "terminated"];
+const CONTRACT_STATUSES = [
+  "pending_payment",
+  "upcoming",
+  "active",
+  "completed",
+  "expired",
+  "terminated",
+  "transferred_settled",
+  "terminated_due_to_transfer",
+  "cancelled",
+];
 const HOLD_SLOT_STATUSES = new Set(["pending_payment", "upcoming", "active"]);
 const ALLOWED_STATUS_TRANSITIONS = {
-  pending_payment: ["terminated", "upcoming", "active"],
-  upcoming: ["active", "terminated"],
-  active: ["completed", "expired", "terminated"],
+  pending_payment: ["terminated", "upcoming", "active", "cancelled"],
+  upcoming: ["active", "terminated", "cancelled"],
+  active: ["completed", "expired", "terminated", "terminated_due_to_transfer", "transferred_settled"],
   completed: ["terminated"],
   expired: ["terminated"],
   terminated: [],
+  transferred_settled: [],
+  terminated_due_to_transfer: [],
+  cancelled: [],
 };
 
 function addCalendarMonths(date, months) {
@@ -651,13 +664,18 @@ exports.studentSign = async (req, res) => {
     if (contract.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Không có quyền ký hợp đồng này" });
     }
+    const isTransferLike =
+      contract.isTransferContract || String(contract.contractNumber || "").startsWith("HD-CP");
+    const legacyTransferNeedsSign = isTransferLike && !contract.consentAcceptedAt;
     if (!["pending_payment", "upcoming"].includes(contract.status)) {
-      return res.status(400).json({ message: "Hợp đồng không ở trạng thái cho phép ký" });
+      if (!legacyTransferNeedsSign) {
+        return res.status(400).json({ message: "Hợp đồng không ở trạng thái cho phép ký" });
+      }
     }
     if (contract.isRenewalContract && contract.renewalConsentAt) {
       return res.status(400).json({ message: "Hợp đồng gia hạn đã được xác nhận — chờ đến ngày có hiệu lực" });
     }
-    if (contract.signedAt) {
+    if (contract.signedAt && !legacyTransferNeedsSign) {
       return res.status(400).json({ message: "Hợp đồng đã được ký" });
     }
     const [roomDoc, userDoc] = await Promise.all([
@@ -684,17 +702,43 @@ exports.studentSign = async (req, res) => {
     });
 
     const io = getIO();
-    io.emit("bill:new", {
-      userId: req.user._id.toString(),
-      message: "Bạn đã xác nhận thanh toán. Chờ admin xác nhận để hợp đồng có hiệu lực.",
-    });
-    await Notification.create({
-      user: req.user._id,
-      title: "Đã gửi xác nhận thanh toán",
-      message: "Bạn đã ký xác nhận hợp đồng. Vui lòng chờ admin xác nhận.",
-      type: "contract_signed",
-      link: "/student/my-contracts",
-    });
+    if (isTransferLike) {
+      contract.isTransferContract = true;
+      contract.paymentConfirmedAt = now;
+      contract.paymentConfirmedBy = req.user._id;
+      contract.adminReviewedAt = now;
+      contract.adminReviewedBy = req.user._id;
+      contract.status = "active";
+      await contract.save();
+      try {
+        await tryAutoAssignBed(contract._id, req.user._id);
+      } catch {
+        // best-effort
+      }
+      io.emit("registration:approved", {
+        userId: req.user._id.toString(),
+        message: "Hợp đồng chuyển phòng đã có hiệu lực",
+      });
+      await Notification.create({
+        user: req.user._id,
+        title: "Hợp đồng chuyển phòng có hiệu lực",
+        message: `Bạn đã ký hợp đồng ${contract.contractNumber}. Hợp đồng phòng mới đã active.`,
+        type: "contract_signed",
+        link: "/student/my-contracts",
+      });
+    } else {
+      io.emit("bill:new", {
+        userId: req.user._id.toString(),
+        message: "Bạn đã xác nhận thanh toán. Chờ admin xác nhận để hợp đồng có hiệu lực.",
+      });
+      await Notification.create({
+        user: req.user._id,
+        title: "Đã gửi xác nhận thanh toán",
+        message: "Bạn đã ký xác nhận hợp đồng. Vui lòng chờ admin xác nhận.",
+        type: "contract_signed",
+        link: "/student/my-contracts",
+      });
+    }
 
     res.json(contract);
   } catch (error) {
@@ -737,6 +781,10 @@ exports.confirmPayment = async (req, res) => {
     if (contract.isRenewalContract) {
       if (!contract.renewalConsentAt) {
         return res.status(400).json({ message: "Sinh viên chưa xác nhận gia hạn hợp đồng" });
+      }
+    } else if (contract.isTransferContract) {
+      if (!contract.signedAt) {
+        return res.status(400).json({ message: "Sinh viên chưa ký hợp đồng chuyển phòng" });
       }
     } else {
       if (!contract.signedAt) {
@@ -883,8 +931,13 @@ exports.getMyContractOverview = async (req, res) => {
     const contractsWithDisplay = contractsRefreshed.map((c) =>
       attachContractDisplayPricing(c, c.room && typeof c.room === "object" ? c.room : null)
     );
-    const activeContract =
-      contractsWithDisplay.find((c) => c.status === "active") || null;
+    const { findResidenceContract, isWithinStayPeriod } = require("../services/ktxMembership");
+    const residenceLean = await findResidenceContract(req.user._id, { syncLifecycle: false });
+    const activeContract = residenceLean
+      ? contractsWithDisplay.find((c) => String(c._id) === String(residenceLean._id)) ||
+        contractsWithDisplay.find((c) => c.status === "active" && isWithinStayPeriod(c)) ||
+        null
+      : contractsWithDisplay.find((c) => c.status === "active" && isWithinStayPeriod(c)) || null;
     const extendRequests = await ContractExtendRequest.find({ user: req.user._id })
       .populate("contract", "contractNumber status endDate startDate")
       .sort({ createdAt: -1 })

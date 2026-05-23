@@ -11,7 +11,17 @@ const contractSchema = new mongoose.Schema(
     endDate: { type: Date, required: true },
     status: {
       type: String,
-      enum: ["pending_payment", "upcoming", "active", "completed", "expired", "terminated"],
+      enum: [
+        "pending_payment",
+        "upcoming",
+        "active",
+        "completed",
+        "expired",
+        "terminated",
+        "transferred_settled",
+        "terminated_due_to_transfer",
+        "cancelled",
+      ],
       default: "pending_payment",
     },
     contractNumber: { type: String, unique: true },
@@ -53,6 +63,8 @@ const contractSchema = new mongoose.Schema(
     renewalConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     renewalConsentUserAgent: { type: String, default: "" },
     renewalConsentTextVersion: { type: String, default: "" },
+    transferredFromContract: { type: mongoose.Schema.Types.ObjectId, ref: "Contract", default: null },
+    isTransferContract: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

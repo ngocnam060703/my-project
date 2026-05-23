@@ -47,6 +47,16 @@ function daysRemaining(endDate: string | Date): number {
   return Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 }
 
+/** HĐ mới / chuyển phòng cần SV ký (kể cả bản lỗi cũ: active nhưng chưa consentAcceptedAt). */
+function needsStudentContractSign(c: Contract): boolean {
+  if (c.isRenewalContract) return false;
+  if (c.status === "pending_payment" && !c.signedAt) return true;
+  if (c.isTransferContract && !c.consentAcceptedAt) return true;
+  const cn = String(c.contractNumber || "");
+  if (!c.consentAcceptedAt && (c.isTransferContract || cn.startsWith("HD-CP"))) return true;
+  return false;
+}
+
 function statusBadge(status: string): { cls: string; label: string } {
   switch (status) {
     case "active":
@@ -206,14 +216,22 @@ const MyContractsPage: React.FC = () => {
     socket.on("contract:extended", onExt);
     socket.on("contract:renewal-created", onExt);
     socket.on("contract:renewal-activated", onExt);
+    socket.on("registration:approved", onExt);
     return () => {
       socket.off("contract:extended", onExt);
       socket.off("contract:renewal-created", onExt);
       socket.off("contract:renewal-activated", onExt);
+      socket.off("registration:approved", onExt);
     };
   }, [socket, authUser, load]);
 
   const primary = data?.activeContract || data?.contracts?.[0] || null;
+  const contractAwaitingSign = useMemo(
+    () => (data?.contracts ?? []).find((c) => needsStudentContractSign(c)) ?? null,
+    [data?.contracts],
+  );
+  /** Thẻ HĐ: ưu tiên HĐ đang chờ ký (chuyển phòng / pending_payment). */
+  const contractCard = contractAwaitingSign ?? primary;
   const student =
     data?.student ||
     (authUser
@@ -356,7 +374,13 @@ const MyContractsPage: React.FC = () => {
     setSignSubmitting(true);
     try {
       await contractsApi.sign(c._id, { consentAccepted: true });
-      message.success("Sinh viên đã ký hợp đồng. Vui lòng chờ admin xác nhận thanh toán.");
+      const transferLike =
+        c.isTransferContract || String(c.contractNumber || "").startsWith("HD-CP");
+      message.success(
+        transferLike
+          ? "Đã ký hợp đồng chuyển phòng. Hợp đồng phòng mới đã có hiệu lực."
+          : "Sinh viên đã ký hợp đồng. Vui lòng chờ admin xác nhận thanh toán."
+      );
       setViewModalContract(null);
       setSignConsent(false);
       await load();
@@ -482,39 +506,92 @@ const MyContractsPage: React.FC = () => {
 
             <div className="col-md-4">
               <div className="card h-100 shadow-sm border-primary border-opacity-25">
-                <div className="card-header bg-primary text-white fw-semibold">Hợp đồng hiện tại</div>
+                <div className="card-header bg-primary text-white fw-semibold">
+                  {contractAwaitingSign ? "Hợp đồng cần ký" : "Hợp đồng hiện tại"}
+                </div>
                 <div className="card-body small">
-                  <p className="mb-2">
-                    <span className={`badge ${statusBadge(primary.status).cls}`}>{statusBadge(primary.status).label}</span>
-                  </p>
-                  <p className="mb-1">
-                    <strong>Số HĐ:</strong> {primary.contractNumber || "—"}
-                  </p>
-                  <p className="mb-1">
-                    <strong>Bắt đầu:</strong> {new Date(primary.startDate).toLocaleDateString("vi-VN")}
-                  </p>
-                  <p className="mb-1">
-                    <strong>Kết thúc:</strong> {new Date(primary.endDate).toLocaleDateString("vi-VN")}
-                  </p>
-                  <p className="mb-1">
-                    <strong>Thời hạn (~tháng):</strong> {monthsBetween(primary.startDate, primary.endDate)}
-                  </p>
-                  <p className="mb-1">
-                    <strong>Giá thuê / tháng (theo HĐ):</strong> {monthlyRentDisplay(primary)}
-                    {primary.status === "active" && (
-                      <span className="text-muted d-block small">Giá đóng băng — không đổi khi BQL cập nhật phòng</span>
-                    )}
-                  </p>
-                  <p className="mb-3">
-                    <strong>Tiền cọc:</strong> {depositDisplay(primary)}
-                  </p>
-                  <button type="button" className="btn btn-light btn-sm w-100 mb-2" onClick={() => setViewModalContract(primary)}>
-                    Xem hợp đồng
-                  </button>
-                  {primary.status === "active" && canRenew && (
-                    <button type="button" className="btn btn-warning btn-sm w-100 fw-semibold" onClick={() => openRenewModal(primary)}>
-                      Gia hạn hợp đồng
-                    </button>
+                  {contractCard ? (
+                    <>
+                      <p className="mb-2">
+                        <span className={`badge ${statusBadge(contractCard.status).cls}`}>
+                          {statusBadge(contractCard.status).label}
+                        </span>
+                        {contractAwaitingSign ? (
+                          <span className="badge text-bg-warning text-dark ms-1">Chờ ký</span>
+                        ) : null}
+                      </p>
+                      <p className="mb-1">
+                        <strong>Số HĐ:</strong> {contractCard.contractNumber || "—"}
+                      </p>
+                      <p className="mb-1">
+                        <strong>Bắt đầu:</strong> {new Date(contractCard.startDate).toLocaleDateString("vi-VN")}
+                      </p>
+                      <p className="mb-1">
+                        <strong>Kết thúc:</strong> {new Date(contractCard.endDate).toLocaleDateString("vi-VN")}
+                      </p>
+                      <p className="mb-1">
+                        <strong>Thời hạn (~tháng):</strong> {monthsBetween(contractCard.startDate, contractCard.endDate)}
+                      </p>
+                      <p className="mb-1">
+                        <strong>Giá thuê / tháng (theo HĐ):</strong> {monthlyRentDisplay(contractCard)}
+                        {contractCard.status === "active" && !contractAwaitingSign ? (
+                          <span className="text-muted d-block small">Giá đóng băng — không đổi khi BQL cập nhật phòng</span>
+                        ) : null}
+                      </p>
+                      <p className="mb-3">
+                        <strong>Tiền cọc:</strong> {depositDisplay(contractCard)}
+                      </p>
+                      {contractAwaitingSign ? (
+                        <div className="alert alert-warning py-2 small mb-2">
+                          {contractAwaitingSign.isTransferContract ||
+                          String(contractAwaitingSign.contractNumber || "").startsWith("HD-CP")
+                            ? "Sau khi admin duyệt chuyển phòng, bạn cần ký hợp đồng mới (1 năm) tại đây."
+                            : "Bạn cần ký xác nhận hợp đồng để hợp đồng có hiệu lực."}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn btn-light btn-sm w-100 mb-2"
+                        onClick={() => setViewModalContract(contractCard)}
+                      >
+                        Xem hợp đồng
+                      </button>
+                      {contractAwaitingSign ? (
+                        <div className="border border-warning rounded p-2 mb-2 bg-warning bg-opacity-10">
+                          <div className="form-check mb-2">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              id="signConsentInline"
+                              checked={signConsent}
+                              onChange={(e) => setSignConsent(e.target.checked)}
+                            />
+                            <label className="form-check-label small" htmlFor="signConsentInline">
+                              {CONTRACT_CONSENT_LABEL}
+                            </label>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-warning btn-sm w-100 fw-semibold"
+                            disabled={!signConsent || signSubmitting}
+                            onClick={() => void signContract(contractAwaitingSign)}
+                          >
+                            {signSubmitting ? "Đang ký…" : "Ký xác nhận hợp đồng"}
+                          </button>
+                        </div>
+                      ) : null}
+                      {primary?.status === "active" && canRenew && !contractAwaitingSign ? (
+                        <button
+                          type="button"
+                          className="btn btn-warning btn-sm w-100 fw-semibold"
+                          onClick={() => openRenewModal(primary)}
+                        >
+                          Gia hạn hợp đồng
+                        </button>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="text-muted mb-0">Chưa có hợp đồng.</p>
                   )}
                 </div>
               </div>
@@ -813,7 +890,7 @@ Hướng dẫn: ${c.signedAt ? "Bạn đã ký xác nhận. Vui lòng chờ admi
                 })()}
               </div>
               <div className="modal-footer flex-column flex-sm-row align-items-stretch gap-2">
-                {viewModalContract.status === "pending_payment" && !viewModalContract.signedAt && (
+                {needsStudentContractSign(viewModalContract) && (
                   <div className="form-check text-start me-auto mb-0">
                     <input
                       className="form-check-input"
@@ -838,7 +915,7 @@ Hướng dẫn: ${c.signedAt ? "Bạn đã ký xác nhận. Vui lòng chờ admi
                   >
                     Đóng
                   </button>
-                  {viewModalContract.status === "pending_payment" && !viewModalContract.signedAt && (
+                  {needsStudentContractSign(viewModalContract) && (
                     <button
                       type="button"
                       className="btn btn-warning"

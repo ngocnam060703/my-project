@@ -2,20 +2,22 @@ import React from "react";
 import {
   Button,
   Card,
-  Col,
-  Collapse,
   Descriptions,
   Empty,
-  Row,
+  Grid,
   Space,
   Table,
+  Tabs,
   Tag,
 } from "antd";
 import {
+  BookOutlined,
   FileTextOutlined,
   HomeOutlined,
+  IdcardOutlined,
   LoginOutlined,
   LogoutOutlined,
+  PhoneOutlined,
   SwapOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
@@ -36,6 +38,8 @@ import {
   violationSeverityLabel,
 } from "./studentProfileDetailUtils";
 import type { Bed } from "../../../types";
+import { joinResidenceAddressPlain } from "../../../utils/addressDisplay";
+import { PRIORITY_OPTIONS } from "../../../utils/priorityDisplay";
 
 export type StudentProfileDetailSectionsProps = {
   detailPayload: AdminUserDetailResponse;
@@ -56,6 +60,30 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+function ProfileTabPanel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        background: "#f0fdfa",
+        borderRadius: 12,
+        padding: "16px 20px",
+        border: "1px solid #99f6e4",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+const profileTabDescProps = {
+  column: 1 as const,
+  size: "small" as const,
+  styles: {
+    label: { color: "#6b7280", fontWeight: 600, width: "38%" },
+    content: { fontWeight: 500, color: "#111827" },
+  },
+};
+
 const StudentProfileDetailSections: React.FC<StudentProfileDetailSectionsProps> = ({
   detailPayload,
   student: du,
@@ -68,11 +96,190 @@ const StudentProfileDetailSections: React.FC<StudentProfileDetailSectionsProps> 
   onOpenContract,
   onOpenTransfer,
 }) => {
+  const screens = Grid.useBreakpoint();
   const currentContract = detailPayload.currentContract as Contract | null;
   const currentRoom = detailPayload.currentRoom;
+  const facultyGroup = du?.facultyGroup || inferFacultyGroupFromMajor(du?.major, majorOptions) || "—";
+  const priorityLabel =
+    PRIORITY_OPTIONS.find((item) => item.value === (du?.priorityType || "normal"))?.label || "Bình thường";
+  const residenceAddressMerged = joinResidenceAddressPlain(du?.addressPermanent, du?.addressTemporary);
+
+  const tabLabel = (icon: React.ReactNode, text: string) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      <span style={{ color: "#0d9488", fontSize: 15, display: "flex" }}>{icon}</span>
+      <span style={{ fontWeight: 600 }}>{text}</span>
+    </span>
+  );
 
   return (
     <>
+      <Card
+        size="small"
+        title={<span style={{ fontWeight: 600 }}>Chi tiết hồ sơ sinh viên</span>}
+        style={{ borderRadius: 12, marginBottom: 8 }}
+        styles={{ body: { paddingTop: 8 } }}
+      >
+        <Tabs
+          defaultActiveKey="basic"
+          tabPosition={screens.md ? "left" : "top"}
+          size="middle"
+          items={[
+            {
+              key: "basic",
+              label: tabLabel(<IdcardOutlined />, "Thông tin cơ bản"),
+              children: (
+                <ProfileTabPanel>
+                  <Descriptions {...profileTabDescProps}>
+                    <Descriptions.Item label="MSSV">{du?.studentId || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Ngày sinh">
+                      {du?.dateOfBirth ? dayjs(du.dateOfBirth).format("DD/MM/YYYY") : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Giới tính">{du?.gender || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Quê quán / địa chỉ liên hệ">
+                      <span className="user-detail-long-text">{du?.address || "—"}</span>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="CCCD / CMND">{du?.citizenId || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Dân tộc">{du?.ethnicity || "—"}</Descriptions.Item>
+                  </Descriptions>
+                </ProfileTabPanel>
+              ),
+            },
+            {
+              key: "edu",
+              label: tabLabel(<BookOutlined />, "Học vấn"),
+              children: (
+                <ProfileTabPanel>
+                  <Descriptions {...profileTabDescProps}>
+                    <Descriptions.Item label="Lớp">{du?.className || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Khoa/nhóm ngành">{facultyGroup}</Descriptions.Item>
+                    <Descriptions.Item label="Ngành">{du?.major || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Khóa">{du?.faculty || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Ngày nhập học">
+                      {du?.enrollmentDate ? dayjs(du.enrollmentDate).format("DD/MM/YYYY") : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="GVCN">{du?.homeroomTeacher || "—"}</Descriptions.Item>
+                  </Descriptions>
+                </ProfileTabPanel>
+              ),
+            },
+            {
+              key: "contact",
+              label: tabLabel(<PhoneOutlined />, "Liên hệ"),
+              children: (
+                <ProfileTabPanel>
+                  <Descriptions {...profileTabDescProps}>
+                    <Descriptions.Item label="Số điện thoại">{du?.phone || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Email">{du?.email || "—"}</Descriptions.Item>
+                  </Descriptions>
+                </ProfileTabPanel>
+              ),
+            },
+            {
+              key: "extended",
+              label: tabLabel(<IdcardOutlined />, "Hồ sơ mở rộng"),
+              children: (
+                <ProfileTabPanel>
+                  <Descriptions {...profileTabDescProps}>
+                    <Descriptions.Item label="Quê quán">{du?.addressNative || "—"}</Descriptions.Item>
+                    <Descriptions.Item label="Địa chỉ thường trú - tạm trú">
+                      <span className="user-detail-long-text" style={{ whiteSpace: "pre-line" }}>
+                        {residenceAddressMerged}
+                      </span>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Diện ưu tiên">{priorityLabel}</Descriptions.Item>
+                    <Descriptions.Item label="Phụ huynh (cha)">
+                      {formatParentLine(du?.familyFatherName, du?.familyFatherPhone)}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Phụ huynh (mẹ)">
+                      {formatParentLine(du?.familyMotherName, du?.familyMotherPhone)}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="SĐT liên hệ khẩn cấp">{du?.familyEmergencyPhone || "—"}</Descriptions.Item>
+                  </Descriptions>
+                  <div style={{ marginTop: 12 }}>
+                    <PriorityPolicyCard priorityType={du?.priorityType} priorityProofUrl={du?.priorityProofUrl} />
+                  </div>
+                </ProfileTabPanel>
+              ),
+            },
+            {
+              key: "room",
+              label: tabLabel(<HomeOutlined />, "Nơi ở hiện tại"),
+              children: (
+                <ProfileTabPanel>
+                  <Descriptions {...profileTabDescProps}>
+                    <Descriptions.Item label="Phòng đang ở">
+                      {currentRoom && typeof currentRoom === "object" ? (
+                        <Space orientation="vertical" size={2}>
+                          <span>
+                            Phòng <strong>{currentRoom.roomNumber}</strong>
+                            {typeof currentRoom.area === "object" && currentRoom.area ? (
+                              <span>
+                                {" "}
+                                — Khu <strong>{currentRoom.area.name}</strong>
+                              </span>
+                            ) : null}
+                          </span>
+                          <span style={{ color: "#6b7280", fontSize: 12 }}>
+                            Sức chứa: <strong>{currentRoom.capacity ?? "—"}</strong>
+                            {" · "}Đang ở: <strong>{currentRoom.currentOccupancy ?? "—"}</strong>
+                          </span>
+                        </Space>
+                      ) : (
+                        "—"
+                      )}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Giường được phân">
+                      {currentContract ? contractBedCode(currentContract) : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Mã slot (phòng–giường)">
+                      {currentContract ? contractBedComposite(currentContract) : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Trạng thái giường">
+                      {currentContract ? contractBedEquipment(currentContract) : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Giá slot / tháng">
+                      {currentRoom && typeof currentRoom === "object"
+                        ? `${slotPriceVnd(currentRoom).toLocaleString("vi-VN")}đ`
+                        : "—"}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Ngày check-in thực tế">
+                      {(() => {
+                        const b = currentContract?.bed;
+                        const cin = b && typeof b === "object" ? (b as Bed).checkInAt : null;
+                        return cin ? dayjs(cin).format("DD/MM/YYYY HH:mm") : "—";
+                      })()}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="Trạng thái cư trú">
+                      {(() => {
+                        const meta = occupancyOperationalBadgeLarge(
+                          detailPayload.residencyOperationalStatus,
+                          detailPayload.stayHistory?.length || 0,
+                        );
+                        if (!meta) return detailPayload.residencyOperationalStatus || "—";
+                        return (
+                          <span
+                            style={{
+                              display: "inline-block",
+                              padding: "6px 12px",
+                              borderRadius: 8,
+                              fontWeight: 600,
+                              background: meta.bg,
+                              border: `1px solid ${meta.border}`,
+                            }}
+                          >
+                            {meta.text}
+                          </span>
+                        );
+                      })()}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </ProfileTabPanel>
+              ),
+            },
+          ]}
+        />
+      </Card>
+
       <div className="user-detail-section">
         <SectionTitle>Thao tác nhanh</SectionTitle>
         <Space wrap>
@@ -373,154 +580,6 @@ const StudentProfileDetailSections: React.FC<StudentProfileDetailSectionsProps> 
         )}
       </div>
 
-      <Collapse
-        style={{ marginTop: 20 }}
-        items={[
-          {
-            key: "profile",
-            label: "Thông tin hồ sơ đầy đủ & lưu trú hiện tại",
-            children: (
-              <Row gutter={[12, 12]}>
-                <Col xs={24} md={12}>
-                  <Card size="small" title="Thông tin cá nhân" style={{ borderRadius: 10 }}>
-                    <Descriptions column={1} size="small">
-                      <Descriptions.Item label="MSSV">{du?.studentId || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="SĐT">{du?.phone || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Ngày sinh">
-                        {du?.dateOfBirth ? dayjs(du.dateOfBirth).format("DD/MM/YYYY") : "—"}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Giới tính">{du?.gender || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="CCCD / CMND">{du?.citizenId || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Dân tộc">{du?.ethnicity || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Địa chỉ liên hệ">
-                        <span className="user-detail-long-text">{du?.address || "—"}</span>
-                      </Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Card size="small" title="Thông tin học tập" style={{ borderRadius: 10 }}>
-                    <Descriptions column={1} size="small">
-                      <Descriptions.Item label="Lớp">{du?.className || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Khoa/nhóm ngành">
-                        {du?.facultyGroup || inferFacultyGroupFromMajor(du?.major, majorOptions) || "—"}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Ngành">{du?.major || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Khóa">{du?.faculty || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Giáo viên chủ nhiệm">{du?.homeroomTeacher || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Ngày nhập học">
-                        {du?.enrollmentDate ? dayjs(du.enrollmentDate).format("DD/MM/YYYY") : "—"}
-                      </Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Card size="small" title="Địa chỉ" style={{ borderRadius: 10 }}>
-                    <Descriptions column={1} size="small">
-                      <Descriptions.Item label="Quê quán">{du?.addressNative || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Thường trú">{du?.addressPermanent || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Tạm trú">{du?.addressTemporary || "—"}</Descriptions.Item>
-                      <Descriptions.Item label="Tạm vắng">{du?.addressAbsent || "—"}</Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Card size="small" title="Gia đình" style={{ borderRadius: 10 }}>
-                    <Descriptions column={1} size="small">
-                      <Descriptions.Item label="Phụ huynh (cha)">
-                        {formatParentLine(du?.familyFatherName, du?.familyFatherPhone)}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Phụ huynh (mẹ)">
-                        {formatParentLine(du?.familyMotherName, du?.familyMotherPhone)}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="SĐT liên hệ khẩn cấp">{du?.familyEmergencyPhone || "—"}</Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                </Col>
-                <Col xs={24}>
-                  <PriorityPolicyCard priorityType={du?.priorityType} priorityProofUrl={du?.priorityProofUrl} />
-                </Col>
-                <Col xs={24}>
-                  <Card size="small" title="Lưu trú hiện tại" style={{ borderRadius: 10 }}>
-                    <Descriptions column={2} size="small">
-                      <Descriptions.Item label="Phòng đang ở">
-                        {currentRoom && typeof currentRoom === "object" ? (
-                          <Space orientation="vertical" size={2}>
-                            <span>
-                              Phòng <strong>{currentRoom.roomNumber}</strong>
-                              {typeof currentRoom.area === "object" && currentRoom.area ? (
-                                <span>
-                                  {" "}
-                                  — Khu <strong>{currentRoom.area.name}</strong>
-                                </span>
-                              ) : null}
-                            </span>
-                            <span style={{ color: "#6b7280", fontSize: 12 }}>
-                              Sức chứa: <strong>{currentRoom.capacity ?? "—"}</strong>
-                              {" · "}Đang ở: <strong>{currentRoom.currentOccupancy ?? "—"}</strong>
-                            </span>
-                          </Space>
-                        ) : (
-                          "—"
-                        )}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Giường được phân">
-                        {currentContract ? contractBedCode(currentContract) : "—"}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Mã slot (phòng–giường)">
-                        {currentContract ? contractBedComposite(currentContract) : "—"}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Trạng thái giường">
-                        {currentContract ? contractBedEquipment(currentContract) : "—"}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Tổng tiền phòng (tháng)">
-                        {currentRoom && typeof currentRoom === "object"
-                          ? `${Math.round(Number(currentRoom.price || 0)).toLocaleString("vi-VN")}đ`
-                          : "—"}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Giá slot / tháng">
-                        {currentRoom && typeof currentRoom === "object"
-                          ? `${slotPriceVnd(currentRoom).toLocaleString("vi-VN")}đ`
-                          : "—"}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Ngày check-in thực tế">
-                        {(() => {
-                          const b = currentContract?.bed;
-                          const cin = b && typeof b === "object" ? (b as Bed).checkInAt : null;
-                          return cin ? dayjs(cin).format("DD/MM/YYYY HH:mm") : "—";
-                        })()}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Trạng thái cư trú">
-                        {(() => {
-                          const meta = occupancyOperationalBadgeLarge(
-                            detailPayload.residencyOperationalStatus,
-                            detailPayload.stayHistory?.length || 0,
-                          );
-                          if (!meta) return detailPayload.residencyOperationalStatus || "—";
-                          return (
-                            <span
-                              style={{
-                                display: "inline-block",
-                                padding: "6px 12px",
-                                borderRadius: 8,
-                                fontWeight: 600,
-                                background: meta.bg,
-                                border: `1px solid ${meta.border}`,
-                              }}
-                            >
-                              {meta.text}
-                            </span>
-                          );
-                        })()}
-                      </Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                </Col>
-              </Row>
-            ),
-          },
-        ]}
-      />
     </>
   );
 };

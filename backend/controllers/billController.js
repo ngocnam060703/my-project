@@ -14,6 +14,7 @@ const { refreshOverdueMonthlyBills } = require("../services/billingOverdue");
 const { ensureBillCodesForList, assignBillCodeIfMissing } = require("../services/billCodeGenerator");
 const { settleBillAtCounter, settleBillViaVnpay, canSettleBillStatus } = require("../services/billPaymentService");
 const { closeMeterPeriodForRoom } = require("../services/meterBillingService");
+const { applyWalletCreditToBillTotal } = require("../services/walletCreditService");
 const {
   buildBillPaymentUrl,
   verifyReturnQuery,
@@ -411,7 +412,7 @@ exports.create = async (req, res) => {
         const electShare = electricityTotal / occupants;
         const waterShare = waterTotal / occupants;
         const otherShare = fixedOther / occupants;
-        const total = feePerSlot + electShare + waterShare + otherShare + commonFeeShare + personalTotal;
+        let total = feePerSlot + electShare + waterShare + otherShare + commonFeeShare + personalTotal;
 
         if (exists) {
           if (exists.status === "paid") {
@@ -427,9 +428,16 @@ exports.create = async (req, res) => {
           exists.occupants = occupants;
           exists.commonServiceBreakdown = commonBreakdown;
           exists.personalServiceBreakdown = personalBreakdown;
+          const walletAdjUpd = await applyWalletCreditToBillTotal(c.user._id, total);
+          total = walletAdjUpd.total;
           exists.total = total;
+          exists.walletCreditApplied = (exists.walletCreditApplied || 0) + walletAdjUpd.walletApplied;
           exists.dueDate = due;
-          exists.note = `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người đang ở; + DV cá nhân`;
+          const walletNote =
+            walletAdjUpd.walletApplied > 0
+              ? `; đã khấu trừ ví ${walletAdjUpd.walletApplied.toLocaleString("vi-VN")}đ`
+              : "";
+          exists.note = `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người đang ở; + DV cá nhân${walletNote}`;
           exists.paymentHistory = exists.paymentHistory || [];
           exists.paymentHistory.push({
             at: new Date(),
@@ -444,6 +452,12 @@ exports.create = async (req, res) => {
           continue;
         }
 
+        const walletAdj = await applyWalletCreditToBillTotal(c.user._id, total);
+        total = walletAdj.total;
+        const walletNoteCreate =
+          walletAdj.walletApplied > 0
+            ? `; đã khấu trừ ví ${walletAdj.walletApplied.toLocaleString("vi-VN")}đ`
+            : "";
         const bill = await Bill.create({
           contract: c._id,
           user: c.user._id,
@@ -460,9 +474,10 @@ exports.create = async (req, res) => {
           commonServiceBreakdown: commonBreakdown,
           personalServiceBreakdown: personalBreakdown,
           total,
+          walletCreditApplied: walletAdj.walletApplied,
           dueDate: due,
           status: "unpaid",
-          note: `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người đang ở; + DV cá nhân`,
+          note: `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người đang ở; + DV cá nhân${walletNoteCreate}`,
           paymentHistory: [
             {
               at: new Date(),

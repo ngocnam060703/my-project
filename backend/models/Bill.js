@@ -2,7 +2,12 @@ const mongoose = require("mongoose");
 
 const billSchema = new mongoose.Schema(
   {
-    billType: { type: String, enum: ["monthly", "penalty", "damage_reimbursement"], default: "monthly" },
+    billType: {
+      type: String,
+      enum: ["monthly", "penalty", "damage_reimbursement", "transfer_supplement"],
+      default: "monthly",
+    },
+    walletCreditApplied: { type: Number, default: 0, min: 0 },
     /** Liên kết vi phạm (hóa đơn phạt kỷ luật) */
     violation: { type: mongoose.Schema.Types.ObjectId, ref: "Violation", default: undefined },
     /** Liên kết khai báo hư hỏng (hóa đơn bồi thường hư hỏng) */

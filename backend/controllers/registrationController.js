@@ -9,8 +9,13 @@ const RegistrationPeriod = require("../models/RegistrationPeriod");
 const { findOpenRegistrationPeriod } = require("../services/registrationPeriodPolicy");
 const { hasDormRegistrationProfile, REQUIRED_DORM_REGISTRATION_FIELDS } = require("../utils/profileComplete");
 const { assignRoomForStudent } = require("../utils/assignRoom");
-const { releaseBedForContractId } = require("../services/bedOccupancy");
-const { syncOccupancyForRooms, recountRoomOccupancyForRoom } = require("../services/roomOccupancySync");
+const {
+  approveTransferRequest,
+  executeRoomTransfer,
+  getTransferSummaryForStudent,
+  getTransferEligibilityForStudent,
+} = require("../services/roomTransferService");
+const { recountRoomOccupancyForRoom } = require("../services/roomOccupancySync");
 
 function inferSemesterSchoolYearFromDate(date = new Date()) {
   const d = new Date(date);
@@ -113,6 +118,7 @@ exports.getMyRegistrations = async (req, res) => {
     const registrations = await Registration.find({ user: req.user._id, registrationType: "transfer" })
       .populate({ path: "room", populate: { path: "area", select: "name" } })
       .populate({ path: "fromRoom", populate: { path: "area", select: "name" } })
+      .populate("newContract", "contractNumber status")
       .populate({ path: "currentContract", select: "contractNumber status registration", populate: { path: "registration", select: "semester schoolYear" } })
       .sort({ createdAt: -1 });
     res.json(registrations.map((r) => normalizeRegistrationSemesterYear(r)));
@@ -125,17 +131,19 @@ exports.create = async (req, res) => {
   try {
     const { room, semester, schoolYear, startDate } = req.body;
     const registrationType = req.body.registrationType === "transfer" ? "transfer" : "dorm";
-    if (req.user.role !== "user") {
+    const role = String(req.user.role || "");
+    if (role !== "user" && role !== "student") {
       return res.status(403).json({ message: "Chỉ sinh viên mới được gửi đơn đăng ký nội trú" });
     }
     const existing = await Registration.findOne({ user: req.user._id, status: "pending", registrationType });
     if (existing) return res.status(400).json({ message: "Bạn đã có đơn đăng ký đang chờ duyệt" });
-    const activeContract = await Contract.findOne({
-      user: req.user._id,
-      status: { $in: ["active", "pending_payment"] },
-    })
-      .populate({ path: "room", select: "roomNumber area", populate: { path: "area", select: "name" } })
-      .populate("registration", "semester schoolYear");
+    const { findResidenceContract, canRequestRoomTransfer } = require("../services/ktxMembership");
+    const residenceForDorm = await findResidenceContract(req.user._id);
+    const activeContract = residenceForDorm
+      ? await Contract.findById(residenceForDorm._id)
+          .populate({ path: "room", select: "roomNumber area", populate: { path: "area", select: "name" } })
+          .populate("registration", "semester schoolYear")
+      : null;
     if (registrationType === "dorm") {
       return res.status(400).json({
         message:
@@ -146,8 +154,12 @@ exports.create = async (req, res) => {
     const roomDoc = await Room.findById(room).populate("area", "name");
     if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng" });
     if (registrationType === "transfer") {
-      if (!activeContract) {
-        return res.status(400).json({ message: "Bạn chưa là thành viên KTX nên không thể đăng ký chuyển phòng" });
+      const canTransfer = await canRequestRoomTransfer(req.user._id);
+      if (!canTransfer || !activeContract || activeContract.status !== "active") {
+        return res.status(400).json({
+          message:
+            "Bạn chưa có hợp đồng đang hiệu lực (active) nên không thể đăng ký chuyển phòng. Nếu HĐ gia hạn đang chờ kích hoạt, vui lòng đợi hoặc liên hệ ban quản lý.",
+        });
       }
       const currentRoom = activeContract.room;
       if (!currentRoom || !currentRoom.area) {
@@ -162,6 +174,28 @@ exports.create = async (req, res) => {
       if (roomDoc.status === "maintenance") {
         return res.status(400).json({ message: "Phòng đang bảo trì, không thể đăng ký chuyển đến" });
       }
+      const pendingOrProcessing = await Registration.findOne({
+        user: req.user._id,
+        registrationType: "transfer",
+        $or: [{ status: "pending" }, { status: "approved", transferPhase: { $ne: "completed" }, newContract: null }],
+      });
+      if (pendingOrProcessing) {
+        return res.status(400).json({
+          message:
+            pendingOrProcessing.status === "pending"
+              ? "Bạn đã có đơn chuyển phòng đang chờ duyệt"
+              : "Bạn có đơn chuyển phòng chưa hoàn tất — không thể gửi thêm",
+        });
+      }
+      const transferContext = await getTransferEligibilityForStudent(req.user._id);
+      if (transferContext.hasUpcomingRenewal && !req.body.acknowledgeUpcomingCancellation) {
+        return res.status(400).json({
+          message: transferContext.warningMessage,
+          code: "UPCOMING_RENEWAL_ACK_REQUIRED",
+          transferContext,
+        });
+      }
+      const transferReason = String(req.body.transferReason || "").trim();
       const transfer = await Registration.create({
         user: req.user._id,
         room,
@@ -171,7 +205,9 @@ exports.create = async (req, res) => {
         semester: String(semester || activeContract.registration?.semester || inferSemesterSchoolYearFromDate().semester),
         schoolYear: String(schoolYear || activeContract.registration?.schoolYear || inferSemesterSchoolYearFromDate().schoolYear),
         startDate: startDate ? new Date(startDate) : new Date(),
-        note: "Đơn chuyển phòng - chờ admin duyệt",
+        transferReason,
+        note: transferReason || "Đơn chuyển phòng - chờ admin duyệt",
+        upcomingCancellationAcknowledgedAt: transferContext.hasUpcomingRenewal ? new Date() : null,
       });
       await notifyAdminsNewRegistration({
         registration: transfer,
@@ -259,59 +295,12 @@ exports.approve = async (req, res) => {
       !!reg.fromRoom;
 
     if (isTransferRegistration) {
-      const contract = await Contract.findOne({
-        _id: reg.currentContract || undefined,
-        user: reg.user._id,
-        status: { $in: ["active", "pending_payment"] },
-      }).populate("room");
-      if (!contract) {
-        const fallbackContract = await Contract.findOne({
-          user: reg.user._id,
-          room: reg.fromRoom || undefined,
-          status: { $in: ["active", "pending_payment"] },
-        }).populate("room");
-        if (!fallbackContract) {
-          return res.status(400).json({ message: "Không tìm thấy hợp đồng hiện tại để chuyển phòng" });
-        }
-        reg.currentContract = fallbackContract._id;
-        await reg.save();
-      }
-      const resolvedContract = contract || (await Contract.findById(reg.currentContract).populate("room"));
-      const fromRoom = await Room.findById(resolvedContract.room?._id || reg.fromRoom);
-      if (!fromRoom) return res.status(404).json({ message: "Không tìm thấy phòng hiện tại của sinh viên" });
-      if (String(fromRoom._id) === String(room._id)) {
-        return res.status(400).json({ message: "Phòng đích trùng với phòng hiện tại" });
-      }
-      if (String(fromRoom.area) !== String(room.area)) {
-        return res.status(400).json({ message: "Chỉ được duyệt chuyển phòng trong cùng khu" });
-      }
-
-      if (String(fromRoom.roomLeader || "") === String(reg.user._id)) {
-        fromRoom.roomLeader = null;
-        await fromRoom.save();
-      }
-
-      await releaseBedForContractId(resolvedContract._id, req.user?._id || null, "Chuyển phòng (duyệt đơn)");
-      resolvedContract.room = room._id;
-      resolvedContract.bed = null;
-      if (!room.roomLeader) {
-        room.roomLeader = reg.user._id;
-        await room.save();
-      }
-
-      await Promise.all([reg.save(), resolvedContract.save()]);
-      await syncOccupancyForRooms([fromRoom._id, room._id]);
-
-      const io = getIO();
-      io.emit("registration:approved", { userId: reg.user._id.toString(), message: "Đơn chuyển phòng của bạn đã được duyệt" });
-      await Notification.create({
-        user: reg.user._id,
-        title: "Đơn chuyển phòng được duyệt",
-        message: `Bạn đã được duyệt chuyển sang phòng ${room.roomNumber}.`,
-        type: "registration_approved",
-        link: "/student/my-contracts",
-      });
-      return res.json({ registration: reg, contract: resolvedContract, movedFromRoom: fromRoom._id, movedToRoom: room._id });
+      const result = await approveTransferRequest(reg._id, req.user._id);
+      const populated = await Registration.findById(reg._id)
+        .populate("room")
+        .populate("fromRoom")
+        .populate("currentContract", "contractNumber status endDate");
+      return res.json({ ...result, registration: populated });
     }
 
     await reg.save();
@@ -342,7 +331,7 @@ exports.approve = async (req, res) => {
     await recountRoomOccupancyForRoom(reg.room._id);
     res.json({ registration: reg, contract });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(error.statusCode || 500).json({ message: error.message });
   }
 };
 
@@ -370,6 +359,36 @@ exports.reject = async (req, res) => {
     res.json(reg);
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getTransferEligibility = async (req, res) => {
+  try {
+    const data = await getTransferEligibilityForStudent(req.user._id);
+    res.json(data);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message });
+  }
+};
+
+exports.getTransferSummary = async (req, res) => {
+  try {
+    const data = await getTransferSummaryForStudent(req.params.id, req.user._id);
+    res.json(data);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message });
+  }
+};
+
+exports.confirmTransfer = async (req, res) => {
+  try {
+    const result = await executeRoomTransfer(req.params.id, req.user._id, {
+      ip: req.ip,
+      ua: req.headers["user-agent"],
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message });
   }
 };
 

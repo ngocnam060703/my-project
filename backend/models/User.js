@@ -69,6 +69,8 @@ const userSchema = new mongoose.Schema(
     /** Xóa mềm — không hiển thị trong danh sách, không đăng nhập */
     isDeleted: { type: Boolean, default: false, index: true },
     managedArea: { type: mongoose.Schema.Types.ObjectId, ref: "Area", default: null },
+    /** Số dư khấu trừ tự động vào hóa đơn tháng sau (chuyển phòng, bù trừ, …) */
+    walletCredit: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );

@@ -1,6 +1,8 @@
 const Room = require("../models/Room");
 const User = require("../models/User");
 const Registration = require("../models/Registration");
+const Application = require("../models/Application");
+const ContractExtendRequest = require("../models/ContractExtendRequest");
 const Bill = require("../models/Bill");
 const Violation = require("../models/Violation");
 const Contract = require("../models/Contract");
@@ -75,11 +77,23 @@ exports.getStats = async (req, res) => {
     const violationSeverity = String(req.query.violationSeverity || "all");
     const billingFilterResolved = resolveBillingFilter(req.query);
 
-    const [rooms, pendingRegistrations, activeContracts, billsInRange, allBillsForDebt, maintenanceReports, violations] = await Promise.all([
+    const [
+      rooms,
+      pendingDormApplications,
+      pendingTransferRegistrations,
+      pendingContractExtensions,
+      activeContracts,
+      billsInRange,
+      allBillsForDebt,
+      maintenanceReports,
+      violations,
+    ] = await Promise.all([
       Room.find(roomArea !== "all" ? { area: roomArea } : {})
         .populate("area", "name")
         .select("roomNumber area capacity currentOccupancy status"),
-      Registration.countDocuments({ status: "pending", createdAt: { $gte: range.start, $lte: range.end } }),
+      Application.countDocuments({ status: "pending" }),
+      Registration.countDocuments({ status: "pending", registrationType: "transfer" }),
+      ContractExtendRequest.countDocuments({ status: "pending" }),
       Contract.countDocuments({ status: "active" }),
       Bill.find({
         ...billingFilterResolved.filter,
@@ -271,13 +285,22 @@ exports.getStats = async (req, res) => {
     const overdueBills = allBillsForDebt.filter((b) => b.status === "overdue").length;
     const pendingViolations = violations.filter((v) => v.status === "pending").length;
 
+    const pendingApplicationsTotal =
+      pendingDormApplications + pendingTransferRegistrations + pendingContractExtensions;
+
     res.json({
       // Legacy fields giữ tương thích UI cũ
       totalRooms: roomSummary.totalRooms,
       availableRooms: roomSummary.availableRooms,
       fullRooms: roomSummary.fullRooms,
       totalStudents: await User.countDocuments({ role: "user" }),
-      pendingRegistrations,
+      pendingRegistrations: pendingApplicationsTotal,
+      pendingApplicationsBreakdown: {
+        dormApplications: pendingDormApplications,
+        transferRegistrations: pendingTransferRegistrations,
+        contractExtensions: pendingContractExtensions,
+        total: pendingApplicationsTotal,
+      },
       pendingBills,
       paidBillsThisMonth: billsInRange.filter((b) => b.status === "paid").length,
       pendingViolations,
@@ -293,7 +316,12 @@ exports.getStats = async (req, res) => {
         end: range.end,
       },
       overview: {
-        pendingApplications: pendingRegistrations,
+        pendingApplications: pendingApplicationsTotal,
+        pendingApplicationsBreakdown: {
+          dormApplications: pendingDormApplications,
+          transferRegistrations: pendingTransferRegistrations,
+          contractExtensions: pendingContractExtensions,
+        },
         availableRooms: roomSummary.availableRooms,
         residentStudents: activeContracts,
         estimatedRevenue,
