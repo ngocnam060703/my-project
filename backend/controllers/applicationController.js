@@ -478,6 +478,9 @@ exports.approve = async (req, res) => {
     await app.save();
 
     const startDate = app.startDate ? new Date(app.startDate) : new Date();
+    const appUser = await User.findById(app.user).select("priorityType").lean();
+    const { buildContractPricingFields } = require("../services/contractPricing");
+    const pricing = buildContractPricingFields({ roomDoc: room, userDoc: appUser });
     const c0 = (
       await Contract.create([
         {
@@ -491,6 +494,7 @@ exports.approve = async (req, res) => {
           status: "pending_payment",
           signedAt: null,
           createdBy: req.user._id,
+          ...pricing,
         },
       ])
     )[0];

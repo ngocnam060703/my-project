@@ -1,6 +1,6 @@
 /**
  * Module "Hợp đồng của tôi" — Bootstrap 5: thông tin SV, phòng, HĐ, countdown, yêu cầu gia hạn.
- * API: GET /api/my-contract, GET /api/contracts/:id, POST /api/contracts/:id/request-extend
+ * API: GET /api/my-contract, GET /api/contracts/:id/renewal-preview, POST confirm-renewal
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "bootstrap/dist/css/bootstrap.min.css";
@@ -9,7 +9,15 @@ import { isAxiosError } from "axios";
 import { contractsApi, dashboardApi, extensionPeriodsApi } from "../../api";
 import { useSocket } from "../../contexts/SocketContext";
 import { useAuth } from "../../contexts/AuthContext";
-import type { Contract, ContractExtendRequest, MyContractOverview, Room } from "../../types";
+import type {
+  Contract,
+  ContractExtendRequest,
+  ContractRenewalPreview,
+  ExtensionPeriodInfo,
+  MyContractOverview,
+  Room,
+} from "../../types";
+import { CONTRACT_CONSENT_LABEL, capacityAtSigning, contractRoomMonthlySnapshot, roomFeePerSlot } from "../../utils/contractPricing";
 
 function fmtMoney(n: number | null | undefined): string {
   if (n == null || Number.isNaN(Number(n))) return "—";
@@ -43,8 +51,12 @@ function statusBadge(status: string): { cls: string; label: string } {
   switch (status) {
     case "active":
       return { cls: "text-bg-success", label: "Đang hiệu lực" };
+    case "upcoming":
+      return { cls: "text-bg-info text-dark", label: "Sắp có hiệu lực" };
     case "pending_payment":
       return { cls: "text-bg-warning text-dark", label: "Chưa hiệu lực (chờ ký + xác nhận)" };
+    case "completed":
+      return { cls: "text-bg-secondary", label: "Đã hoàn thành" };
     case "expired":
       return { cls: "text-bg-secondary", label: "Hết hạn" };
     case "terminated":
@@ -54,17 +66,9 @@ function statusBadge(status: string): { cls: string; label: string } {
   }
 }
 
-function roomFeePerSlot(c: Contract): number {
-  if (c.monthlyRent != null && c.monthlyRent > 0) return Number(c.monthlyRent);
-  const r = c.room as Room | undefined;
-  const price = Number(r?.price ?? 0);
-  const cap = Number(r?.capacity ?? 0);
-  const slots = Number.isFinite(cap) && cap >= 1 ? cap : 1;
-  return Math.round(price / slots);
-}
-
 function monthlyRentDisplay(c: Contract): string {
-  return fmtMoney(roomFeePerSlot(c));
+  const r = c.room as Room | undefined;
+  return fmtMoney(roomFeePerSlot(c, r));
 }
 
 function depositDisplay(c: Contract): string {
@@ -80,6 +84,18 @@ function errMsg(e: unknown): string {
   return "Có lỗi xảy ra";
 }
 
+function isExtensionPeriodOpen(period?: ExtensionPeriodInfo | null, nowMs = Date.now()): boolean {
+  if (!period?.isOpen || !period.endDate) return false;
+  const start = period.startDate ? new Date(period.startDate).getTime() : 0;
+  const end = new Date(period.endDate).getTime();
+  return nowMs >= start && nowMs <= end;
+}
+
+function formatPeriodEndVi(iso?: string | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("vi-VN", { dateStyle: "short", timeStyle: "short" });
+}
+
 function avatarSrc(student: MyContractOverview["student"] | null): string | null {
   const a = student?.avatar;
   if (!a || typeof a !== "string") return null;
@@ -93,17 +109,50 @@ const MyContractsPage: React.FC = () => {
   const [data, setData] = useState<MyContractOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [extendModalContract, setExtendModalContract] = useState<Contract | null>(null);
-  const [extendMonths, setExtendMonths] = useState(6);
-  const [extendSubmitting, setExtendSubmitting] = useState(false);
+  const [renewModalContract, setRenewModalContract] = useState<Contract | null>(null);
+  const [renewMonths, setRenewMonths] = useState(12);
+  const [renewPreview, setRenewPreview] = useState<ContractRenewalPreview | null>(null);
+  const [renewPreviewLoading, setRenewPreviewLoading] = useState(false);
+  const [renewConsent, setRenewConsent] = useState(false);
+  const [renewSubmitting, setRenewSubmitting] = useState(false);
   const [viewModalContract, setViewModalContract] = useState<Contract | null>(null);
+  const [signConsent, setSignConsent] = useState(false);
+  const [signSubmitting, setSignSubmitting] = useState(false);
+  const [batchCountdown, setBatchCountdown] = useState("");
+
+  const mergeActiveExtensionPeriod = (
+    base: MyContractOverview,
+    activeRaw: { name?: string; startDate?: string; endDate?: string } | null
+  ): MyContractOverview => {
+    if (!activeRaw?.endDate) return base;
+    const extensionPeriod: ExtensionPeriodInfo = {
+      isOpen: true,
+      name: activeRaw.name ?? null,
+      startDate: activeRaw.startDate ?? null,
+      endDate: activeRaw.endDate ?? null,
+    };
+    const active = base.activeContract;
+    const canBatchRenew =
+      active?.status === "active" && !base.pendingRenewalContract && isExtensionPeriodOpen(extensionPeriod);
+    return {
+      ...base,
+      extensionPeriod,
+      extensionEnabled: base.extensionEnabled !== false || extensionPeriod.isOpen,
+      canRenewContract: canBatchRenew || Boolean(base.canRenewContract),
+      renewalMode: canBatchRenew ? "batch" : base.renewalMode,
+    };
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
-      const { data: d } = await contractsApi.getMyContractOverview();
-      setData(d);
+      const [overviewRes, activePeriodRes] = await Promise.all([
+        contractsApi.getMyContractOverview(),
+        extensionPeriodsApi.getActive().catch(() => ({ data: null })),
+      ]);
+      const activeRaw = activePeriodRes.data as { name?: string; startDate?: string; endDate?: string } | null;
+      setData(mergeActiveExtensionPeriod(overviewRes.data, activeRaw));
     } catch (firstErr) {
       /** Backend cũ chưa mount GET /api/my-contract → dùng GET /contracts/my + setting gia hạn */
       try {
@@ -119,14 +168,20 @@ const MyContractsPage: React.FC = () => {
         const extensionPeriod = periodRaw
           ? { isOpen: true, name: periodRaw.name, startDate: periodRaw.startDate, endDate: periodRaw.endDate }
           : { isOpen: false, name: null, startDate: null, endDate: null };
+        const activeContract = contracts.find((c) => c.status === "active") || null;
+        const canBatch =
+          Boolean(extensionPeriod.isOpen) && activeContract?.status === "active";
         setData({
           student: null,
           contracts,
-          activeContract: contracts.find((c) => c.status === "active") || null,
+          activeContract,
           extendRequests: [],
-          extensionEnabled: globallyEnabled,
+          extensionEnabled: globallyEnabled || extensionPeriod.isOpen,
           extensionPeriod,
-          canRequestExtension: globallyEnabled && extensionPeriod.isOpen,
+          canRequestExtension: canBatch || (globallyEnabled && extensionPeriod.isOpen),
+          canRenewContract: canBatch,
+          renewalMode: canBatch ? "batch" : undefined,
+          batchExtensionMonths: 6,
         });
         setErr(null);
       } catch {
@@ -149,8 +204,12 @@ const MyContractsPage: React.FC = () => {
       if (payload.userId === uid) void load();
     };
     socket.on("contract:extended", onExt);
+    socket.on("contract:renewal-created", onExt);
+    socket.on("contract:renewal-activated", onExt);
     return () => {
       socket.off("contract:extended", onExt);
+      socket.off("contract:renewal-created", onExt);
+      socket.off("contract:renewal-activated", onExt);
     };
   }, [socket, authUser, load]);
 
@@ -170,22 +229,65 @@ const MyContractsPage: React.FC = () => {
         }
       : null);
 
-  const canExtend = Boolean(data?.canRequestExtension);
-  const extensionHint = useMemo(() => {
-    if (data?.extensionBlockReason) return data.extensionBlockReason;
-    if (!data?.extensionEnabled) return "Chức năng gia hạn đang tắt trên hệ thống.";
-    if (!data?.extensionPeriod?.isOpen) return "Hiện chưa trong đợt gia hạn. Vui lòng chờ Ban quản lý mở đợt.";
-    if (data?.hasPendingExtendRequest) return "Bạn đã gửi yêu cầu gia hạn — đang chờ Ban quản lý duyệt.";
-    const end = data.extensionPeriod.endDate;
-    const daysLeft = data.daysUntilContractEnd;
-    const windowDays = data.eligibilityDays ?? 60;
-    if (typeof daysLeft === "number" && daysLeft > windowDays) {
-      return `Hợp đồng còn ${daysLeft} ngày. Bạn có thể gửi yêu cầu khi còn tối đa ${windowDays} ngày trước hạn.`;
+  const renewalWindow = data?.renewalWindowDays ?? 30;
+  const batchMonths = data?.batchExtensionMonths ?? 6;
+  const isBatchOpen = isExtensionPeriodOpen(data?.extensionPeriod);
+  const daysLeft = primary ? daysRemaining(primary.endDate) : null;
+  const canRenewLocal =
+    primary?.status === "active" &&
+    !data?.pendingRenewalContract &&
+    (isBatchOpen ||
+      (Boolean(data?.extensionEnabled) && daysLeft != null && daysLeft >= 0 && daysLeft <= renewalWindow));
+  const canRenew = isBatchOpen
+    ? primary?.status === "active" && !data?.pendingRenewalContract
+    : (data?.canRenewContract ?? canRenewLocal);
+  const isBatchRenewal = renewPreview?.renewalMode === "batch" || isBatchOpen;
+
+  useEffect(() => {
+    if (!isBatchOpen || !data?.extensionPeriod?.endDate) {
+      setBatchCountdown("");
+      return;
     }
-    return end
-      ? `Đang trong đợt gia hạn — hết hạn nhận đơn ${new Date(end).toLocaleString("vi-VN")}.`
-      : "Đang trong đợt gia hạn — bạn có thể gửi yêu cầu.";
-  }, [data?.extensionEnabled, data?.extensionPeriod, data?.extensionBlockReason, data?.hasPendingExtendRequest, data?.daysUntilContractEnd, data?.eligibilityDays]);
+    const tick = () => {
+      const diffMs = new Date(data.extensionPeriod!.endDate!).getTime() - Date.now();
+      if (diffMs <= 0) {
+        setBatchCountdown("00:00:00");
+        void load();
+        return;
+      }
+      const totalSeconds = Math.floor(diffMs / 1000);
+      const h = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+      const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+      const s = String(totalSeconds % 60).padStart(2, "0");
+      setBatchCountdown(`${h}:${m}:${s}`);
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [isBatchOpen, data?.extensionPeriod?.endDate, load]);
+
+  const renewalHint = useMemo(() => {
+    if (data?.pendingRenewalContract) {
+      const pr = data.pendingRenewalContract;
+      const from = pr.startDate ? new Date(pr.startDate).toLocaleDateString("vi-VN") : "—";
+      if (pr.status === "upcoming") {
+        return `HĐ gia hạn ${pr.contractNumber || ""} — sắp hiệu lực từ ${from}. HĐ hiện tại vẫn active đến hết hạn.`;
+      }
+      return `Đã tạo HĐ gia hạn ${pr.contractNumber || ""} — chờ xử lý.`;
+    }
+    if (isBatchOpen) {
+      const name = data?.extensionPeriod?.name ? `「${data.extensionPeriod.name}」` : "";
+      return `Gia hạn hợp đồng đang mở${name}. Hết hạn đợt: ${formatPeriodEndVi(data?.extensionPeriod?.endDate)} — còn ${batchCountdown || "…"}. Gia hạn thêm ${batchMonths} tháng.`;
+    }
+    if (data?.renewalBlockReason) return data.renewalBlockReason;
+    if (!data?.extensionEnabled) return null;
+    if (primary?.status !== "active") return "Chỉ hợp đồng đang hoạt động mới được gia hạn.";
+    if (daysLeft != null && daysLeft > renewalWindow) {
+      return `Còn ${daysLeft} ngày — chỉ gia hạn khi còn tối đa ${renewalWindow} ngày trước hạn, hoặc khi BQL mở đợt gia hạn.`;
+    }
+    if (daysLeft != null && daysLeft < 0) return "Hợp đồng đã hết hạn.";
+    return canRenew ? `Còn ${daysLeft} ngày đến hạn — bạn có thể gia hạn hợp đồng.` : "";
+  }, [data, primary, canRenew, daysLeft, renewalWindow, isBatchOpen, batchMonths, batchCountdown]);
 
   const countdown = useMemo(() => {
     if (!primary || primary.status !== "active") return null;
@@ -195,29 +297,73 @@ const MyContractsPage: React.FC = () => {
     return { text: `Còn ${d} ngày đến ngày kết thúc (${new Date(primary.endDate).toLocaleDateString("vi-VN")})`, warn: false };
   }, [primary]);
 
-  const submitExtend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!extendModalContract) return;
-    setExtendSubmitting(true);
+  const loadRenewPreview = useCallback(async (contractId: string, months?: number) => {
+    setRenewPreviewLoading(true);
     try {
-      await contractsApi.requestExtend(extendModalContract._id, extendMonths);
-      setExtendModalContract(null);
-      message.success("Đã gửi yêu cầu gia hạn — chờ Ban quản lý duyệt.");
+      const { data: preview } = await contractsApi.getRenewalPreview(contractId, months);
+      setRenewPreview(preview);
+    } catch (e2) {
+      setRenewPreview(null);
+      setErr(errMsg(e2));
+    } finally {
+      setRenewPreviewLoading(false);
+    }
+  }, []);
+
+  const openRenewModal = (c: Contract) => {
+    setRenewModalContract(c);
+    setRenewConsent(false);
+    setRenewPreview(null);
+    const defaultMonths = monthsBetween(c.startDate, c.endDate) || 12;
+    setRenewMonths(defaultMonths);
+    void loadRenewPreview(c._id, isBatchOpen ? undefined : defaultMonths);
+  };
+
+  useEffect(() => {
+    if (!renewModalContract || isBatchRenewal) return;
+    void loadRenewPreview(renewModalContract._id, renewMonths);
+  }, [renewMonths, renewModalContract, loadRenewPreview, isBatchRenewal]);
+
+  const submitRenew = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!renewModalContract || !renewConsent) return;
+    setRenewSubmitting(true);
+    setErr(null);
+    try {
+      const payload: { consentAccepted: true; months?: number } = { consentAccepted: true };
+      if (!isBatchRenewal) payload.months = renewMonths;
+      const { data: result } = await contractsApi.confirmRenewal(renewModalContract._id, payload);
+      setRenewModalContract(null);
+      setRenewPreview(null);
+      setRenewConsent(false);
+      const nc = result.newContract;
+      message.success(
+        `Đã tạo HĐ gia hạn ${nc?.contractNumber || ""} (sắp hiệu lực từ ${fmtDateDmy(nc?.startDate)}). HĐ hiện tại vẫn active.`
+      );
       await load();
     } catch (e2) {
       setErr(errMsg(e2));
     } finally {
-      setExtendSubmitting(false);
+      setRenewSubmitting(false);
     }
   };
 
   const signContract = async (c: Contract) => {
+    if (!signConsent) {
+      setErr("Vui lòng tích xác nhận điều khoản trước khi ký.");
+      return;
+    }
+    setSignSubmitting(true);
     try {
-      await contractsApi.sign(c._id);
-      message.success("Đã ký xác nhận hợp đồng. Vui lòng chờ admin xác nhận thanh toán.");
+      await contractsApi.sign(c._id, { consentAccepted: true });
+      message.success("Sinh viên đã ký hợp đồng. Vui lòng chờ admin xác nhận thanh toán.");
+      setViewModalContract(null);
+      setSignConsent(false);
       await load();
     } catch (e2) {
       setErr(errMsg(e2));
+    } finally {
+      setSignSubmitting(false);
     }
   };
 
@@ -232,7 +378,7 @@ const MyContractsPage: React.FC = () => {
   return (
     <div className="container pb-5" style={{ maxWidth: 960 }}>
       <h4 className="mb-1">Hợp đồng của tôi</h4>
-      <p className="text-muted small mb-4">Xem thông tin KTX, thời hạn và gửi yêu cầu gia hạn (admin duyệt).</p>
+      <p className="text-muted small mb-4">Xem thông tin KTX, thời hạn và gia hạn hợp đồng (tạo hợp đồng mới, giá theo bảng phòng hiện tại).</p>
 
       {err && (
         <div className="alert alert-danger py-2" role="alert">
@@ -249,8 +395,42 @@ const MyContractsPage: React.FC = () => {
           {countdown && (
             <div className={`alert ${countdown.warn ? "alert-warning" : "alert-light border"} small mb-3`}>{countdown.text}</div>
           )}
-          {primary.status === "active" && data && (
-            <div className={`alert ${canExtend ? "alert-success" : "alert-secondary"} small mb-3`}>{extensionHint}</div>
+          {primary.status === "active" && data && isBatchOpen && (
+            <div className="alert alert-success small mb-3">
+              <strong>Gia hạn hợp đồng đang mở</strong>
+              {data.extensionPeriod?.name ? ` — ${data.extensionPeriod.name}` : ""}
+              <div className="mt-1">
+                Hết hạn đợt: <strong>{formatPeriodEndVi(data.extensionPeriod?.endDate)}</strong>
+                {batchCountdown ? (
+                  <>
+                    {" "}
+                    · Còn lại: <strong className="font-monospace">{batchCountdown}</strong>
+                  </>
+                ) : null}
+              </div>
+              <div className="mt-1 text-muted">Bạn có thể gia hạn thêm {batchMonths} tháng (tạo hợp đồng mới).</div>
+            </div>
+          )}
+          {primary.status === "active" && data && !isBatchOpen && renewalHint && (
+            <div className={`alert ${canRenew ? "alert-success" : "alert-secondary"} small mb-3`}>{renewalHint}</div>
+          )}
+          {data?.pendingRenewalContract && (
+            <div className="alert alert-info small mb-3">
+              <strong>Hợp đồng gia hạn:</strong> {data.pendingRenewalContract.contractNumber} —{" "}
+              <span className="badge text-bg-info">Sắp có hiệu lực</span>
+              <div className="mt-1">
+                Bắt đầu: <strong>{fmtDateDmy(data.pendingRenewalContract.startDate)}</strong>
+                {data.pendingRenewalContract.endDate ? (
+                  <>
+                    {" "}
+                    · Kết thúc: <strong>{fmtDateDmy(data.pendingRenewalContract.endDate)}</strong>
+                  </>
+                ) : null}
+              </div>
+              <div className="mt-1 text-muted small">
+                HĐ hiện tại vẫn đang hiệu lực; hệ thống tự chuyển giao khi đến ngày bắt đầu (không giải phóng phòng/giường).
+              </div>
+            </div>
           )}
 
           <div className="row g-3 mb-4">
@@ -289,8 +469,11 @@ const MyContractsPage: React.FC = () => {
                       ? String(((primary.room as Room).area as { name?: string }).name)
                       : "—"}
                   </p>
-                  <p className="mb-0">
-                    <strong>Sức chứa / đang ở:</strong> {(primary.room as Room)?.capacity ?? "—"} /{" "}
+                  <p className="mb-1">
+                    <strong>Sức chứa (theo HĐ):</strong> {capacityAtSigning(primary, primary.room as Room)} chỗ
+                  </p>
+                  <p className="mb-0 text-muted">
+                    Phòng hiện tại: {(primary.room as Room)?.capacity ?? "—"} chỗ / đang ở{" "}
                     {(primary.room as Room)?.currentOccupancy ?? "—"}
                   </p>
                 </div>
@@ -317,28 +500,20 @@ const MyContractsPage: React.FC = () => {
                     <strong>Thời hạn (~tháng):</strong> {monthsBetween(primary.startDate, primary.endDate)}
                   </p>
                   <p className="mb-1">
-                    <strong>Giá thuê / tháng:</strong> {monthlyRentDisplay(primary)}
+                    <strong>Giá thuê / tháng (theo HĐ):</strong> {monthlyRentDisplay(primary)}
+                    {primary.status === "active" && (
+                      <span className="text-muted d-block small">Giá đóng băng — không đổi khi BQL cập nhật phòng</span>
+                    )}
                   </p>
                   <p className="mb-3">
                     <strong>Tiền cọc:</strong> {depositDisplay(primary)}
                   </p>
-                  <button type="button" className="btn btn-outline-light btn-sm w-100 mb-2" onClick={() => setViewModalContract(primary)}>
+                  <button type="button" className="btn btn-light btn-sm w-100 mb-2" onClick={() => setViewModalContract(primary)}>
                     Xem hợp đồng
                   </button>
-                  {primary.status === "pending_payment" && !primary.signedAt && (
-                    <button type="button" className="btn btn-warning btn-sm w-100" onClick={() => void signContract(primary)}>
-                      Ký xác nhận hợp đồng
-                    </button>
-                  )}
-                  {primary.status === "active" && (
-                    <button
-                      type="button"
-                      className={`btn btn-sm w-100 ${canExtend ? "btn-outline-primary" : "btn-outline-secondary"}`}
-                      disabled={!canExtend}
-                      title={!canExtend ? extensionHint : undefined}
-                      onClick={() => canExtend && setExtendModalContract(primary)}
-                    >
-                      Yêu cầu gia hạn
+                  {primary.status === "active" && canRenew && (
+                    <button type="button" className="btn btn-warning btn-sm w-100 fw-semibold" onClick={() => openRenewModal(primary)}>
+                      Gia hạn hợp đồng
                     </button>
                   )}
                 </div>
@@ -412,35 +587,111 @@ const MyContractsPage: React.FC = () => {
         </>
       )}
 
-      {extendModalContract && (
+      {renewModalContract && (
         <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,0.45)" }}>
-          <div className="modal-dialog">
+          <div className="modal-dialog modal-lg">
             <div className="modal-content">
               <div className="modal-header">
-                <h5 className="modal-title">Yêu cầu gia hạn</h5>
-                <button type="button" className="btn-close" aria-label="Đóng" onClick={() => setExtendModalContract(null)} />
+                <h5 className="modal-title">Gia hạn hợp đồng</h5>
+                <button
+                  type="button"
+                  className="btn-close"
+                  aria-label="Đóng"
+                  onClick={() => {
+                    setRenewModalContract(null);
+                    setRenewPreview(null);
+                    setRenewConsent(false);
+                  }}
+                />
               </div>
-              <form onSubmit={submitExtend}>
+              <form onSubmit={submitRenew}>
                 <div className="modal-body">
-                  <p className="small text-muted">
-                    Gửi yêu cầu gia hạn thêm số tháng. Trạng thái sẽ là <strong>chờ duyệt</strong> cho đến khi BQL xử lý. Chỉ áp dụng khi hợp đồng đang{" "}
-                    <strong>active</strong>.
+                  <p className="small text-muted mb-3">
+                    Hệ thống tạo <strong>hợp đồng mới</strong> (mã mới), không sửa hợp đồng hiện tại. Bạn tiếp tục ở phòng cũ; giá và sức chứa lấy từ bảng phòng tại thời điểm xác nhận.
                   </p>
-                  <label className="form-label">Số tháng gia hạn</label>
-                  <select className="form-select" value={extendMonths} onChange={(e) => setExtendMonths(Number(e.target.value))}>
-                    {[1, 2, 3, 4, 5, 6, 9, 12, 18, 24, 36].map((m) => (
-                      <option key={m} value={m}>
-                        {m} tháng
-                      </option>
-                    ))}
-                  </select>
+                  {renewPreviewLoading && <p className="small text-muted">Đang tải biểu mẫu…</p>}
+                  {renewPreview && (
+                    <div className="border rounded p-3 mb-3 bg-light small">
+                      <div className="row g-2">
+                        <div className="col-md-6">
+                          <strong>HĐ hiện tại</strong>
+                          <div>{renewPreview.sourceContract.contractNumber}</div>
+                          <div>Hết hạn: {fmtDateDmy(renewPreview.sourceContract.endDate)}</div>
+                          <div>
+                            Giá đang áp dụng: {fmtMoney(renewPreview.sourceContract.contractPrice ?? 0)}/tháng (chỗ)
+                          </div>
+                        </div>
+                        <div className="col-md-6">
+                          <strong>HĐ gia hạn (dự kiến)</strong>
+                          <div>
+                            Từ {fmtDateDmy(renewPreview.newContractPreview.startDate)} → {fmtDateDmy(renewPreview.newContractPreview.endDate)}
+                          </div>
+                          <div>
+                            Giá mới:{" "}
+                            <strong>{fmtMoney(renewPreview.newContractPreview.contractPrice)}</strong>/tháng (chỗ)
+                          </div>
+                          <div>Sức chứa phòng: {renewPreview.newContractPreview.roomCapacityAtSigning} chỗ</div>
+                          {renewPreview.newContractPreview.priorityDiscountPercent ? (
+                            <div className="text-success">
+                              Ưu tiên: −{renewPreview.newContractPreview.priorityDiscountPercent}%
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                      {typeof renewPreview.newContractPreview.room === "object" && renewPreview.newContractPreview.room && (
+                        <div className="mt-2">
+                          Phòng: {(renewPreview.newContractPreview.room as Room).roomNumber}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {isBatchRenewal ? (
+                    <p className="alert alert-info py-2 small mb-3">
+                      <strong>Đợt gia hạn:</strong> thời hạn mới = ngày kết thúc HĐ cũ + đúng{" "}
+                      <strong>{renewPreview?.batchExtensionMonths ?? batchMonths} tháng</strong>
+                      {renewPreview?.extensionPeriod?.name ? ` (${renewPreview.extensionPeriod.name})` : ""}.
+                    </p>
+                  ) : (
+                    <>
+                      <label className="form-label">Thời hạn gia hạn</label>
+                      <p className="small text-muted mb-1">
+                        Mặc định bằng thời hạn HĐ hiện tại (~{monthsBetween(renewModalContract.startDate, renewModalContract.endDate)} tháng).
+                      </p>
+                      <select className="form-select mb-3" value={renewMonths} onChange={(e) => setRenewMonths(Number(e.target.value))}>
+                        {[6, 9, 12, 18, 24, 36].map((m) => (
+                          <option key={m} value={m}>
+                            {m} tháng
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  )}
+                  <div className="form-check">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="renewConsent"
+                      checked={renewConsent}
+                      onChange={(e) => setRenewConsent(e.target.checked)}
+                    />
+                    <label className="form-check-label small" htmlFor="renewConsent">
+                      {renewPreview?.consentText || CONTRACT_CONSENT_LABEL}
+                    </label>
+                  </div>
                 </div>
                 <div className="modal-footer">
-                  <button type="button" className="btn btn-secondary" onClick={() => setExtendModalContract(null)}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setRenewModalContract(null);
+                      setRenewPreview(null);
+                    }}
+                  >
                     Đóng
                   </button>
-                  <button type="submit" className="btn btn-primary" disabled={extendSubmitting}>
-                    {extendSubmitting ? "Đang gửi…" : "Gửi yêu cầu"}
+                  <button type="submit" className="btn btn-primary" disabled={renewSubmitting || !renewConsent || renewPreviewLoading}>
+                    {renewSubmitting ? "Đang xử lý…" : "Xác nhận gia hạn"}
                   </button>
                 </div>
               </form>
@@ -465,12 +716,9 @@ const MyContractsPage: React.FC = () => {
                     typeof r?.area === "object" && r.area ? String((r.area as { name?: string }).name || "") : "";
                   const gender = String((student as { gender?: string } | null)?.gender || "");
                   const genderLabel = gender.toLowerCase().includes("nam") ? "Nam" : gender.toLowerCase().includes("nữ") || gender.toLowerCase().includes("nu") ? "Nữ" : "—";
-                  const fee = roomFeePerSlot(c);
-                  const roomFullMonthly = Math.round(Number(r?.price ?? 0));
-                  const slots = (() => {
-                    const cap = Number(r?.capacity ?? 0);
-                    return Number.isFinite(cap) && cap >= 1 ? cap : 1;
-                  })();
+                  const fee = roomFeePerSlot(c, r);
+                  const roomFullMonthly = contractRoomMonthlySnapshot(c, r) || Math.round(Number(r?.currentPrice ?? r?.price ?? 0));
+                  const slots = capacityAtSigning(c, r);
                   const months = monthsBetween(c.startDate, c.endDate) || 12;
                   const total = fee * months;
                   const deposit = c.depositAmount != null ? Number(c.depositAmount) : 100000;
@@ -564,10 +812,43 @@ Hướng dẫn: ${c.signedAt ? "Bạn đã ký xác nhận. Vui lòng chờ admi
                   );
                 })()}
               </div>
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setViewModalContract(null)}>
-                  Đóng
-                </button>
+              <div className="modal-footer flex-column flex-sm-row align-items-stretch gap-2">
+                {viewModalContract.status === "pending_payment" && !viewModalContract.signedAt && (
+                  <div className="form-check text-start me-auto mb-0">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="signConsent"
+                      checked={signConsent}
+                      onChange={(e) => setSignConsent(e.target.checked)}
+                    />
+                    <label className="form-check-label small" htmlFor="signConsent">
+                      {CONTRACT_CONSENT_LABEL}
+                    </label>
+                  </div>
+                )}
+                <div className="d-flex gap-2 ms-sm-auto">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setViewModalContract(null);
+                      setSignConsent(false);
+                    }}
+                  >
+                    Đóng
+                  </button>
+                  {viewModalContract.status === "pending_payment" && !viewModalContract.signedAt && (
+                    <button
+                      type="button"
+                      className="btn btn-warning"
+                      disabled={!signConsent || signSubmitting}
+                      onClick={() => void signContract(viewModalContract)}
+                    >
+                      {signSubmitting ? "Đang ký…" : "Ký xác nhận"}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -579,13 +860,19 @@ Hướng dẫn: ${c.signedAt ? "Bạn đã ký xác nhận. Vui lòng chờ admi
 
 function ExtendRow({ r }: { r: ContractExtendRequest }) {
   const cn = typeof r.contract === "object" ? r.contract.contractNumber || r.contract._id : r.contract;
+  const newCn =
+    typeof r.newContract === "object" && r.newContract
+      ? (r.newContract as Contract).contractNumber || (r.newContract as Contract)._id
+      : r.newContract
+        ? String(r.newContract)
+        : "—";
   let stLabel: string = r.status;
   let stCls = "text-bg-secondary";
   if (r.status === "pending") {
     stLabel = "Chờ duyệt";
     stCls = "text-bg-warning text-dark";
   } else if (r.status === "approved") {
-    stLabel = "Đã duyệt";
+    stLabel = "Đã xác nhận";
     stCls = "text-bg-success";
   } else if (r.status === "rejected") {
     stLabel = "Từ chối";
@@ -593,13 +880,15 @@ function ExtendRow({ r }: { r: ContractExtendRequest }) {
   }
   const note =
     r.status === "approved" && r.appliedEndDate
-      ? `Ngày kết thúc mới: ${new Date(r.appliedEndDate).toLocaleDateString("vi-VN")}`
-      : r.note || "—";
+      ? `HĐ mới đến ${new Date(r.appliedEndDate).toLocaleDateString("vi-VN")}${newCn !== "—" ? ` (${newCn})` : ""}`
+      : r.note || r.adminNote || "—";
   return (
     <tr>
-      <td className="small">{r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN") : "—"}</td>
+      <td className="small">
+        {r.requestedAt || r.createdAt ? new Date(r.requestedAt || r.createdAt!).toLocaleString("vi-VN") : "—"}
+      </td>
       <td>{cn}</td>
-      <td>{r.months}</td>
+      <td>{r.requestedMonths ?? r.months}</td>
       <td>
         <span className={`badge ${stCls}`}>{stLabel}</span>
       </td>

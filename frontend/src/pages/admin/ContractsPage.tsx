@@ -16,6 +16,7 @@ import {
   Select,
   Input,
   Alert,
+  Switch,
 } from "antd";
 import {
   EyeOutlined,
@@ -29,7 +30,8 @@ import {
   DollarOutlined,
 } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
-import { contractsApi, client, opsContractsApi } from "../../api";
+import { contractsApi, client, opsContractsApi, dashboardApi, extensionPeriodsApi } from "../../api";
+import { useNowMs } from "../../hooks/useNowMs";
 import { areasApi } from "../../api";
 import { useSocket } from "../../contexts/SocketContext";
 import type { Area, Contract, ContractExtendRequest, Room, User } from "../../types";
@@ -73,6 +75,21 @@ const extendStatusMap: Record<string, { color: string; text: string }> = {
   rejected: { color: "red", text: "Từ chối" },
 };
 
+type ExtensionPeriodItem = {
+  _id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  isActive: boolean;
+  note?: string;
+};
+
+function isExtPeriodOpenNow(period: ExtensionPeriodItem | null | undefined, nowMs: number): boolean {
+  if (!period?.isActive) return false;
+  const now = dayjs(nowMs);
+  return !now.isBefore(dayjs(period.startDate)) && !now.isAfter(dayjs(period.endDate));
+}
+
 const ContractsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const openContractId = searchParams.get("openContract")?.trim() || "";
@@ -99,6 +116,19 @@ const ContractsPage: React.FC = () => {
   const [extendLoading, setExtendLoading] = useState(false);
   const [rejectExt, setRejectExt] = useState<{ id: string; note: string } | null>(null);
   const [confirmModal, setConfirmModal] = useState<{ contract: Contract; signedPdfUrl: string } | null>(null);
+  const nowMs = useNowMs(1000);
+  const [extPeriods, setExtPeriods] = useState<ExtensionPeriodItem[]>([]);
+  const [extPeriodsLoading, setExtPeriodsLoading] = useState(true);
+  const [extPeriodsError, setExtPeriodsError] = useState<string | null>(null);
+  const [contractExtensionEnabled, setContractExtensionEnabled] = useState<boolean | null>(null);
+  const [contractExtensionToggling, setContractExtensionToggling] = useState(false);
+  const [extTogglingId, setExtTogglingId] = useState<string | null>(null);
+  const [extOpenModalOpen, setExtOpenModalOpen] = useState(false);
+  const [extCreateModalOpen, setExtCreateModalOpen] = useState(false);
+  const [extQuickCountdown, setExtQuickCountdown] = useState("");
+  const [extOpenForm] = Form.useForm();
+  const [extCreateForm] = Form.useForm();
+
   const [ops, setOps] = useState<{
     activeContracts: number;
     expiringSoonContracts: number;
@@ -111,6 +141,35 @@ const ContractsPage: React.FC = () => {
     roomsMaintenance: number;
     pendingMaintenanceReports: number;
   } | null>(null);
+
+  const loadExtensionPeriods = async () => {
+    setExtPeriodsLoading(true);
+    setExtPeriodsError(null);
+    try {
+      const res = await extensionPeriodsApi.getAll();
+      setExtPeriods((res.data || []) as ExtensionPeriodItem[]);
+    } catch (err: unknown) {
+      const st = (err as { response?: { status?: number } })?.response?.status;
+      const msg =
+        st === 404
+          ? "API đợt gia hạn chưa sẵn sàng — khởi động lại backend."
+          : "Không tải được danh sách đợt gia hạn";
+      setExtPeriodsError(msg);
+      setExtPeriods([]);
+    } finally {
+      setExtPeriodsLoading(false);
+    }
+  };
+
+  const loadContractExtensionSetting = async () => {
+    try {
+      const res = await dashboardApi.getContractExtensionSetting();
+      const v = res.data?.enable_contract_extension;
+      setContractExtensionEnabled(typeof v === "boolean" ? v : true);
+    } catch {
+      setContractExtensionEnabled(true);
+    }
+  };
 
   const loadExtendRequests = async () => {
     setExtendLoading(true);
@@ -158,6 +217,148 @@ const ContractsPage: React.FC = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    void loadExtensionPeriods();
+    void loadContractExtensionSetting();
+  }, []);
+
+  const activeExtPeriod = extPeriods.find((p) => isExtPeriodOpenNow(p, nowMs)) || null;
+
+  useEffect(() => {
+    if (!activeExtPeriod) {
+      setExtQuickCountdown("");
+      return;
+    }
+    const tick = () => {
+      const diffMs = dayjs(activeExtPeriod.endDate).diff(dayjs());
+      if (diffMs <= 0) {
+        setExtQuickCountdown("00:00:00");
+        void loadExtensionPeriods();
+        return;
+      }
+      const totalSeconds = Math.floor(diffMs / 1000);
+      const h = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+      const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+      const s = String(totalSeconds % 60).padStart(2, "0");
+      setExtQuickCountdown(`${h}:${m}:${s}`);
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [activeExtPeriod?._id, activeExtPeriod?.endDate]);
+
+  const handleContractExtensionToggle = async (checked: boolean) => {
+    const prev = contractExtensionEnabled ?? true;
+    setContractExtensionEnabled(checked);
+    setContractExtensionToggling(true);
+    try {
+      await dashboardApi.setContractExtensionSetting({ enable_contract_extension: checked });
+      message.success(checked ? "Đã bật gia hạn hợp đồng" : "Đã tắt gia hạn hợp đồng");
+    } catch (err: unknown) {
+      setContractExtensionEnabled(prev);
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không cập nhật được");
+    } finally {
+      setContractExtensionToggling(false);
+    }
+  };
+
+  const handleToggleExtActive = async (period: ExtensionPeriodItem, checked: boolean) => {
+    setExtTogglingId(period._id);
+    try {
+      await extensionPeriodsApi.update(period._id, { isActive: checked });
+      message.success(checked ? "Đã mở đợt gia hạn" : "Đã đóng đợt gia hạn");
+      await loadExtensionPeriods();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không cập nhật được đợt");
+    } finally {
+      setExtTogglingId(null);
+    }
+  };
+
+  const handleExtMainToggle = async (checked: boolean) => {
+    if (contractExtensionEnabled === false) {
+      message.warning("Bật chức năng gia hạn toàn hệ thống trước khi mở đợt");
+      return;
+    }
+    if (checked) {
+      extOpenForm.setFieldsValue({ endDate: dayjs().add(14, "day") });
+      setExtOpenModalOpen(true);
+      return;
+    }
+    if (!activeExtPeriod) return;
+    const closed = extPeriods.find((p) => p._id === activeExtPeriod._id) || activeExtPeriod;
+    await handleToggleExtActive(closed, false);
+  };
+
+  const handleConfirmExtOpen = async (values: { endDate: ReturnType<typeof dayjs> }) => {
+    const end = values.endDate;
+    if (!end || end.isBefore(dayjs())) {
+      message.error("Vui lòng chọn ngày giờ hết hạn lớn hơn hiện tại");
+      return;
+    }
+    const now = dayjs();
+    const target = activeExtPeriod || extPeriods[0] || null;
+    setExtTogglingId(target?._id || "new");
+    try {
+      if (target) {
+        await extensionPeriodsApi.update(target._id, {
+          startDate: now.toISOString(),
+          endDate: end.toISOString(),
+          isActive: true,
+        });
+      } else {
+        const created = await extensionPeriodsApi.create({
+          name: `Đợt gia hạn ${now.format("DD/MM/YYYY HH:mm")}`,
+          startDate: now.toISOString(),
+          endDate: end.toISOString(),
+        });
+        const newId = (created.data as ExtensionPeriodItem)?._id;
+        if (newId) {
+          await extensionPeriodsApi.update(newId, {
+            startDate: now.toISOString(),
+            endDate: end.toISOString(),
+            isActive: true,
+          });
+        }
+      }
+      message.success("Đã mở đợt gia hạn — sinh viên có HĐ active có thể gia hạn (thêm 6 tháng)");
+      setExtOpenModalOpen(false);
+      extOpenForm.resetFields();
+      await loadExtensionPeriods();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không mở được đợt");
+    } finally {
+      setExtTogglingId(null);
+    }
+  };
+
+  const handleCreateExtPeriod = async (values: {
+    name: string;
+    startDate: ReturnType<typeof dayjs>;
+    endDate: ReturnType<typeof dayjs>;
+  }) => {
+    try {
+      await extensionPeriodsApi.create({
+        name: values.name,
+        startDate: values.startDate.toISOString(),
+        endDate: values.endDate.toISOString(),
+      });
+      message.success("Đã tạo đợt gia hạn");
+      setExtCreateModalOpen(false);
+      extCreateForm.resetFields();
+      await loadExtensionPeriods();
+    } catch (err: unknown) {
+      message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không tạo được đợt");
+    }
+  };
+
+  const extensionStatusText =
+    contractExtensionEnabled === false
+      ? "Chức năng gia hạn đang tắt toàn cục"
+      : activeExtPeriod
+        ? `Đang mở — hết hạn ${dayjs(activeExtPeriod.endDate).format("DD/MM/YYYY HH:mm")} (còn ${extQuickCountdown || "…"})`
+        : "Chưa mở đợt — sinh viên chỉ gia hạn khi còn ≤30 ngày đến hạn HĐ";
 
   useEffect(() => {
     void load();
@@ -460,6 +661,117 @@ const ContractsPage: React.FC = () => {
       </Card>
 
       <Card
+        id="extension-period-panel"
+        title="Đợt gia hạn hợp đồng"
+        style={{ marginBottom: 16, borderRadius: 12, scrollMarginTop: 80 }}
+        loading={extPeriodsLoading && contractExtensionEnabled === null}
+        extra={
+          <Button size="small" onClick={() => setExtCreateModalOpen(true)}>
+            Tạo đợt
+          </Button>
+        }
+      >
+        {extPeriodsError ? (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={extPeriodsError}
+            action={
+              <Button size="small" onClick={() => void loadExtensionPeriods()}>
+                Thử lại
+              </Button>
+            }
+          />
+        ) : null}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>Cho phép gia hạn (toàn hệ thống)</div>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>
+              {contractExtensionEnabled === false
+                ? "Tắt — sinh viên không thể gia hạn"
+                : "Bật — có thể mở đợt gia hạn tập trung"}
+            </div>
+          </div>
+          <Switch
+            checked={contractExtensionEnabled ?? true}
+            checkedChildren="Bật"
+            unCheckedChildren="Tắt"
+            loading={contractExtensionToggling}
+            onChange={(v) => void handleContractExtensionToggle(v)}
+          />
+        </div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            paddingTop: 12,
+            borderTop: "1px solid #f3f4f6",
+            flexWrap: "wrap",
+            gap: 12,
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 700 }}>Mở đợt gia hạn hiện tại</div>
+            <div style={{ fontSize: 12, color: "#6b7280", maxWidth: 520 }}>{extensionStatusText}</div>
+            {activeExtPeriod ? (
+              <div style={{ fontSize: 12, color: "#059669", marginTop: 4 }}>
+                Trong đợt: mọi SV có HĐ <strong>active</strong> thấy nút gia hạn (HĐ mới +6 tháng), bỏ qua giới hạn 30 ngày.
+              </div>
+            ) : null}
+          </div>
+          <Switch
+            checked={!!activeExtPeriod}
+            checkedChildren="Mở"
+            unCheckedChildren="Đóng"
+            loading={!!extTogglingId}
+            disabled={contractExtensionEnabled === false}
+            onChange={(v) => void handleExtMainToggle(v)}
+          />
+        </div>
+        {contractExtensionEnabled !== false && extPeriods.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>Lịch sử đợt (gần nhất)</div>
+            <Table<ExtensionPeriodItem>
+              size="small"
+              rowKey="_id"
+              pagination={false}
+              dataSource={extPeriods.slice(0, 5)}
+              columns={[
+                { title: "Tên đợt", dataIndex: "name", key: "name" },
+                {
+                  title: "Bắt đầu",
+                  key: "start",
+                  width: 150,
+                  render: (_, r) => dayjs(r.startDate).format("DD/MM/YYYY HH:mm"),
+                },
+                {
+                  title: "Kết thúc",
+                  key: "end",
+                  width: 150,
+                  render: (_, r) => dayjs(r.endDate).format("DD/MM/YYYY HH:mm"),
+                },
+                {
+                  title: "Trạng thái",
+                  key: "st",
+                  width: 120,
+                  render: (_, r) =>
+                    isExtPeriodOpenNow(r, nowMs) ? (
+                      <Tag color="green">Đang mở</Tag>
+                    ) : r.isActive ? (
+                      <Tag color="gold">Đã bật (ngoài hạn)</Tag>
+                    ) : (
+                      <Tag>Đóng</Tag>
+                    ),
+                },
+              ]}
+            />
+          </div>
+        )}
+      </Card>
+
+      <Card
         id="extend-requests"
         title={`Quản lý đơn gia hạn (${extendStatusFilter === "pending" ? `${extendReqs.length} hiển thị` : "danh sách"})`}
         style={{ marginBottom: 24, borderRadius: 12, scrollMarginTop: 80 }}
@@ -501,7 +813,7 @@ const ContractsPage: React.FC = () => {
             type="info"
             showIcon
             message="Chưa có yêu cầu gia hạn"
-            description="Sinh viên gửi từ «Hợp đồng của tôi» khi Dashboard bật gia hạn, mở đợt, HĐ active và sắp hết hạn (≤60 ngày)."
+            description="Sinh viên gia hạn từ «Hợp đồng của tôi»: mở đợt ở khối phía trên (mọi HĐ active) hoặc tự động khi còn ≤30 ngày đến hạn."
           />
         ) : (
           <Table<ContractExtendRequest>
@@ -1081,6 +1393,51 @@ const ContractsPage: React.FC = () => {
             </div>
           );
         })()}
+      </Modal>
+
+      <Modal title="Tạo đợt gia hạn hợp đồng" open={extCreateModalOpen} onCancel={() => setExtCreateModalOpen(false)} footer={null}>
+        <Form form={extCreateForm} layout="vertical" onFinish={handleCreateExtPeriod}>
+          <Form.Item name="name" label="Tên đợt" rules={[{ required: true, message: "Nhập tên đợt" }]}>
+            <Input placeholder="VD: Gia hạn HK2 2025–2026" />
+          </Form.Item>
+          <Form.Item name="startDate" label="Ngày bắt đầu" rules={[{ required: true, message: "Chọn ngày bắt đầu" }]}>
+            <DatePicker style={{ width: "100%" }} showTime />
+          </Form.Item>
+          <Form.Item name="endDate" label="Ngày kết thúc" rules={[{ required: true, message: "Chọn ngày kết thúc" }]}>
+            <DatePicker style={{ width: "100%" }} showTime />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" htmlType="submit">
+              Tạo đợt
+            </Button>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Mở đợt gia hạn hợp đồng"
+        open={extOpenModalOpen}
+        onCancel={() => setExtOpenModalOpen(false)}
+        onOk={() => extOpenForm.submit()}
+        okText="Mở đợt"
+        cancelText="Hủy"
+        confirmLoading={!!extTogglingId}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Sinh viên có hợp đồng đang hiệu lực sẽ thấy nút Gia hạn ngay, không cần chờ gần ngày hết hạn."
+        />
+        <Form form={extOpenForm} layout="vertical" onFinish={handleConfirmExtOpen}>
+          <Form.Item
+            name="endDate"
+            label="Ngày giờ hết hạn đợt gia hạn"
+            rules={[{ required: true, message: "Chọn ngày giờ kết thúc" }]}
+          >
+            <DatePicker style={{ width: "100%" }} showTime disabledDate={(d) => !!d && d < dayjs().startOf("day")} />
+          </Form.Item>
+        </Form>
       </Modal>
 
       <Modal

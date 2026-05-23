@@ -16,11 +16,18 @@ async function main() {
   });
   let n = 0;
   for (const c of rows) {
-    if (c.signedAt && c.contractPrice != null) continue;
-    const [roomDoc, userDoc] = await Promise.all([Room.findById(c.room).lean(), User.findById(c.user).select("priorityType").lean()]);
+    if (c.contractPrice != null && c.roomCapacityAtSigning != null) continue;
+    const [roomDoc, userDoc] = await Promise.all([
+      Room.findById(c.room).lean(),
+      User.findById(c.user).select("priorityType").lean(),
+    ]);
     if (!roomDoc) continue;
     const pricing = buildContractPricingFields({ roomDoc, userDoc });
-    await Contract.updateOne({ _id: c._id }, { $set: pricing });
+    const patch = { ...pricing };
+    if (c.signedAt || c.status === "active") {
+      patch.financialLockedAt = c.financialLockedAt || c.signedAt || c.paymentConfirmedAt || new Date();
+    }
+    await Contract.updateOne({ _id: c._id }, { $set: patch });
     n += 1;
   }
   console.log(`Updated ${n} contracts`);

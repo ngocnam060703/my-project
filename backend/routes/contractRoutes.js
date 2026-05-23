@@ -31,9 +31,31 @@ router.patch(
   contractController.rejectExtendRequest
 );
 
-router.put("/:id/sign", requireRole("user"), contractController.studentSign);
+router.put(
+  "/:id/sign",
+  requireRole("user"),
+  contractValidators.studentSign,
+  validateRequest,
+  contractController.studentSign
+);
 
-/** Sinh viên — gửi yêu cầu gia hạn (pending) */
+router.get(
+  "/:id/renewal-preview",
+  requireRole("user"),
+  contractValidators.renewalPreviewQuery,
+  validateRequest,
+  contractController.getRenewalPreview
+);
+
+router.post(
+  "/:id/confirm-renewal",
+  requireRole("user"),
+  contractValidators.confirmRenewal,
+  validateRequest,
+  contractController.confirmRenewal
+);
+
+/** Legacy — gửi yêu cầu chờ admin (khuyến nghị confirm-renewal) */
 router.post(
   "/:id/request-extend",
   requireRole("user"),

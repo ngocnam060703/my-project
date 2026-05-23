@@ -72,6 +72,15 @@ async function syncExpiredActiveContracts(limit = 80) {
 
   let count = 0;
   for (const c of list) {
+    const hasRenewalSuccessor = await Contract.exists({
+      renewedFromContract: c._id,
+      status: { $in: ["upcoming", "active", "pending_payment"] },
+    });
+    if (hasRenewalSuccessor) {
+      await Contract.updateOne({ _id: c._id, status: "active" }, { $set: { status: "completed" } });
+      count += 1;
+      continue;
+    }
     await releaseBedForContractId(c._id, null, "Tự động: hết hạn hợp đồng");
     await Contract.updateOne({ _id: c._id }, { $set: { status: "expired", bed: null } });
     await recountRoomOccupancyForRoom(c.room);

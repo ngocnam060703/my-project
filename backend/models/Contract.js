@@ -2,26 +2,32 @@ const mongoose = require("mongoose");
 
 const contractSchema = new mongoose.Schema(
   {
-    /** Có thể null khi admin tạo hợp đồng thủ công (không qua đơn đăng ký). */
     registration: { type: mongoose.Schema.Types.ObjectId, ref: "Registration", default: null },
-    /** Đơn xét duyệt (module Application) — tách biệt Registration */
     application: { type: mongoose.Schema.Types.ObjectId, ref: "Application", default: null },
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     room: { type: mongoose.Schema.Types.ObjectId, ref: "Room", required: true },
-    /** Giường được xếp trong phòng (Bed) */
     bed: { type: mongoose.Schema.Types.ObjectId, ref: "Bed", default: null, index: true },
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     status: {
       type: String,
-      enum: ["pending_payment", "active", "expired", "terminated"],
+      enum: ["pending_payment", "upcoming", "active", "completed", "expired", "terminated"],
       default: "pending_payment",
     },
     contractNumber: { type: String, unique: true },
     terms: { type: String, default: "" },
     signedAt: { type: Date, default: null },
+    studentSignStatus: {
+      type: String,
+      enum: ["pending", "student_signed"],
+      default: "pending",
+    },
     studentConfirmedAt: { type: Date, default: null },
     studentConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    studentSignIp: { type: String, default: "" },
+    studentSignUserAgent: { type: String, default: "" },
+    consentAcceptedAt: { type: Date, default: null },
+    consentTextVersion: { type: String, default: "v1-click-wrap-ktx" },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     paymentConfirmedAt: { type: Date, default: null },
     paymentConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
@@ -31,10 +37,22 @@ const contractSchema = new mongoose.Schema(
     signedPdfUploadedAt: { type: Date, default: null },
     signedPdfUploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     cancelReason: { type: String, default: "" },
-    /** Giá thuê / tháng (VNĐ) — tuỳ chọn; nếu null UI dùng giá phòng */
+    contractPrice: { type: Number, min: 0 },
+    roomCurrentPriceSnapshot: { type: Number, min: 0 },
+    roomCapacityAtSigning: { type: Number, min: 1 },
+    priorityPolicyType: { type: String, default: "normal" },
+    priorityDiscountPercent: { type: Number, default: 0, min: 0, max: 100 },
+    baseSlotPriceBeforeDiscount: { type: Number, min: 0 },
     monthlyRent: { type: Number, default: null },
-    /** Tiền cọc (VNĐ) — tuỳ chọn */
     depositAmount: { type: Number, default: null },
+    financialLockedAt: { type: Date, default: null },
+    renewedFromContract: { type: mongoose.Schema.Types.ObjectId, ref: "Contract", default: null },
+    isRenewalContract: { type: Boolean, default: false },
+    renewalConsentAt: { type: Date, default: null },
+    renewalConsentIp: { type: String, default: "" },
+    renewalConfirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    renewalConsentUserAgent: { type: String, default: "" },
+    renewalConsentTextVersion: { type: String, default: "" },
   },
   { timestamps: true }
 );

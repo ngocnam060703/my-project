@@ -25,6 +25,8 @@ const contractExtendRequestSchema = new mongoose.Schema(
     reviewedAt: { type: Date, default: null },
     /** Đợt gia hạn tại thời điểm gửi yêu cầu */
     extensionPeriod: { type: mongoose.Schema.Types.ObjectId, ref: "ContractExtensionPeriod", default: null },
+    /** HĐ mới sinh ra khi SV xác nhận gia hạn (luồng mới) */
+    newContract: { type: mongoose.Schema.Types.ObjectId, ref: "Contract", default: null },
   },
   { timestamps: true }
 );

@@ -313,7 +313,11 @@ export const contractsApi = {
   terminate: (id: string) => client.put(`/contracts/${id}/terminate`),
   remove: (id: string) => client.delete(`/contracts/${id}`),
   uploadSignedPdf: (id: string, signedPdfUrl: string) => client.put(`/contracts/${id}/upload-signed-pdf`, { signedPdfUrl }),
-  sign: (id: string) => client.put(`/contracts/${id}/sign`),
+  sign: (id: string, data?: { consentAccepted: true }) => client.put(`/contracts/${id}/sign`, data || {}),
+  getRenewalPreview: (id: string, months?: number) =>
+    client.get(`/contracts/${id}/renewal-preview`, { params: months != null ? { months } : {} }),
+  confirmRenewal: (id: string, data: { months?: number; consentAccepted: true }) =>
+    client.post(`/contracts/${id}/confirm-renewal`, data),
   confirmPayment: (id: string) => client.put(`/contracts/${id}/confirm-payment`),
   /** Admin: tạo slot giường nếu thiếu + gán giường trống cho hợp đồng */
   ensureBed: (id: string) => client.put(`/contracts/${encodeURIComponent(id)}/ensure-bed`),

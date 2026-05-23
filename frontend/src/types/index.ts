@@ -184,6 +184,8 @@ export interface Room {
   capacity: number;
   currentOccupancy: number;
   price: number;
+  currentPrice?: number;
+  maxCapacity?: number;
   pricePerPerson?: number;
   floor?: number;
   status: string;
@@ -236,17 +238,56 @@ export interface Contract {
   status: string;
   contractNumber?: string;
   signedAt?: string | null;
+  studentSignStatus?: "pending" | "student_signed";
   signedPdfUrl?: string;
   studentConfirmedAt?: string | null;
   paymentConfirmedAt?: string | null;
   terms?: string;
   application?: string | null;
-  /** VNĐ/tháng — nếu null UI dùng giá phòng */
+  contractPrice?: number;
+  roomCurrentPriceSnapshot?: number;
+  roomCapacityAtSigning?: number;
+  priorityDiscountPercent?: number;
   monthlyRent?: number | null;
-  /** VNĐ — nếu null hiển thị “theo quy định” */
   depositAmount?: number | null;
-  /** Giường hiện tại (nếu hệ thống quản lý theo giường) */
+  renewedFromContract?: string | Contract | null;
+  isRenewalContract?: boolean;
   bed?: string | Bed | null;
+  financialLockedAt?: string | null;
+  displayPricing?: {
+    pricingFrozen?: boolean;
+    contractPrice?: number;
+    roomMonthlySnapshot?: number;
+    roomCapacityAtSigning?: number;
+    baseSlotPriceBeforeDiscount?: number;
+    priorityDiscountPercent?: number;
+  };
+}
+
+export interface ContractRenewalPreview {
+  renewalMode?: "batch" | "individual";
+  fixedTerm?: boolean;
+  batchExtensionMonths?: number;
+  extensionPeriod?: ExtensionPeriodInfo;
+  sourceContract: {
+    _id: string;
+    contractNumber?: string;
+    endDate: string;
+    contractPrice?: number;
+    roomCapacityAtSigning?: number;
+  };
+  newContractPreview: {
+    startDate: string;
+    endDate: string;
+    months: number;
+    contractPrice: number;
+    roomCurrentPriceSnapshot: number;
+    roomCapacityAtSigning: number;
+    priorityDiscountPercent?: number;
+    room?: Room;
+  };
+  consentText: string;
+  consentTextVersion?: string;
 }
 
 export interface Bed {
@@ -298,9 +339,13 @@ export interface ContractExtendRequest {
   contract: Contract | { _id?: string; contractNumber?: string; status?: string; endDate?: string; startDate?: string; signedAt?: string | null; signedPdfUrl?: string };
   user?: string | User;
   months: number;
+  requestedMonths?: number;
   status: "pending" | "approved" | "rejected";
   snapshotEndDate?: string;
   appliedEndDate?: string | null;
+  newContract?: string | Contract | null;
+  adminNote?: string;
+  requestedAt?: string;
   note?: string;
   reviewedAt?: string | null;
   reviewedBy?: string | User;
@@ -324,7 +369,13 @@ export interface MyContractOverview {
   extensionEnabled: boolean;
   extensionPeriod?: ExtensionPeriodInfo;
   canRequestExtension?: boolean;
+  canRenewContract?: boolean;
   extensionBlockReason?: string | null;
+  renewalBlockReason?: string | null;
+  renewalWindowDays?: number;
+  renewalMode?: "batch" | "individual";
+  batchExtensionMonths?: number;
+  pendingRenewalContract?: Contract | null;
   hasPendingExtendRequest?: boolean;
   daysUntilContractEnd?: number | null;
   eligibilityDays?: number;
