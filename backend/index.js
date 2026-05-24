@@ -29,6 +29,7 @@ const registrationPeriodRoutes = require("./routes/registrationPeriodRoutes");
 const { autoCloseExpiredPeriods } = require("./controllers/registrationPeriodController");
 const extensionPeriodRoutes = require("./routes/extensionPeriodRoutes");
 const { autoCloseExpiredExtensionPeriods } = require("./services/contractExtensionPolicy");
+const { runContractLifecycleJobs } = require("./services/contractRenewalLifecycle");
 const notificationRoutes = require("./routes/notificationRoutes");
 const damageReportRoutes = require("./routes/damageReportRoutes");
 const facilityRoutes = require("./routes/facilityRoutes");
@@ -165,7 +166,24 @@ async function start() {
   setInterval(() => {
     autoCloseExpiredPeriods().catch((e) => console.error("autoCloseExpiredPeriods:", e?.message || e));
     autoCloseExpiredExtensionPeriods().catch((e) => console.error("autoCloseExpiredExtensionPeriods:", e?.message || e));
+    runContractLifecycleJobs().catch((e) => console.error("runContractLifecycleJobs:", e?.message || e));
   }, 30000);
+  /** Chạy thêm lúc 00:05 mỗi ngày (chuyển giao HĐ gia hạn upcoming → active). */
+  const scheduleDailyLifecycle = () => {
+    const now = new Date();
+    const next = new Date(now);
+    next.setDate(next.getDate() + 1);
+    next.setHours(0, 5, 0, 0);
+    const delay = Math.max(60_000, next.getTime() - now.getTime());
+    setTimeout(() => {
+      runContractLifecycleJobs().catch((e) => console.error("daily runContractLifecycleJobs:", e?.message || e));
+      setInterval(
+        () => runContractLifecycleJobs().catch((e) => console.error("daily runContractLifecycleJobs:", e?.message || e)),
+        24 * 60 * 60 * 1000
+      );
+    }, delay);
+  };
+  scheduleDailyLifecycle();
 }
 
 start();

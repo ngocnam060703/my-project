@@ -273,16 +273,20 @@ exports.create = async (req, res) => {
     if (!ams.length) {
       ams = ["Giường", "Tủ", "Quạt"];
     }
+    const priceNum = Math.max(0, Math.round(Number(price) || 0));
+    const capNum = Math.max(1, Math.round(Number(capacity) || 1));
     const room = await Room.create({
       roomNumber,
       area,
-      capacity,
-      price,
+      capacity: capNum,
+      maxCapacity: capNum,
+      price: priceNum,
+      currentPrice: priceNum,
       floor,
       amenities: ams,
       description,
       status,
-      currentOccupancy,
+      currentOccupancy: Math.max(0, Math.round(Number(currentOccupancy) || 0)),
     });
     res.status(201).json(await room.populate("area", "name"));
   } catch (error) {

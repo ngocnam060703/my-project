@@ -231,9 +231,18 @@ export const registrationsApi = {
     startDate: string;
     registrationType?: "dorm" | "transfer";
   }) => client.post("/registrations", data),
-  createTransfer: (data: { room: string; startDate?: string; semester?: string; schoolYear?: string }) =>
-    client.post("/registrations", { ...data, registrationType: "transfer" }),
+  createTransfer: (data: {
+    room: string;
+    startDate?: string;
+    semester?: string;
+    schoolYear?: string;
+    transferReason?: string;
+    acknowledgeUpcomingCancellation?: boolean;
+  }) => client.post("/registrations", { ...data, registrationType: "transfer" }),
   cancel: (id: string) => client.put(`/registrations/${id}/cancel`),
+  getTransferEligibility: () => client.get("/registrations/transfer-eligibility"),
+  getTransferSummary: (id: string) => client.get(`/registrations/${id}/transfer-summary`),
+  confirmTransfer: (id: string) => client.post(`/registrations/${id}/confirm-transfer`),
   getAll: (params?: { status?: string; page?: number; limit?: number }) =>
     client.get("/registrations", { params }),
   approve: (id: string) => client.put(`/registrations/${id}/approve`),
@@ -266,7 +275,7 @@ export const applicationsApi = {
     schoolYear: string;
     startDate: string;
     preferenceArea?: string;
-    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
+    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach" | "dan_toc_thieu_so";
   }) => client.post<DormApplication>("/applications", data),
   getAll: (params?: {
     status?: string;
@@ -274,7 +283,9 @@ export const applicationsApi = {
     faculty?: string;
     enrollmentYear?: number;
     area?: string;
-    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach";
+    priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach" | "dan_toc_thieu_so";
+    /** Lọc theo priorityType trên hồ sơ User (vd. minority = dân tộc thiểu số) */
+    userPriorityType?: "minority";
     days?: number;
     sortOrder?: "asc" | "desc";
     page?: number;
@@ -313,7 +324,11 @@ export const contractsApi = {
   terminate: (id: string) => client.put(`/contracts/${id}/terminate`),
   remove: (id: string) => client.delete(`/contracts/${id}`),
   uploadSignedPdf: (id: string, signedPdfUrl: string) => client.put(`/contracts/${id}/upload-signed-pdf`, { signedPdfUrl }),
-  sign: (id: string) => client.put(`/contracts/${id}/sign`),
+  sign: (id: string, data?: { consentAccepted: true }) => client.put(`/contracts/${id}/sign`, data || {}),
+  getRenewalPreview: (id: string, months?: number) =>
+    client.get(`/contracts/${id}/renewal-preview`, { params: months != null ? { months } : {} }),
+  confirmRenewal: (id: string, data: { months?: number; consentAccepted: true }) =>
+    client.post(`/contracts/${id}/confirm-renewal`, data),
   confirmPayment: (id: string) => client.put(`/contracts/${id}/confirm-payment`),
   /** Admin: tạo slot giường nếu thiếu + gán giường trống cho hợp đồng */
   ensureBed: (id: string) => client.put(`/contracts/${encodeURIComponent(id)}/ensure-bed`),

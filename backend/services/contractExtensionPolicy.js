@@ -130,6 +130,7 @@ module.exports = {
   autoCloseExpiredExtensionPeriods,
   isContractExtensionGloballyEnabled,
   getOpenExtensionPeriod,
+  toPeriodInfo,
   getExtensionPolicy,
   assertStudentCanRequestExtension,
   daysUntilContractEnd,

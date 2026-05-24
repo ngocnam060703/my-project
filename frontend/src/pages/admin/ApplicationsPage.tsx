@@ -22,7 +22,15 @@ const priorityLabel: Record<string, string> = {
   ho_ngheo: "Hộ nghèo",
   con_thuong_binh: "Con thương binh",
   chinh_sach: "Chính sách",
+  dan_toc_thieu_so: "Dân tộc thiểu số",
 };
+
+type ApplicationPriorityFilter =
+  | "none"
+  | "ho_ngheo"
+  | "con_thuong_binh"
+  | "chinh_sach"
+  | "dan_toc_thieu_so";
 
 function formatGender(g?: string) {
   const s = String(g || "").toLowerCase();
@@ -133,7 +141,11 @@ const ApplicationsPage: React.FC = () => {
         ...(faculty.trim() ? { faculty: faculty.trim() } : {}),
         ...(enrollmentYear.trim() ? { enrollmentYear: Number(enrollmentYear.trim()) } : {}),
         ...(area ? { area } : {}),
-        ...(priorityCategory ? { priorityCategory: priorityCategory as "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach" } : {}),
+        ...(priorityCategory === "dan_toc_thieu_so"
+          ? { userPriorityType: "minority" as const }
+          : priorityCategory
+            ? { priorityCategory: priorityCategory as ApplicationPriorityFilter }
+            : {}),
         ...(presetDays() ? { days: presetDays() } : {}),
       });
       setRows(listRes.data.applications || []);
@@ -350,6 +362,7 @@ const ApplicationsPage: React.FC = () => {
             <option value="ho_ngheo">Hộ nghèo</option>
             <option value="con_thuong_binh">Con thương binh</option>
             <option value="chinh_sach">Chính sách</option>
+            <option value="dan_toc_thieu_so">Dân tộc thiểu số</option>
           </select>
         </div>
         <div className="col-md-3">

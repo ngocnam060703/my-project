@@ -4,8 +4,10 @@
  * GET /api/applications/:id, DELETE /api/applications/:id (chỉ pending + đúng chủ).
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { applicationsApi, areasApi, contractsApi, registrationPeriodsApi } from "../../api";
+import StudentTransferPanel from "./StudentTransferPanel";
 import { apiErrorMessage } from "../../utils/apiErrorMessage";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSocket } from "../../contexts/SocketContext";
@@ -37,6 +39,8 @@ function roomDisplay(a: DormApplication): string {
 const StudentApplicationsPage: React.FC = () => {
   const { user } = useAuth();
   const { socket } = useSocket();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get("tab") === "transfer" ? "transfer" : "dorm";
   const [mine, setMine] = useState<DormApplication[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
@@ -187,20 +191,47 @@ const StudentApplicationsPage: React.FC = () => {
       <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
         <div>
           <h4 className="mb-0">Đơn của tôi</h4>
-          <p className="text-muted small mb-0">Đăng ký KTX — chờ ban quản lý duyệt, phân phòng sau khi duyệt.</p>
+          <p className="text-muted small mb-0">
+            {activeTab === "transfer"
+              ? "Chuyển phòng trong cùng khu — xác nhận nhận phòng sau khi được duyệt."
+              : "Đăng ký KTX — chờ ban quản lý duyệt, phân phòng sau khi duyệt."}
+          </p>
         </div>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={!canOpenCreate}
-          onClick={() => {
-            setAlert(null);
-            setShowCreateModal(true);
-          }}
-        >
-          + Tạo đơn
-        </button>
+        {activeTab === "dorm" && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!canOpenCreate}
+            onClick={() => {
+              setAlert(null);
+              setShowCreateModal(true);
+            }}
+          >
+            + Tạo đơn
+          </button>
+        )}
       </div>
+
+      <ul className="nav nav-tabs mb-3">
+        <li className="nav-item">
+          <button
+            type="button"
+            className={`nav-link ${activeTab === "dorm" ? "active" : ""}`}
+            onClick={() => setSearchParams({})}
+          >
+            Đơn đăng ký KTX
+          </button>
+        </li>
+        <li className="nav-item">
+          <button
+            type="button"
+            className={`nav-link ${activeTab === "transfer" ? "active" : ""}`}
+            onClick={() => setSearchParams({ tab: "transfer" })}
+          >
+            Chuyển phòng
+          </button>
+        </li>
+      </ul>
 
       {alert && (
         <div
@@ -210,6 +241,10 @@ const StudentApplicationsPage: React.FC = () => {
         </div>
       )}
 
+      {activeTab === "transfer" ? (
+        <StudentTransferPanel onNotify={(a) => setAlert(a)} />
+      ) : (
+        <>
       {!canOpenCreate && (
         <div className="alert alert-info small">
           {pending && <span>Bạn đã có đơn đang chờ duyệt — không thể gửi thêm. Có thể hủy đơn chờ nếu cần.</span>}
@@ -377,6 +412,8 @@ const StudentApplicationsPage: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

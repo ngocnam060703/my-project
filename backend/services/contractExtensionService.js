@@ -11,6 +11,7 @@ const {
   evaluateContractExtensionEligibility,
   EXTEND_REQUEST_STATUS,
 } = require("./contractExtensionPolicy");
+const { buildStudentRenewalContext, buildRenewalPreview, confirmStudentRenewal } = require("./contractRenewalService");
 
 function addCalendarMonths(date, months) {
   const d = new Date(date);
@@ -63,6 +64,7 @@ async function notifyStudentExtendResult({ userId, title, message }) {
 
 async function buildStudentExtensionContext(userId, activeContract) {
   const policy = await getExtensionPolicy();
+  const renewalCtx = await buildStudentRenewalContext(userId, activeContract);
   let hasPendingExtendRequest = false;
   if (activeContract?._id) {
     hasPendingExtendRequest = !!(await ContractExtendRequest.exists({
@@ -74,14 +76,23 @@ async function buildStudentExtensionContext(userId, activeContract) {
     hasPendingRequest: hasPendingExtendRequest,
     policy,
   });
+  const periodInfo = renewalCtx.extensionPeriod?.isOpen
+    ? renewalCtx.extensionPeriod
+    : policy.extensionPeriod;
   return {
-    extensionEnabled: policy.globallyEnabled,
-    extensionPeriod: policy.extensionPeriod,
+    extensionEnabled: policy.globallyEnabled || Boolean(periodInfo?.isOpen),
+    extensionPeriod: periodInfo,
     eligibilityDays: policy.eligibilityDays,
-    canRequestExtension: eligibility.eligible,
-    extensionBlockReason: eligibility.reason,
+    canRequestExtension: renewalCtx.canRenewContract,
+    extensionBlockReason: renewalCtx.renewalBlockReason || eligibility.reason,
     hasPendingExtendRequest,
-    daysUntilContractEnd: eligibility.daysUntilEnd,
+    daysUntilContractEnd: renewalCtx.daysUntilContractEnd ?? eligibility.daysUntilEnd,
+    canRenewContract: renewalCtx.canRenewContract,
+    renewalBlockReason: renewalCtx.renewalBlockReason,
+    renewalMode: renewalCtx.renewalMode,
+    batchExtensionMonths: renewalCtx.batchExtensionMonths,
+    renewalWindowDays: renewalCtx.renewalWindowDays,
+    pendingRenewalContract: renewalCtx.pendingRenewalContract,
   };
 }
 
@@ -261,4 +272,6 @@ module.exports = {
   rejectExtendRequest,
   buildStudentExtensionContext,
   notifyAdminsNewExtendRequest,
+  buildRenewalPreview,
+  confirmStudentRenewal,
 };

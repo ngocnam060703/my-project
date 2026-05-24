@@ -39,6 +39,31 @@ exports.requestExtend = [
     .withMessage("months phải từ 1 đến 36"),
 ];
 
+exports.renewalPreviewQuery = [
+  query("months")
+    .optional({ values: "falsy" })
+    .toInt()
+    .isInt({ min: 1, max: 36 })
+    .withMessage("months phải từ 1 đến 36"),
+];
+
+exports.confirmRenewal = [
+  body("months")
+    .optional({ values: "falsy" })
+    .toInt()
+    .isInt({ min: 1, max: 36 })
+    .withMessage("months phải từ 1 đến 36"),
+  body("consentAccepted")
+    .custom((v) => v === true || v === "true")
+    .withMessage("Phải xác nhận điều khoản hợp đồng và nội quy KTX"),
+];
+
+exports.studentSign = [
+  body("consentAccepted")
+    .custom((v) => v === true || v === "true")
+    .withMessage("Phải xác nhận điều khoản"),
+];
+
 exports.rejectExtendRequest = [
   body("note").trim().notEmpty().withMessage("Vui lòng nhập lý do từ chối"),
 ];
