@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Badge,
   Button,
   Card,
@@ -29,7 +30,6 @@ import {
 import dayjs, { type Dayjs } from "dayjs";
 import "dayjs/locale/vi";
 import { servicesApi } from "../../api";
-import PersonalServiceRegistration from "../../components/services/PersonalServiceRegistration";
 
 dayjs.locale("vi");
 
@@ -81,18 +81,44 @@ const ServicesPage: React.FC = () => {
   const [qtyDraft, setQtyDraft] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
+  const [periodLocked, setPeriodLocked] = useState(false);
+  const [lockBannerMessage, setLockBannerMessage] = useState<string | null>(null);
+
+  const parseRegistrationsPayload = (data: unknown): Registration[] => {
+    if (Array.isArray(data)) return data as Registration[];
+    if (data && typeof data === "object" && Array.isArray((data as { items?: unknown }).items)) {
+      return (data as { items: Registration[] }).items;
+    }
+    return [];
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [sRes, rRes, hRes] = await Promise.all([
+      const [sRes, rRes, lockRes, hRes] = await Promise.all([
         servicesApi.getAll({ activeOnly: "true" }),
         servicesApi.getMyRegistrations({ month, year }),
+        servicesApi.getPeriodLockStatus({ month, year }),
         servicesApi.getMyRegistrations(),
       ]);
       setServices(sRes.data || []);
-      setRegs(rRes.data || []);
-      setHistoryRegs(hRes.data || []);
+      const regPayload = rRes.data;
+      setRegs(parseRegistrationsPayload(regPayload));
+      const lockFromRegs =
+        regPayload &&
+        typeof regPayload === "object" &&
+        !Array.isArray(regPayload) &&
+        (regPayload as { periodLock?: { serviceRegistrationLocked?: boolean; bannerMessage?: string } }).periodLock;
+      const locked = lockRes.data?.serviceRegistrationLocked ?? lockFromRegs?.serviceRegistrationLocked ?? false;
+      setPeriodLocked(locked);
+      setLockBannerMessage(
+        lockRes.data?.bannerMessage ||
+          (lockFromRegs as { bannerMessage?: string } | undefined)?.bannerMessage ||
+          (locked
+            ? "Kỳ hóa đơn này đã được chốt sổ. Bạn không thể đăng ký hoặc thay đổi dịch vụ phát sinh. Vui lòng chọn kỳ hóa đơn của tháng tiếp theo nếu muốn đăng ký trước."
+            : null),
+      );
+      setHistoryRegs(parseRegistrationsPayload(hRes.data));
     } catch {
       message.error("Không tải được dịch vụ");
     } finally {
@@ -117,6 +143,10 @@ const ServicesPage: React.FC = () => {
   const personal = useMemo(() => services.filter((s) => s.type === "personal"), [services]);
 
   const registerPersonal = async (s: Service, quantity?: number, enabled?: boolean) => {
+    if (periodLocked) {
+      message.warning("Hóa đơn tháng này đã được chốt. Không thể thay đổi dịch vụ.");
+      return;
+    }
     setSaving(s._id);
     try {
       await servicesApi.upsertMyRegistration({
@@ -235,6 +265,20 @@ const ServicesPage: React.FC = () => {
         </Row>
       </Card>
 
+      {periodLocked && lockBannerMessage ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={lockBannerMessage}
+          style={{
+            marginBottom: 0,
+            borderRadius: 12,
+            background: "#fffbe6",
+            border: "1px solid #ffe58f",
+          }}
+        />
+      ) : null}
+
       {loading ? (
         <Skeleton active paragraph={{ rows: 6 }} />
       ) : (
@@ -287,9 +331,6 @@ const ServicesPage: React.FC = () => {
               </Title>
               <Badge count={personal.length} style={{ backgroundColor: "#722ed1" }} />
             </Space>
-            <div style={{ marginBottom: 16 }}>
-              <PersonalServiceRegistration />
-            </div>
             {personal.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dịch vụ cá nhân" />
             ) : (
@@ -297,6 +338,7 @@ const ServicesPage: React.FC = () => {
                 {personal.map((s) => {
                   const reg = regByService[s._id];
                   const busy = saving === s._id;
+                  const frozen = periodLocked || busy;
                   if (s.unit === "once") {
                     const currentQty = Number(reg?.quantity || 0);
                     const val = qtyDraft[s._id] ?? currentQty;
@@ -365,6 +407,7 @@ const ServicesPage: React.FC = () => {
                             <Switch
                               checked={enabled}
                               loading={busy}
+                              disabled={periodLocked}
                               checkedChildren="Bật"
                               unCheckedChildren="Tắt"
                               onChange={(checked) => void registerPersonal(s, 1, checked)}

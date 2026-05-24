@@ -257,6 +257,32 @@ exports.getById = async (req, res) => {
         histByContract[cid].push(h);
       }
 
+      /** HĐ đã chấm dứt — không gán trạng thái «đang ở» theo HĐ hiện hành */
+      const TERMINAL_CONTRACT_STATUSES = new Set([
+        "terminated",
+        "expired",
+        "cancelled",
+        "transferred_settled",
+        "terminated_due_to_transfer",
+      ]);
+      const OCCUPANCY_ELIGIBLE_STATUSES = new Set(["active", "pending_payment", "upcoming"]);
+
+      function contractResidencyEnded(contract, at) {
+        const st = String(contract.status || "");
+        if (TERMINAL_CONTRACT_STATUSES.has(st)) return true;
+        if (contract.endDate && new Date(contract.endDate) < at) return true;
+        return false;
+      }
+
+      function mapEndedResidencyStayStatus(contractStatus) {
+        const st = String(contractStatus || "");
+        if (st === "cancelled") return "ended_cancelled";
+        if (st === "transferred_settled" || st === "terminated_due_to_transfer") return "ended_transfer_settled";
+        if (st === "terminated") return "ended_terminated";
+        if (st === "expired") return "ended_expired";
+        return "checked_out";
+      }
+
       if (contracts.length) {
         const now = new Date();
         stayHistory = [...contracts]
@@ -319,14 +345,21 @@ exports.getById = async (req, res) => {
             const composite =
               rn && bc ? (bc.startsWith(`${rn}-`) ? bc : `${rn}-${bc}`) : bc || rn || "—";
 
-            const isCurrent = currentContract && String(currentContract._id) === cid;
-            const ended =
-              ["terminated", "expired"].includes(String(c.status || "")) || new Date(c.endDate) < now;
+            const ended = contractResidencyEnded(c, now);
             const notYetStarted = new Date(c.startDate) > now;
+            const isOccupancyCurrent =
+              currentContract &&
+              String(currentContract._id) === cid &&
+              !ended &&
+              OCCUPANCY_ELIGIBLE_STATUSES.has(String(c.status || ""));
+
+            // HĐ đã chấm dứt ưu tiên trước «chưa bắt đầu kỳ» (VD: gia hạn upcoming bị hủy)
+            if (!checkOutAt && ended && c.endDate && checkInAt) checkOutAt = c.endDate;
 
             let residencyStayStatus = "checked_out";
-            if (notYetStarted) residencyStayStatus = "not_started";
-            else if (isCurrent && !ended) {
+            if (ended) residencyStayStatus = mapEndedResidencyStayStatus(c.status);
+            else if (notYetStarted) residencyStayStatus = "not_started";
+            else if (isOccupancyCurrent) {
               if (residencyOperationalStatus === "assigned_pending_checkin") residencyStayStatus = "pending_checkin";
               else if (residencyOperationalStatus === "checked_in_staying") residencyStayStatus = "staying";
               else if (

@@ -672,13 +672,21 @@ const TransferConfirmModal: React.FC<TransferConfirmModalProps> = ({
 
   const financialLine = () => {
     if (!fin) return <p className="small text-muted mb-0">Đang tải thông tin tài chính…</p>;
+    if (fin.financialMode === "defer_room_invoice" || fin.hasPaidOldRoomBill === false) {
+      return (
+        <p className="mb-0 text-muted small">
+          Chưa có hóa đơn tiền phòng cũ đã thanh toán — <strong>không phát sinh phụ thu chuyển phòng</strong>.
+          Hệ thống chốt {fin.daysUsedOld ?? "—"} ngày ở phòng cũ (đến ngày nộp đơn) và xuất hóa đơn tiền phòng riêng sau.
+        </p>
+      );
+    }
     if (fin.financialAction === "supplement" && (fin.supplementAmount || 0) > 0) {
       return (
         <p className="mb-0">
-          <span className="text-muted">Cần đóng thêm (phụ thu):</span>{" "}
+          <span className="text-muted">Cần đóng thêm (phụ thu tiền phòng):</span>{" "}
           <strong className="text-danger fs-5">{formatVnd(fin.supplementAmount)}</strong>
           <span className="d-block small text-muted mt-1">
-            Phòng mới có giá cao hơn — phần chênh {fin.daysRemaining} ngày còn lại trong tháng.
+            Bù trừ từ tiền đã đóng phòng cũ so với tháng đầu HĐ mới (prorate từ ngày nộp đơn).
           </span>
         </p>
       );
@@ -714,7 +722,7 @@ const TransferConfirmModal: React.FC<TransferConfirmModalProps> = ({
           </div>
           <div className="modal-body pt-2">
             <p className="text-muted small">
-              Hợp đồng mới có hiệu lực 1 năm từ ngày đăng ký đơn; HĐ cũ thanh lý theo ngày admin duyệt.
+              Hợp đồng mới có hiệu lực 1 năm kể từ <strong>ngày nộp đơn</strong>; hợp đồng cũ thanh lý cùng ngày đó.
             </p>
             {fin?.newContractStartDate && fin?.newContractEndDate && (
               <p className="small mb-3">
@@ -764,9 +772,15 @@ const TransferConfirmModal: React.FC<TransferConfirmModalProps> = ({
                 <details className="mt-2 small text-muted">
                   <summary className="user-select-none">Chi tiết tính toán</summary>
                   <ul className="mb-0 mt-2 ps-3">
-                    <li>Đã đóng đầu tháng: {formatVnd(fin.amountPaidAtMonthStart)}</li>
-                    <li>Phòng cũ thực tế: {formatVnd(fin.oldActualCharge)}</li>
-                    <li>Phòng mới ({fin.daysRemaining} ngày còn lại): {formatVnd(fin.newRemainingCharge)}</li>
+                    <li>Đã đóng tiền phòng cũ (tháng): {formatVnd(fin.amountPaidAtMonthStart)}</li>
+                    <li>Phòng cũ thực tế ({fin.daysUsedOld}/{fin.daysInMonth} ngày): {formatVnd(fin.oldActualCharge)}</li>
+                    <li>
+                      Phòng mới tháng đầu ({fin.daysNewFirstMonth ?? fin.daysRemaining} ngày):{" "}
+                      {formatVnd(fin.newFirstMonthProrated ?? fin.newRemainingCharge)}
+                    </li>
+                    {fin.totalCreditFromOld != null ? (
+                      <li>Bù trừ từ phòng cũ: {formatVnd(fin.totalCreditFromOld)}</li>
+                    ) : null}
                   </ul>
                 </details>
               )}

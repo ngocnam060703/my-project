@@ -10,15 +10,23 @@ function canSettleBillStatus(status) {
 }
 
 async function notifyBillPaid(bill) {
-  const io = getIO();
-  io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
-  await Notification.create({
-    user: bill.user,
-    title: "Hóa đơn đã được xác nhận thanh toán",
-    message: `Hóa đơn ${bill.month}/${bill.year} đã được ghi nhận thanh toán.`,
-    type: "bill_paid",
-    link: "/student/my-bills",
-  });
+  try {
+    const io = getIO();
+    io.emit("bill:paid", { userId: String(bill.user), billId: String(bill._id) });
+  } catch {
+    /* Socket chưa khởi tạo — không chặn xác nhận thanh toán */
+  }
+  try {
+    await Notification.create({
+      user: bill.user,
+      title: "Hóa đơn đã được xác nhận thanh toán",
+      message: `Hóa đơn ${bill.month}/${bill.year} đã được ghi nhận thanh toán.`,
+      type: "payment_confirmed",
+      link: "/student/my-bills",
+    });
+  } catch (err) {
+    console.warn("[notifyBillPaid] Không tạo được thông báo:", err?.message || err);
+  }
 }
 
 function pushPaymentHistory(bill, entry) {

@@ -1,5 +1,13 @@
 /**
- * Chuyển phòng — HĐ cũ thanh lý khi duyệt; HĐ mới 1 năm từ ngày đăng ký đơn; bù trừ tài chính.
+ * Chuyển phòng (Room Transfer) — luồng nghiệp vụ:
+ *
+ * 1. HĐ cũ: transferred_settled; endDate = ngày nộp đơn; cancelReason từ SV hoặc mẫu chuyển phòng.
+ * 2. HĐ mới: startDate = ngày nộp đơn; endDate = +1 năm; giá đóng băng; status active; giữ chỗ phòng/giường.
+ * 3. Tài chính tiền phòng:
+ *    - Có HĐ tháng phòng cũ đã thanh toán → bù trừ, có thể phát sinh transfer_supplement.
+ *    - Chưa có / chưa trả HĐ tháng cũ → không phụ thu chuyển phòng; chốt ngày ở → HĐ tháng lẻ sau.
+ *    - Hóa đơn phạt / bồi thường HH: không đụng tới.
+ * 4. HĐ gia hạn upcoming: hủy + hoàn 100% tiền đã đóng (chỉ billType monthly) vào ví.
  */
 const Registration = require("../models/Registration");
 const Contract = require("../models/Contract");
@@ -69,14 +77,30 @@ async function findUpcomingRenewalForActive(activeContract) {
   });
 }
 
-async function computePaidTotalForContract(contractId) {
+/** Chỉ cộng tiền phòng đã thanh toán (monthly) — không gộp phạt / bồi thường HH. */
+async function computePaidMonthlyRoomFeesForContract(contractId) {
   if (!contractId) return 0;
-  const bills = await Bill.find({ contract: contractId, status: "paid" }).select("total roomFee").lean();
+  const bills = await Bill.find({
+    contract: contractId,
+    status: "paid",
+    billType: "monthly",
+  })
+    .select("total roomFee")
+    .lean();
   return bills.reduce((sum, b) => {
     const t = Number(b.total);
     if (t > 0) return sum + Math.round(t);
     return sum + Math.round(Number(b.roomFee) || 0);
   }, 0);
+}
+
+async function findMonthlyRoomBill(contractId, month, year) {
+  return Bill.findOne({
+    contract: contractId,
+    month,
+    year,
+    billType: "monthly",
+  }).lean();
 }
 
 async function loadTransferRegistration(regId) {
@@ -112,7 +136,7 @@ function buildRoomSummary(roomDoc) {
 }
 
 /**
- * Bù trừ: phòng cũ đến ngày duyệt + chồng lấn (đăng ký → duyệt) ↔ HĐ mới 1 năm.
+ * Bù trừ tiền phòng: chốt theo ngày nộp đơn; phụ thu chỉ khi đã có HĐ tiền phòng cũ đã thanh toán.
  */
 async function computeTransferFinancials({
   oldContract,
@@ -123,46 +147,25 @@ async function computeTransferFinancials({
 }) {
   const regDay = startOfDay(registrationDate);
   const apprDay = startOfDay(approvalDate);
+  const settlementDay = regDay;
 
   const oldPrice = effectiveContractPrice(oldContract);
   const newPricing = buildContractPricingFields({ roomDoc: newRoomDoc, userDoc });
   const newPrice = newPricing.contractPrice;
   const annualNewContractValue = newPrice * 12;
 
-  const y = apprDay.getFullYear();
-  const m = apprDay.getMonth() + 1;
+  const y = settlementDay.getFullYear();
+  const m = settlementDay.getMonth() + 1;
   const dim = daysInCalendarMonth(y, m);
-  const daysUsedOldInMonth = apprDay.getDate();
+  const daysUsedOldInMonth = settlementDay.getDate();
   const daysRemainingOldInMonth = Math.max(0, dim - daysUsedOldInMonth);
 
   const oldActualCharge = Math.round((oldPrice * daysUsedOldInMonth) / dim);
   const unusedOldRoomCredit = Math.round((oldPrice * daysRemainingOldInMonth) / dim);
 
-  let overlapDays = 0;
-  if (apprDay > regDay) {
-    overlapDays = Math.round((apprDay.getTime() - regDay.getTime()) / 86400000);
-  }
-  const overlapCharge = overlapDays > 0 ? Math.round((oldPrice * overlapDays) / dim) : 0;
-
-  const monthlyBill = await Bill.findOne({
-    contract: oldContract._id,
-    month: m,
-    year: y,
-    billType: "monthly",
-  }).lean();
-
-  let amountPaidAtMonthStart = oldPrice;
-  if (monthlyBill) {
-    const rf = Number(monthlyBill.roomFee);
-    if (monthlyBill.status === "paid") {
-      amountPaidAtMonthStart = Math.round(rf > 0 ? rf : Number(monthlyBill.total) || oldPrice);
-    } else if (rf > 0) {
-      amountPaidAtMonthStart = Math.round(rf);
-    }
-  }
-
-  const prepaidSurplus = Math.max(0, amountPaidAtMonthStart - oldActualCharge);
-  const grossCredit = prepaidSurplus + unusedOldRoomCredit - overlapCharge;
+  const monthlyBill = await findMonthlyRoomBill(oldContract._id, m, y);
+  const hasPaidOldRoomBill = monthlyBill?.status === "paid";
+  const hasAnyOldRoomBill = !!monthlyBill;
 
   const regY = regDay.getFullYear();
   const regM = regDay.getMonth() + 1;
@@ -170,13 +173,28 @@ async function computeTransferFinancials({
   const daysNewFirstMonth = Math.max(1, regDim - regDay.getDate() + 1);
   const newFirstMonthProrated = Math.round((newPrice * daysNewFirstMonth) / regDim);
 
-  const creditAppliedToNew = Math.max(0, grossCredit);
-  const supplementAmount = Math.max(0, newFirstMonthProrated - creditAppliedToNew);
-  const walletCreditAmount = Math.max(0, creditAppliedToNew - newFirstMonthProrated);
-
+  let amountPaidAtMonthStart = 0;
+  let prepaidSurplus = 0;
+  let grossCredit = 0;
+  let creditAppliedToNew = 0;
+  let supplementAmount = 0;
+  let walletCreditAmount = 0;
   let financialAction = "none";
-  if (supplementAmount > 0) financialAction = "supplement";
-  else if (walletCreditAmount > 0) financialAction = "wallet_credit";
+  let financialMode = "defer_room_invoice";
+
+  if (hasPaidOldRoomBill) {
+    financialMode = "room_offset";
+    const rf = Number(monthlyBill.roomFee);
+    amountPaidAtMonthStart = Math.round(rf > 0 ? rf : Number(monthlyBill.total) || 0);
+    prepaidSurplus = Math.max(0, amountPaidAtMonthStart - oldActualCharge);
+    grossCredit = prepaidSurplus;
+    creditAppliedToNew = grossCredit;
+    supplementAmount = Math.max(0, newFirstMonthProrated - creditAppliedToNew);
+    walletCreditAmount = Math.max(0, creditAppliedToNew - newFirstMonthProrated);
+    if (supplementAmount > 0) financialAction = "supplement";
+    else if (walletCreditAmount > 0) financialAction = "wallet_credit";
+    else financialAction = "none";
+  }
 
   const priceComparison =
     newPrice > oldPrice ? "higher" : newPrice < oldPrice ? "lower" : "equal";
@@ -186,6 +204,7 @@ async function computeTransferFinancials({
   return {
     registrationDate: regDay.toISOString(),
     approvalDate: apprDay.toISOString(),
+    settlementDate: settlementDay.toISOString(),
     newContractStartDate: regDay.toISOString(),
     newContractEndDate: newContractEndDate.toISOString(),
     month: m,
@@ -193,8 +212,9 @@ async function computeTransferFinancials({
     daysInMonth: dim,
     daysUsedOld: daysUsedOldInMonth,
     daysRemaining: daysRemainingOldInMonth,
-    overlapDays,
-    overlapCharge,
+    daysNewFirstMonth,
+    overlapDays: 0,
+    overlapCharge: 0,
     oldMonthlySlotPrice: oldPrice,
     newMonthlySlotPrice: newPrice,
     annualNewContractValue,
@@ -203,24 +223,71 @@ async function computeTransferFinancials({
     newFirstMonthProrated,
     amountPaidAtMonthStart,
     prepaidSurplus,
-    totalCreditFromOld: Math.max(0, grossCredit),
+    totalCreditFromOld: creditAppliedToNew,
     supplementAmount,
     walletCreditAmount,
     financialAction,
+    financialMode,
+    hasPaidOldRoomBill,
+    hasAnyOldRoomBill,
     priceComparison,
     labels: { oldRoom: null, newRoom: null },
   };
 }
 
-async function adjustOldMonthBillIfUnpaid({ oldContract, financialSnapshot, approvalDate }) {
-  const { month, year, oldActualCharge } = financialSnapshot;
-  const bill = await Bill.findOne({
+/**
+ * Chưa có HĐ tiền phòng cũ đã trả → không phụ thu CP; chốt ngày ở để xuất HĐ tháng lẻ (tạo hoặc điều chỉnh HĐ monthly chưa trả).
+ */
+async function settleOldRoomMonthlyBill({ oldContract, studentUserId, financialSnapshot, registrationDate }) {
+  if (financialSnapshot.hasPaidOldRoomBill) return null;
+
+  const { month, year, oldActualCharge, daysUsedOld } = financialSnapshot;
+  const regLabel = formatDateVi(registrationDate);
+  const noteSuffix = `Chốt ${daysUsedOld} ngày ở phòng cũ đến ngày nộp đơn chuyển phòng (${regLabel}) — không bù trừ phụ thu CP`;
+
+  let bill = await Bill.findOne({
     contract: oldContract._id,
     month,
     year,
     billType: "monthly",
   });
-  if (!bill || bill.status === "paid") return null;
+
+  if (bill?.status === "paid") return null;
+
+  if (!bill) {
+    const due = new Date();
+    due.setDate(due.getDate() + 7);
+    bill = await Bill.create({
+      billType: "monthly",
+      contract: oldContract._id,
+      user: studentUserId,
+      room: oldContract.room,
+      month,
+      year,
+      roomFee: oldActualCharge,
+      electricityFee: 0,
+      waterFee: 0,
+      otherFee: 0,
+      sharedCommonFee: 0,
+      personalServiceFee: 0,
+      occupants: 1,
+      total: oldActualCharge,
+      dueDate: due,
+      status: "unpaid",
+      note: noteSuffix,
+      paymentHistory: [
+        {
+          at: new Date(),
+          action: "created",
+          amount: oldActualCharge,
+          note: "HĐ tiền phòng phòng cũ sau chuyển phòng (chưa có HĐ đã trả để bù trừ)",
+        },
+      ],
+    });
+    await assignBillCodeIfMissing(bill);
+    return bill;
+  }
+
   const prevRoomFee = bill.roomFee;
   bill.roomFee = oldActualCharge;
   const delta =
@@ -230,13 +297,13 @@ async function adjustOldMonthBillIfUnpaid({ oldContract, financialSnapshot, appr
     (bill.sharedCommonFee || 0) +
     (bill.personalServiceFee || 0);
   bill.total = Math.round(oldActualCharge + delta);
-  bill.note = `${bill.note || ""} | Điều chỉnh tiền phòng theo ngày duyệt chuyển phòng (${formatDateVi(approvalDate)})`.trim();
+  bill.note = `${bill.note || ""} | ${noteSuffix}`.trim();
   bill.paymentHistory = bill.paymentHistory || [];
   bill.paymentHistory.push({
     at: new Date(),
     action: "adjusted",
     amount: bill.total,
-    note: `Tiền phòng cũ: ${prevRoomFee} → ${oldActualCharge} (đến ngày duyệt)`,
+    note: `Tiền phòng cũ: ${prevRoomFee} → ${oldActualCharge} (đến ngày nộp đơn)`,
   });
   await bill.save();
   return bill;
@@ -250,8 +317,8 @@ async function createTransferSupplementBill({
   registrationId,
   performedBy,
 }) {
-  const { supplementAmount, month, year } = financialSnapshot;
-  if (supplementAmount <= 0) return null;
+  const { supplementAmount, month, year, hasPaidOldRoomBill, financialMode } = financialSnapshot;
+  if (financialMode !== "room_offset" || !hasPaidOldRoomBill || supplementAmount <= 0) return null;
 
   const due = new Date();
   due.setDate(due.getDate() + 7);
@@ -264,6 +331,21 @@ async function createTransferSupplementBill({
     note: { $regex: String(registrationId) },
   });
   if (existing) return existing;
+
+  const {
+    newFirstMonthProrated = 0,
+    totalCreditFromOld = 0,
+    newMonthlySlotPrice = 0,
+    daysNewFirstMonth,
+    registrationDate,
+  } = financialSnapshot;
+  const regDay = registrationDate ? new Date(registrationDate) : null;
+  const daysLabel =
+    daysNewFirstMonth != null
+      ? `${daysNewFirstMonth} ngày`
+      : regDay
+        ? `${Math.max(1, daysInCalendarMonth(regDay.getFullYear(), regDay.getMonth() + 1) - regDay.getDate() + 1)} ngày`
+        : "theo ngày";
 
   const bill = await Bill.create({
     billType: "transfer_supplement",
@@ -283,6 +365,17 @@ async function createTransferSupplementBill({
     dueDate: due,
     status: "unpaid",
     note: `Phụ thu chuyển phòng (đơn ${registrationId}) — bù trừ HĐ 1 năm, tháng đầu prorate`,
+    penaltyBreakdown: [
+      {
+        label: `Tiền phòng mới (prorate ${daysLabel}, ${Math.round(newMonthlySlotPrice).toLocaleString("vi-VN")}đ/tháng/chỗ)`,
+        amount: Math.round(newFirstMonthProrated),
+      },
+      {
+        label: "Bù trừ từ HĐ / tiền đã đóng phòng cũ (trừ)",
+        amount: Math.round(Math.min(totalCreditFromOld, newFirstMonthProrated)),
+      },
+      { label: "Phụ thu còn phải thu", amount: supplementAmount },
+    ],
     paymentHistory: [
       {
         at: new Date(),
@@ -325,7 +418,12 @@ async function finalizeRoomTransfer(reg, { reviewedBy, approvalDate }) {
     await fromRoom.save();
   }
 
-  await adjustOldMonthBillIfUnpaid({ oldContract, financialSnapshot, approvalDate: apprDay });
+  await settleOldRoomMonthlyBill({
+    oldContract,
+    studentUserId,
+    financialSnapshot,
+    registrationDate,
+  });
 
   const upcomingId = financialSnapshot.upcomingRenewal?.contractId;
   let upcomingContract = upcomingId ? await Contract.findById(upcomingId) : await findUpcomingRenewalForActive(oldContract);
@@ -338,7 +436,7 @@ async function finalizeRoomTransfer(reg, { reviewedBy, approvalDate }) {
   }
 
   oldContract.status = OLD_CONTRACT_SETTLED_STATUS;
-  oldContract.endDate = endOfDay(apprDay);
+  oldContract.endDate = endOfDay(registrationDate);
   oldContract.cancelReason = buildOldContractCancelReason(reg, newRoomNumber);
   await oldContract.save();
 
@@ -347,6 +445,7 @@ async function finalizeRoomTransfer(reg, { reviewedBy, approvalDate }) {
   const pricing = buildContractPricingFields({ roomDoc: targetRoom, userDoc: user });
   const newEndDate = addOneCalendarYear(registrationDate);
 
+  const now = new Date();
   const newContract = await Contract.create({
     registration: reg._id,
     user: studentUserId,
@@ -354,10 +453,15 @@ async function finalizeRoomTransfer(reg, { reviewedBy, approvalDate }) {
     startDate: registrationDate,
     endDate: newEndDate,
     contractNumber: `HD-CP${Date.now()}`,
-    status: "pending_payment",
+    status: "active",
     isTransferContract: true,
     transferredFromContract: oldContract._id,
     terms: oldContract.terms || "",
+    paymentConfirmedAt: now,
+    paymentConfirmedBy: reviewedBy || studentUserId,
+    adminReviewedAt: now,
+    adminReviewedBy: reviewedBy || studentUserId,
+    financialLockedAt: now,
     ...pricing,
   });
 
@@ -370,7 +474,11 @@ async function finalizeRoomTransfer(reg, { reviewedBy, approvalDate }) {
   await syncOccupancyForRooms([fromRoom._id, targetRoom._id]);
 
   let supplementBill = null;
-  if (financialSnapshot.supplementAmount > 0) {
+  if (
+    financialSnapshot.financialMode === "room_offset" &&
+    financialSnapshot.hasPaidOldRoomBill &&
+    financialSnapshot.supplementAmount > 0
+  ) {
     supplementBill = await createTransferSupplementBill({
       userId: studentUserId,
       newContract,
@@ -478,7 +586,9 @@ async function approveTransferRequest(regId, reviewedBy) {
   reg.reviewedAt = approvalDate;
 
   const upcomingContract = await findUpcomingRenewalForActive(oldContract);
-  const upcomingRefundAmount = upcomingContract ? await computePaidTotalForContract(upcomingContract._id) : 0;
+  const upcomingRefundAmount = upcomingContract
+    ? await computePaidMonthlyRoomFeesForContract(upcomingContract._id)
+    : 0;
 
   const financialSnapshot = await computeTransferFinancials({
     oldContract,
@@ -525,7 +635,7 @@ async function approveTransferRequest(regId, reviewedBy) {
   await Notification.create({
     user: studentId,
     title: "Chuyển phòng hoàn tất",
-    message: `Bạn đã chuyển sang phòng ${targetRoom.roomNumber}. Vui lòng vào «Hợp đồng của tôi» để ký hợp đồng mới ${result.newContract.contractNumber} (1 năm từ ngày đăng ký đơn).`,
+    message: `Bạn đã chuyển sang phòng ${targetRoom.roomNumber}. Hợp đồng mới ${result.newContract.contractNumber} đã có hiệu lực (1 năm từ ngày nộp đơn). Vui lòng ký xác nhận tại «Hợp đồng của tôi» nếu chưa ký.`,
     type: "registration_approved",
     link: "/student/my-contracts",
   });
@@ -595,7 +705,9 @@ async function getTransferEligibilityForStudent(userId) {
     };
   }
   const upcomingContract = await findUpcomingRenewalForActive(activeContract);
-  const upcomingRefundPreview = upcomingContract ? await computePaidTotalForContract(upcomingContract._id) : 0;
+  const upcomingRefundPreview = upcomingContract
+    ? await computePaidMonthlyRoomFeesForContract(upcomingContract._id)
+    : 0;
   const regPreview = startOfDay(new Date());
   const newEndPreview = addOneCalendarYear(regPreview);
 
@@ -660,6 +772,7 @@ module.exports = {
   getTransferSummaryForStudent,
   getTransferEligibilityForStudent,
   computeTransferFinancials,
+  computePaidMonthlyRoomFeesForContract,
   getRegistrationApplicationDate,
   findUpcomingRenewalForActive,
   OLD_CONTRACT_SETTLED_STATUS,

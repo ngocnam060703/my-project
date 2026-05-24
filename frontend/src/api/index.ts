@@ -370,6 +370,20 @@ export const billsApi = {
     page?: number;
     limit?: number;
   }) => client.get("/bills", { params }),
+  getRoomBillingPreview: (roomId: string) =>
+    client.get<{
+      roomId: string;
+      roomNumber?: string;
+      roomPrice?: number;
+      occupants: number;
+      lines: Array<{
+        contractId: string;
+        contractNumber?: string;
+        studentName?: string;
+        studentId?: string;
+        roomFee: number;
+      }>;
+    }>("/bills/room-billing-preview", { params: { roomId } }),
   create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; sharedCommonFee?: number; otherFee?: number; dueDate?: string }) =>
     client.post("/bills", data),
   generate: (data: { month: number; year: number; dueDate?: string }) => client.post("/bills/generate", data),
@@ -580,6 +594,14 @@ export const servicesApi = {
   remove: (id: string) => client.delete(`/services/${id}`),
   toggle: (id: string) => client.put(`/services/${id}/toggle`),
   getMyRegistrations: (params?: { month?: number; year?: number }) => client.get("/services/my-registrations", { params }),
+  getPeriodLockStatus: (params: { month: number; year: number }) =>
+    client.get<{
+      month: number;
+      year: number;
+      serviceRegistrationLocked: boolean;
+      lockMessage?: string | null;
+      bannerMessage?: string | null;
+    }>("/services/period-lock-status", { params }),
   upsertMyRegistration: (data: { serviceId: string; month: number; year: number; quantity?: number; enabled?: boolean }) =>
     client.post("/services/my-registrations", data),
 };

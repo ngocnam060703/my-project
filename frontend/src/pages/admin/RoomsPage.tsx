@@ -55,6 +55,18 @@ const statusMap: Record<string, { color: string; text: string }> = {
 };
 
 const formatPrice = (v: number) => (v ?? 0).toLocaleString("vi-VN") + "đ";
+
+/** Giá thuê phòng/tháng — khớp cột «Giá» (ưu tiên `price`). */
+function roomMonthlyPriceVnd(r: Room): number {
+  return Math.round(Number(r.price ?? r.currentPrice ?? 0));
+}
+
+/** Giá 1 slot = giá phòng ÷ tổng sức chứa (không dùng virtual pricePerPerson — có thể lệch currentPrice). */
+function roomSlotPriceVnd(r: Room): number {
+  const monthly = roomMonthlyPriceVnd(r);
+  const slots = Math.max(1, Math.round(Number(r.capacity ?? r.maxCapacity ?? 1)));
+  return Math.round(monthly / slots);
+}
 const removeWifiFromAmenities = (arr: string[] = []) =>
   arr.map((s) => String(s || "").trim()).filter(Boolean).filter((s) => !/^wi-?fi$/i.test(s));
 
@@ -745,10 +757,9 @@ const RoomsPage: React.FC = () => {
       title: "Giá/đầu người",
       key: "pricePerPerson",
       width: 120,
-      render: (_: unknown, r: Room) => {
-        const p = r.pricePerPerson ?? (r.capacity > 0 ? Math.round(r.price / r.capacity) : 0);
-        return <span style={{ color: "#0369a1" }}>{formatPrice(p)}/người</span>;
-      },
+      render: (_: unknown, r: Room) => (
+        <span style={{ color: "#0369a1" }}>{formatPrice(roomSlotPriceVnd(r))}/người</span>
+      ),
     },
     {
       title: "Trạng thái",
@@ -927,7 +938,7 @@ const RoomsPage: React.FC = () => {
                   </Descriptions.Item>
                   <Descriptions.Item label="Giá/đầu người">
                     <span style={{ color: "#0369a1" }}>
-                      {formatPrice(detailModal.pricePerPerson ?? (detailModal.capacity > 0 ? Math.round(detailModal.price / detailModal.capacity) : 0))}/người
+                      {formatPrice(roomSlotPriceVnd(detailModal))}/người
                     </span>
                   </Descriptions.Item>
                   <Descriptions.Item label="Trạng thái phòng" span={2}>

@@ -15,7 +15,6 @@ import {
   SafetyCertificateOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  HistoryOutlined,
 } from "@ant-design/icons";
 import NotificationDropdown from "../components/NotificationDropdown";
 import Footer from "../components/Footer";
@@ -32,7 +31,6 @@ const menuItems = [
   { key: "/student/rooms", icon: <UnorderedListOutlined />, label: "Danh sách phòng" },
   { key: "/student/dorm-registration", icon: <FileTextOutlined />, label: "Đăng ký nội trú" },
   { key: "/student/my-applications", icon: <FileAddOutlined />, label: "Đơn của tôi (KTX)" },
-  { key: "/student/my-registrations", icon: <HistoryOutlined />, label: "Chuyển phòng (cũ)" },
   { key: "/student/my-contracts", icon: <FileTextOutlined />, label: "Hợp đồng" },
   { key: "/student/my-bills", icon: <DollarOutlined />, label: "Hóa đơn" },
   { key: "/student/my-violations", icon: <ExclamationCircleOutlined />, label: "Vi phạm của tôi" },
@@ -52,7 +50,7 @@ const ClientLayout: React.FC = () => {
   const userMenu: MenuProps["items"] = [
     { key: "profile", icon: <UserOutlined />, label: "Thông tin cá nhân", onClick: () => navigate("/student/profile") },
     { type: "divider" },
-    { key: "logout", icon: <LogoutOutlined />, label: "Đăng xuất", onClick: () => { logout(); navigate("/student"); } },
+    { key: "logout", icon: <LogoutOutlined />, label: "Đăng xuất", onClick: () => { logout(); navigate("/login"); } },
   ];
 
   const selectedMenuKey =

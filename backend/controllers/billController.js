@@ -21,6 +21,7 @@ const {
   parseBillIdFromTxnRef,
   getClientReturnBaseUrl,
 } = require("../services/vnpayGateway");
+const { effectiveContractPrice } = require("../services/contractPricing");
 
 function parseDateOrNull(value) {
   if (!value) return null;
@@ -56,6 +57,16 @@ function roomCapacitySlots(roomLike) {
 function computeRoomFeePerSlot(roomLike) {
   const total = Number(roomLike?.price ?? 0);
   return Math.round(total / roomCapacitySlots(roomLike));
+}
+
+/** Tiền phòng tháng = contractPrice (hoặc monthlyRent) trên HĐ đang hiệu lực — không lấy giá phòng/slot. */
+function resolveRoomFeeFromActiveContract(contractDoc) {
+  const fee = effectiveContractPrice(contractDoc);
+  if (fee > 0) return fee;
+  const cn = contractDoc?.contractNumber || String(contractDoc?._id || "");
+  const err = new Error(`Hợp đồng ${cn} chưa có giá phòng (contractPrice). Vui lòng kiểm tra HĐ trước khi tạo hóa đơn.`);
+  err.statusCode = 400;
+  throw err;
 }
 
 /** Gói DV common (vd: Wi‑Fi/phòng): mỗi SV trả (giá phòng) ÷ capacity slot */
@@ -309,6 +320,46 @@ exports.getAll = async (req, res) => {
   }
 };
 
+/** Admin: xem tiền phòng theo HĐ active của phòng (preview form tạo HĐ). */
+exports.getRoomBillingPreview = async (req, res) => {
+  try {
+    const { roomId } = req.query;
+    if (!mongoose.isValidObjectId(String(roomId || ""))) {
+      return res.status(400).json({ message: "roomId không hợp lệ" });
+    }
+    const room = await Room.findById(roomId).select("roomNumber capacity price currentPrice");
+    if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
+
+    const now = new Date();
+    const contracts = await Contract.find({
+      room: roomId,
+      status: "active",
+      endDate: { $gte: toStartOfDay(now) },
+    })
+      .populate("user", "fullName studentId")
+      .select("contractNumber contractPrice monthlyRent user")
+      .sort({ contractNumber: 1 });
+
+    const lines = contracts.map((c) => ({
+      contractId: c._id,
+      contractNumber: c.contractNumber || "",
+      studentName: c.user?.fullName || "",
+      studentId: c.user?.studentId || "",
+      roomFee: effectiveContractPrice(c),
+    }));
+
+    res.json({
+      roomId,
+      roomNumber: room.roomNumber || "",
+      roomPrice: Math.round(Number(room.currentPrice ?? room.price ?? 0)),
+      occupants: lines.length,
+      lines,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.getMyBills = async (req, res) => {
   try {
     await refreshOverdueMonthlyBills();
@@ -367,7 +418,6 @@ exports.create = async (req, res) => {
 
       const occupants = Math.max(1, contracts.length);
       const roomCost = await RoomMonthlyCost.findOne({ room: roomId, month: m, year: y });
-      const feePerSlot = computeRoomFeePerSlot(room);
       const electricityTotal = electricityFee != null ? Number(electricityFee) : Number(roomCost?.electricityFee || 0);
       const waterTotal = waterFee != null ? Number(waterFee) : Number(roomCost?.waterFee || 0);
       const fixedOther = Math.max(0, Number(otherFee || 0));
@@ -405,6 +455,7 @@ exports.create = async (req, res) => {
       let updated = 0;
       const createdBills = [];
       for (const c of contracts) {
+        const contractRoomFee = resolveRoomFeeFromActiveContract(c);
         const exists = await Bill.findOne({ contract: c._id, month: m, year: y });
         const personal = await buildPersonalFeeForUser({ userId: c.user._id, month: m, year: y });
         const personalBreakdown = personal.breakdown;
@@ -412,14 +463,14 @@ exports.create = async (req, res) => {
         const electShare = electricityTotal / occupants;
         const waterShare = waterTotal / occupants;
         const otherShare = fixedOther / occupants;
-        let total = feePerSlot + electShare + waterShare + otherShare + commonFeeShare + personalTotal;
+        let total = contractRoomFee + electShare + waterShare + otherShare + commonFeeShare + personalTotal;
 
         if (exists) {
           if (exists.status === "paid") {
             skipped += 1;
             continue;
           }
-          exists.roomFee = feePerSlot;
+          exists.roomFee = contractRoomFee;
           exists.electricityFee = electShare;
           exists.waterFee = waterShare;
           exists.otherFee = otherShare;
@@ -437,14 +488,14 @@ exports.create = async (req, res) => {
             walletAdjUpd.walletApplied > 0
               ? `; đã khấu trừ ví ${walletAdjUpd.walletApplied.toLocaleString("vi-VN")}đ`
               : "";
-          exists.note = `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người đang ở; + DV cá nhân${walletNote}`;
+          exists.note = `Tiền phòng theo HĐ ${c.contractNumber || ""} (${contractRoomFee.toLocaleString("vi-VN")}đ); DV phòng chung ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người; + DV cá nhân${walletNote}`;
           exists.paymentHistory = exists.paymentHistory || [];
           exists.paymentHistory.push({
             at: new Date(),
             action: "adjusted",
             amount: Math.round(total),
             performedBy: req.user._id,
-            note: "Cập nhật hóa đơn theo phòng — tiền phòng theo slot (capacity)",
+            note: "Cập nhật hóa đơn theo phòng — tiền phòng theo HĐ active",
           });
           await exists.save();
           updated += 1;
@@ -464,7 +515,7 @@ exports.create = async (req, res) => {
           room: room._id,
           month: m,
           year: y,
-          roomFee: feePerSlot,
+          roomFee: contractRoomFee,
           electricityFee: electShare,
           waterFee: waterShare,
           otherFee: otherShare,
@@ -477,14 +528,14 @@ exports.create = async (req, res) => {
           walletCreditApplied: walletAdj.walletApplied,
           dueDate: due,
           status: "unpaid",
-          note: `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người đang ở; + DV cá nhân${walletNoteCreate}`,
+          note: `Tiền phòng theo HĐ ${c.contractNumber || ""} (${contractRoomFee.toLocaleString("vi-VN")}đ); DV phòng chung ÷ ${roomCapacitySlots(room)} slot; điện/nước/phí khác ÷ ${occupants} người; + DV cá nhân${walletNoteCreate}`,
           paymentHistory: [
             {
               at: new Date(),
               action: "created",
               amount: Math.round(total),
               performedBy: req.user._id,
-              note: "Tạo hóa đơn theo phòng — tiền phòng theo slot",
+              note: "Tạo hóa đơn theo phòng — tiền phòng theo HĐ active",
             },
           ],
         });
@@ -528,8 +579,12 @@ exports.create = async (req, res) => {
 
     const existing = await Bill.findOne({ contract, month: m, year: y });
     if (existing) return res.status(400).json({ message: "Hóa đơn tháng này đã tồn tại" });
-    const contractRoomFeePerSlot = computeRoomFeePerSlot(contractDoc.room);
-    const effectiveRoomFee = roomFeeFromBody || contractRoomFeePerSlot;
+    const effectiveRoomFee = resolveRoomFeeFromActiveContract(contractDoc);
+    if (roomFeeFromBody > 0 && roomFeeFromBody !== effectiveRoomFee) {
+      return res.status(400).json({
+        message: `Tiền phòng phải theo HĐ đang hiệu lực (${effectiveRoomFee.toLocaleString("vi-VN")}đ), không dùng giá phòng/slot.`,
+      });
+    }
     const total = effectiveRoomFee + Number(electricityFee || 0) + Number(waterFee || 0) + Number(otherFee || 0);
     const bill = await Bill.create({
       contract,
@@ -580,7 +635,8 @@ exports.create = async (req, res) => {
     });
     res.status(201).json(await bill.populate(["user", "room", "room.area"]));
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const code = error.statusCode || 500;
+    res.status(code).json({ message: error.message });
   }
 };
 
@@ -626,7 +682,6 @@ exports.generateByMonth = async (req, res) => {
       const room = list[0].room;
       const occupants = Math.max(1, list.length);
       const roomCost = roomCostMap.get(String(room._id));
-      const feePerSlot = computeRoomFeePerSlot(room);
       const electricityTotal = Number(roomCost?.electricityFee || 0);
       const waterTotal = Number(roomCost?.waterFee || 0);
 
@@ -639,9 +694,9 @@ exports.generateByMonth = async (req, res) => {
 
       const electShare = electricityTotal / occupants;
       const waterShare = waterTotal / occupants;
-      const basePerStudent = feePerSlot + electShare + waterShare + commonFeeShare;
 
       for (const c of list) {
+        const contractRoomFee = resolveRoomFeeFromActiveContract(c);
         const exists = await Bill.findOne({ contract: c._id, month, year });
         if (exists) {
           skipped += 1;
@@ -652,14 +707,14 @@ exports.generateByMonth = async (req, res) => {
         const personalBreakdown = personal.breakdown;
         const personalTotal = personal.total;
 
-        const total = basePerStudent + personalTotal;
+        const total = contractRoomFee + electShare + waterShare + commonFeeShare + personalTotal;
         const bill = await Bill.create({
           contract: c._id,
           user: c.user._id,
           room: room._id,
           month,
           year,
-          roomFee: feePerSlot,
+          roomFee: contractRoomFee,
           electricityFee: electShare,
           waterFee: waterShare,
           otherFee: 0,
@@ -671,14 +726,14 @@ exports.generateByMonth = async (req, res) => {
           total,
           dueDate,
           status: "unpaid",
-          note: `Tiền phòng & DV phòng chung (Wi‑Fi…) ÷ ${roomCapacitySlots(room)} slot; điện/nước ÷ ${occupants} người đang ở; + DV cá nhân`,
+          note: `Tiền phòng theo HĐ ${c.contractNumber || ""} (${contractRoomFee.toLocaleString("vi-VN")}đ); DV phòng chung ÷ ${roomCapacitySlots(room)} slot; điện/nước ÷ ${occupants} người; + DV cá nhân`,
           paymentHistory: [
             {
               at: new Date(),
               action: "created",
               amount: Math.round(total),
               performedBy: req.user?._id || null,
-              note: "Sinh tự động theo tháng — tiền phòng theo slot",
+              note: "Sinh tự động theo tháng — tiền phòng theo HĐ active",
             },
           ],
         });
@@ -706,7 +761,8 @@ exports.generateByMonth = async (req, res) => {
 
     res.json({ created, skipped });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const code = error.statusCode || 500;
+    res.status(code).json({ message: error.message });
   }
 };
 

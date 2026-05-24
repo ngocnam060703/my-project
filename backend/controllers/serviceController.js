@@ -5,6 +5,10 @@ const LaundryUsage = require("../models/LaundryUsage");
 const RoomService = require("../models/RoomService");
 const ServiceUsage = require("../models/ServiceUsage");
 const Contract = require("../models/Contract");
+const {
+  getStudentServicePeriodLockStatus,
+  assertStudentServicePeriodEditable,
+} = require("../services/serviceRegistrationLockService");
 
 function isAdmin(user) {
   return user?.role === "admin" || user?.role === "manager";
@@ -208,6 +212,18 @@ exports.toggleService = async (req, res) => {
   }
 };
 
+exports.getPeriodLockStatus = async (req, res) => {
+  try {
+    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
+    const parsed = parseMonthYear(req.query.month, req.query.year);
+    if (!parsed) return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
+    const status = await getStudentServicePeriodLockStatus(req.user._id, parsed.month, parsed.year);
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.getMyServiceRegistrations = async (req, res) => {
   try {
     const month = req.query.month != null ? Number(req.query.month) : null;
@@ -220,7 +236,15 @@ exports.getMyServiceRegistrations = async (req, res) => {
     const items = await ServiceRegistration.find(filter)
       .populate("service")
       .sort({ year: -1, month: -1, createdAt: -1 });
-    res.json(items);
+
+    let periodLock = null;
+    if (month != null && year != null) {
+      const parsed = parseMonthYear(month, year);
+      if (parsed) {
+        periodLock = await getStudentServicePeriodLockStatus(req.user._id, parsed.month, parsed.year);
+      }
+    }
+    res.json({ items, periodLock });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -247,6 +271,8 @@ exports.upsertMyServiceRegistration = async (req, res) => {
     }
     const m = parsed.month;
     const y = parsed.year;
+
+    await assertStudentServicePeriodEditable(req.user._id, m, y);
 
     const member = await Contract.findOne({
       user: req.user._id,
@@ -283,6 +309,7 @@ exports.upsertMyServiceRegistration = async (req, res) => {
 
     res.json(doc);
   } catch (error) {
+    if (error?.statusCode === 409) return res.status(409).json({ message: error.message, code: error.code });
     res.status(500).json({ message: error.message });
   }
 };
@@ -296,6 +323,7 @@ exports.recordMyLaundryUse = async (req, res) => {
     }
     const parsed = parseMonthYear(month, year);
     if (!parsed) return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
+    await assertStudentServicePeriodEditable(req.user._id, parsed.month, parsed.year);
     const q = Math.max(1, Math.floor(Number(quantity) || 1));
 
     const svc = await Service.findById(serviceId);
@@ -344,6 +372,7 @@ exports.recordMyLaundryUse = async (req, res) => {
       remainingUses: Math.max(0, includedUses - usedCount),
     });
   } catch (error) {
+    if (error?.statusCode === 409) return res.status(409).json({ message: error.message, code: error.code });
     res.status(500).json({ message: error.message });
   }
 };

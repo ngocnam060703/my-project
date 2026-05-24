@@ -7,7 +7,10 @@ const mongoose = require("mongoose");
 const Contract = require("../models/Contract");
 const Room = require("../models/Room");
 const User = require("../models/User");
-const { buildContractPricingFields } = require("../services/contractPricing");
+const {
+  buildContractPricingFields,
+  isContractPricingFrozen,
+} = require("../services/contractPricing");
 
 async function main() {
   await mongoose.connect(process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/ktx_fdorm");
@@ -16,6 +19,7 @@ async function main() {
   });
   let n = 0;
   for (const c of rows) {
+    if (isContractPricingFrozen(c)) continue;
     if (c.contractPrice != null && c.roomCapacityAtSigning != null) continue;
     const [roomDoc, userDoc] = await Promise.all([
       Room.findById(c.room).lean(),

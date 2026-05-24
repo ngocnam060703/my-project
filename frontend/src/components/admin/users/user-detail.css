@@ -26,6 +26,15 @@
   overflow-wrap: anywhere;
 }
 
+.user-detail-table-wrap .contract-status-tag-wrap.ant-tag {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.35;
+  height: auto;
+  max-width: 100%;
+  display: inline-block;
+}
+
 @media (max-width: 768px) {
   .user-detail-modal .ant-descriptions-item-label {
     width: 38%;

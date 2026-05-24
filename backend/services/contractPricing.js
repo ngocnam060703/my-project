@@ -19,6 +19,18 @@ const PRIORITY_DISCOUNT_PERCENT = {
 
 const DEFAULT_DEPOSIT_VND = 100000;
 
+/** Trường giá snapshot — không được ghi đè khi HĐ đã khóa. */
+const CONTRACT_PRICING_FIELD_KEYS = [
+  "contractPrice",
+  "monthlyRent",
+  "depositAmount",
+  "roomCurrentPriceSnapshot",
+  "roomCapacityAtSigning",
+  "priorityPolicyType",
+  "priorityDiscountPercent",
+  "baseSlotPriceBeforeDiscount",
+];
+
 function roomCurrentPrice(roomDoc) {
   if (!roomDoc) return 0;
   const v = roomDoc.currentPrice != null ? roomDoc.currentPrice : roomDoc.price;
@@ -106,15 +118,49 @@ function hasPricingSnapshot(contractDoc) {
 
 /**
  * Gán snapshot lên document Contract (chưa save).
- * @param {boolean} force — chỉ true khi tạo HĐ mới / gia hạn
+ * Chỉ cho HĐ pending_payment chưa có giá — bỏ qua `force` nếu HĐ đã khóa.
  */
-function applyPricingSnapshotToContract(contractDoc, { roomDoc, userDoc, force = false }) {
+function applyPricingSnapshotToContract(contractDoc, { roomDoc, userDoc }) {
   if (!contractDoc || !roomDoc) return contractDoc;
-  if (!force && hasPricingSnapshot(contractDoc)) return contractDoc;
-  if (!force && isContractPricingFrozen(contractDoc)) return contractDoc;
+  if (isContractPricingFrozen(contractDoc)) return contractDoc;
+  if (hasPricingSnapshot(contractDoc)) return contractDoc;
+  if (String(contractDoc.status || "") !== "pending_payment") return contractDoc;
+  if (contractDoc.signedAt || contractDoc.financialLockedAt) return contractDoc;
   const pricing = buildContractPricingFields({ roomDoc, userDoc });
   Object.assign(contractDoc, pricing);
   return contractDoc;
+}
+
+function pricingFieldsInUpdate(update) {
+  if (!update || typeof update !== "object") return [];
+  const set = update.$set && typeof update.$set === "object" ? update.$set : update;
+  return CONTRACT_PRICING_FIELD_KEYS.filter((k) => set[k] !== undefined);
+}
+
+function assertContractPricingUpdateAllowed(contractDoc, update) {
+  const keys = pricingFieldsInUpdate(update);
+  if (!keys.length || !contractDoc) return;
+  if (!isContractPricingFrozen(contractDoc)) return;
+  const err = new Error(
+    "Hợp đồng đã khóa giá — không được thay đổi tiền phòng/slot/sức chứa trên bản ghi HĐ",
+  );
+  err.statusCode = 409;
+  throw err;
+}
+
+/** Hoàn nguyên field giá nếu document đã khóa (pre-save). */
+async function revertLockedPricingFieldsOnSave(contractDoc) {
+  if (!contractDoc || contractDoc.isNew) return;
+  const modified = CONTRACT_PRICING_FIELD_KEYS.filter((f) => contractDoc.isModified(f));
+  if (!modified.length) return;
+  if (!isContractPricingFrozen(contractDoc)) return;
+  const prev = await Contract.findById(contractDoc._id)
+    .select(CONTRACT_PRICING_FIELD_KEYS.join(" "))
+    .lean();
+  if (!prev) return;
+  for (const f of modified) {
+    contractDoc.set(f, prev[f]);
+  }
 }
 
 /** Giá hiển thị cho UI/API — không bao giờ fallback phòng khi HĐ đã khóa. */
@@ -147,8 +193,11 @@ function resolveContractDisplayPricing(contractDoc, roomDoc = null) {
 
 async function ensureContractPricingSnapshot(contractId) {
   const contract = await Contract.findById(contractId);
-  if (!contract || hasPricingSnapshot(contract)) return contract;
-  if (!isContractPricingFrozen(contract) && String(contract.status) !== "pending_payment") {
+  if (!contract) return contract;
+  /** Đã ký / active / upcoming — không bao giờ ghi đè giá từ phòng live. */
+  if (isContractPricingFrozen(contract)) return contract;
+  if (hasPricingSnapshot(contract)) return contract;
+  if (String(contract.status) !== "pending_payment") {
     return contract;
   }
   const [roomDoc, userDoc] = await Promise.all([
@@ -156,7 +205,7 @@ async function ensureContractPricingSnapshot(contractId) {
     User.findById(contract.user).select("priorityType").lean(),
   ]);
   if (!roomDoc) return contract;
-  applyPricingSnapshotToContract(contract, { roomDoc, userDoc, force: true });
+  applyPricingSnapshotToContract(contract, { roomDoc, userDoc });
   if (!contract.financialLockedAt && (contract.signedAt || contract.status === "active")) {
     contract.financialLockedAt = contract.signedAt || contract.paymentConfirmedAt || new Date();
   }
@@ -185,6 +234,7 @@ function assertNoManualPricingInBody(body) {
 module.exports = {
   PRIORITY_DISCOUNT_PERCENT,
   DEFAULT_DEPOSIT_VND,
+  CONTRACT_PRICING_FIELD_KEYS,
   roomCurrentPrice,
   roomMaxCapacity,
   buildContractPricingFields,
@@ -198,5 +248,8 @@ module.exports = {
   resolveContractDisplayPricing,
   ensureContractPricingSnapshot,
   assertNoManualPricingInBody,
+  assertContractPricingUpdateAllowed,
+  pricingFieldsInUpdate,
+  revertLockedPricingFieldsOnSave,
   discountPercentForPriority,
 };

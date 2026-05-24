@@ -69,4 +69,30 @@ const contractSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+contractSchema.pre("save", async function (next) {
+  try {
+    const { revertLockedPricingFieldsOnSave } = require("../services/contractPricing");
+    await revertLockedPricingFieldsOnSave(this);
+    next();
+  } catch (e) {
+    next(e);
+  }
+});
+
+async function guardPricingOnQueryUpdate(next) {
+  try {
+    const { assertContractPricingUpdateAllowed, pricingFieldsInUpdate } = require("../services/contractPricing");
+    const update = this.getUpdate();
+    if (!pricingFieldsInUpdate(update)?.length) return next();
+    const doc = await this.model.findOne(this.getQuery()).lean();
+    if (doc) assertContractPricingUpdateAllowed(doc, update);
+    next();
+  } catch (e) {
+    next(e);
+  }
+}
+
+contractSchema.pre("updateOne", guardPricingOnQueryUpdate);
+contractSchema.pre("findOneAndUpdate", guardPricingOnQueryUpdate);
+
 module.exports = mongoose.model("Contract", contractSchema);

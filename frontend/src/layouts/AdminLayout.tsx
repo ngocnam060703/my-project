@@ -43,8 +43,7 @@ const AdminLayout: React.FC = () => {
     { key: "/admin/bills", icon: <DollarOutlined />, label: "Hóa đơn" },
     { key: "/admin/violations", icon: <ExclamationCircleOutlined />, label: "Vi phạm kỷ luật" },
     { key: "/admin/maintenance-reports", icon: <ToolOutlined />, label: "Khai báo hư hỏng" },
-    { key: "/admin/services", icon: <AppstoreOutlined />, label: "Dịch vụ (Ant)" },
-    { key: "/admin/dorm-services", icon: <ThunderboltOutlined />, label: "Dịch vụ KTX (BS5)" },
+    { key: "/admin/services", icon: <ThunderboltOutlined />, label: "Dịch vụ KTX" },
   ];
 
   const userMenu: MenuProps["items"] = [

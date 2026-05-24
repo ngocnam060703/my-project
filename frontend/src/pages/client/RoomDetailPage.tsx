@@ -96,7 +96,9 @@ const RoomDetailPage: React.FC = () => {
             <Button
               type="primary"
               disabled={!activeContract}
-              onClick={() => navigate(`/student/room-transfer?roomId=${room._id}`)}
+              onClick={() =>
+                navigate(`/student/my-applications?tab=transfer&roomId=${encodeURIComponent(room._id)}`)
+              }
             >
               Đăng ký chuyển sang phòng này
             </Button>

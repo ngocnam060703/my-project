@@ -219,6 +219,10 @@ exports.getAll = async (req, res) => {
                   paymentConfirmedAt: 1,
                   paymentConfirmedBy: 1,
                   monthlyRent: 1,
+                  contractPrice: 1,
+                  roomCurrentPriceSnapshot: 1,
+                  roomCapacityAtSigning: 1,
+                  financialLockedAt: 1,
                   depositAmount: 1,
                   createdAt: 1,
                   updatedAt: 1,
@@ -474,7 +478,9 @@ exports.getById = async (req, res) => {
     if (isStudent && ownerId !== String(req.user._id)) {
       return res.status(403).json({ message: "Không có quyền xem" });
     }
-    res.json(contract);
+    const lean = contract.toObject ? contract.toObject() : contract;
+    const roomLean = lean.room && typeof lean.room === "object" ? lean.room : null;
+    res.json(attachContractDisplayPricing(lean, roomLean));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -683,7 +689,13 @@ exports.studentSign = async (req, res) => {
       User.findById(contract.user).select("priorityType"),
     ]);
     if (!roomDoc) return res.status(400).json({ message: "Không tìm thấy phòng của hợp đồng" });
-    applyPricingSnapshotToContract(contract, { roomDoc, userDoc, force: true });
+    if (
+      String(contract.status) === "pending_payment" &&
+      !hasPricingSnapshot(contract) &&
+      !isContractPricingFrozen(contract)
+    ) {
+      applyPricingSnapshotToContract(contract, { roomDoc, userDoc });
+    }
     const now = new Date();
     contract.signedAt = now;
     contract.studentSignStatus = "student_signed";
@@ -798,12 +810,13 @@ exports.confirmPayment = async (req, res) => {
       Room.findById(contract.room),
       User.findById(contract.user).select("priorityType"),
     ]);
-    if (roomDoc) {
-      applyPricingSnapshotToContract(contract, {
-        roomDoc,
-        userDoc,
-        force: !hasPricingSnapshot(contract),
-      });
+    if (
+      roomDoc &&
+      String(contract.status) === "pending_payment" &&
+      !isContractPricingFrozen(contract) &&
+      !hasPricingSnapshot(contract)
+    ) {
+      applyPricingSnapshotToContract(contract, { roomDoc, userDoc });
     }
     if (!contract.financialLockedAt) {
       contract.financialLockedAt = contract.signedAt || contract.renewalConsentAt || new Date();
@@ -913,7 +926,7 @@ exports.getMyContractOverview = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
     for (const c of contracts) {
-      if ((c.status === "active" || c.signedAt) && (c.contractPrice == null || c.roomCapacityAtSigning == null)) {
+      if (c.status === "pending_payment" && (c.contractPrice == null || c.roomCapacityAtSigning == null)) {
         await ensureContractPricingSnapshot(c._id);
       }
     }

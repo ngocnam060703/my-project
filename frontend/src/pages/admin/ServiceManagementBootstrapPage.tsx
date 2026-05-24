@@ -2,9 +2,10 @@
  * Quản lý dịch vụ KTX (Bootstrap 5): danh mục, gán phòng, nhập chỉ số điện/nước.
  * API: /api/services, /api/room-services, /api/service-usage
  */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { isAxiosError } from "axios";
 import "bootstrap/dist/css/bootstrap.min.css";
+import "./admin-dorm-services.css";
 import { useSocket } from "../../contexts/SocketContext";
 import { roomsApi, servicesApi, roomServicesApi, serviceUsageApi } from "../../api";
 import type { Room } from "../../types";
@@ -66,6 +67,44 @@ type PeriodStatus = {
 
 const fmt = (n: number) => `${Math.round(n || 0).toLocaleString("vi-VN")}đ`;
 
+type FilterSeg = "all" | "common" | "personal";
+
+/** Kiểu tính phí — map sang unit / measureUnit / tariffType trên backend. */
+type BillingKind = "monthly_fixed" | "meter" | "per_use";
+
+function serviceToBillingKind(s: Pick<Svc, "unit" | "measureUnit">): BillingKind {
+  if (s.measureUnit === "kwh" || s.measureUnit === "m3") return "meter";
+  if (s.unit === "once") return "per_use";
+  return "monthly_fixed";
+}
+
+function billingKindToFields(kind: BillingKind, meterMeasure: "kwh" | "m3") {
+  if (kind === "meter") {
+    return { unit: "monthly" as const, measureUnit: meterMeasure, tariffType: "variable" as const };
+  }
+  if (kind === "per_use") {
+    return { unit: "once" as const, measureUnit: "month" as const, tariffType: "fixed" as const };
+  }
+  return { unit: "monthly" as const, measureUnit: "month" as const, tariffType: "fixed" as const };
+}
+
+function getBillingKindLabel(kind: BillingKind, measureUnit?: string): string {
+  if (kind === "meter") {
+    if (measureUnit === "m3") return "Theo chỉ số (m³)";
+    if (measureUnit === "kwh") return "Theo chỉ số (kWh)";
+    return "Theo chỉ số";
+  }
+  if (kind === "per_use") return "Tính theo số lần";
+  return "Cố định theo tháng";
+}
+
+function getUnitLabel(s: Svc): string {
+  const kind = serviceToBillingKind(s);
+  if (kind === "monthly_fixed" && s.type === "common") return "Phòng / tháng";
+  if (kind === "monthly_fixed" && s.type === "personal") return "Cá nhân / tháng";
+  return getBillingKindLabel(kind, s.measureUnit);
+}
+
 function isMeterService(s: Svc): boolean {
   return s.isActive !== false && (s.measureUnit === "kwh" || s.measureUnit === "m3");
 }
@@ -111,6 +150,14 @@ const ServiceManagementBootstrapPage: React.FC = () => {
   const { socket } = useSocket();
   const [tab, setTab] = useState<"svc" | "room" | "usage">("svc");
   const [services, setServices] = useState<Svc[]>([]);
+  const [svcLoading, setSvcLoading] = useState(false);
+  const [search, setSearch] = useState("");
+  const [segment, setSegment] = useState<FilterSeg>("all");
+  const [toggleId, setToggleId] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editing, setEditing] = useState<Svc | null>(null);
+  const [svcPage, setSvcPage] = useState(1);
+  const [svcPageSize, setSvcPageSize] = useState(10);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [roomRows, setRoomRows] = useState<RoomSvcRow[]>([]);
   const [usageRows, setUsageRows] = useState<UsageRow[]>([]);
@@ -130,10 +177,13 @@ const ServiceManagementBootstrapPage: React.FC = () => {
     name: "",
     type: "common" as "common" | "personal",
     price: "" as string | number,
+    billingKind: "monthly_fixed" as BillingKind,
+    meterMeasure: "kwh" as "kwh" | "m3",
     unit: "monthly" as "monthly" | "once",
     measureUnit: "month" as "month" | "kwh" | "m3",
     tariffType: "fixed" as "fixed" | "variable",
     description: "",
+    isActive: true,
   });
 
   const [rsForm, setRsForm] = useState({ room: "", service: "" });
@@ -148,8 +198,15 @@ const ServiceManagementBootstrapPage: React.FC = () => {
   });
 
   const loadServices = useCallback(async () => {
-    const res = await servicesApi.getAll();
-    setServices((res.data as Svc[]) || []);
+    setSvcLoading(true);
+    try {
+      const res = await servicesApi.getAll();
+      setServices((res.data as Svc[]) || []);
+    } catch (e) {
+      setErr(apiErrMessage(e));
+    } finally {
+      setSvcLoading(false);
+    }
   }, []);
 
   const loadRooms = useCallback(async () => {
@@ -215,6 +272,93 @@ const ServiceManagementBootstrapPage: React.FC = () => {
   }, [loadServices, loadRooms]);
 
   useEffect(() => {
+    setSvcPage(1);
+  }, [search, segment]);
+
+  const filteredServices = useMemo(() => {
+    let rows = services;
+    if (segment === "common") rows = rows.filter((s) => s.type === "common");
+    if (segment === "personal") rows = rows.filter((s) => s.type === "personal");
+    const q = search.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter(
+        (s) => s.name.toLowerCase().includes(q) || (s.description || "").toLowerCase().includes(q),
+      );
+    }
+    return rows;
+  }, [services, segment, search]);
+
+  const svcStats = useMemo(() => {
+    const active = services.filter((s) => s.isActive !== false).length;
+    const common = services.filter((s) => s.type === "common").length;
+    const personal = services.filter((s) => s.type === "personal").length;
+    const estCommonMonth = services
+      .filter((s) => s.isActive !== false && s.type === "common" && !String(s.name).toLowerCase().includes("tiền phòng"))
+      .reduce((a, s) => a + Number(s.price || 0), 0);
+    return { active, common, personal, total: services.length, estCommonMonth };
+  }, [services]);
+
+  const svcPageCount = Math.max(1, Math.ceil(filteredServices.length / svcPageSize));
+  const pagedServices = useMemo(() => {
+    const start = (svcPage - 1) * svcPageSize;
+    return filteredServices.slice(start, start + svcPageSize);
+  }, [filteredServices, svcPage, svcPageSize]);
+
+  const openCreateDrawer = () => {
+    setEditing(null);
+    const billingKind: BillingKind = "monthly_fixed";
+    const fields = billingKindToFields(billingKind, "kwh");
+    setForm({
+      name: "",
+      type: "personal",
+      price: "",
+      billingKind,
+      meterMeasure: "kwh",
+      ...fields,
+      description: "",
+      isActive: true,
+    });
+    setDrawerOpen(true);
+  };
+
+  const openEditDrawer = (s: Svc) => {
+    setEditing(s);
+    const billingKind = serviceToBillingKind(s);
+    const meterMeasure = s.measureUnit === "m3" ? "m3" : "kwh";
+    const fields = billingKindToFields(billingKind, meterMeasure);
+    setForm({
+      name: s.name,
+      type: (s.type as "common" | "personal") || "personal",
+      price: s.price,
+      billingKind,
+      meterMeasure,
+      unit: fields.unit,
+      measureUnit: fields.measureUnit,
+      tariffType: fields.tariffType,
+      description: s.description || "",
+      isActive: s.isActive !== false,
+    });
+    setDrawerOpen(true);
+  };
+
+  const applyBillingKind = (billingKind: BillingKind, meterMeasure = form.meterMeasure) => {
+    const fields = billingKindToFields(billingKind, meterMeasure);
+    setForm((f) => ({
+      ...f,
+      billingKind,
+      meterMeasure,
+      unit: fields.unit,
+      measureUnit: fields.measureUnit,
+      tariffType: fields.tariffType,
+    }));
+  };
+
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setEditing(null);
+  };
+
+  useEffect(() => {
     if (tab === "room") void loadRoomServices();
     if (tab === "usage") {
       void loadUsage();
@@ -250,37 +394,46 @@ const ServiceManagementBootstrapPage: React.FC = () => {
     e.preventDefault();
     setErr(null);
     const p = Number(form.price);
-    if (!(p > 0)) {
-      setErr("Đơn giá phải > 0");
+    if (!(p >= 0)) {
+      setErr("Giá phải ≥ 0");
       return;
     }
-    setLoading(true);
+    setSvcLoading(true);
     try {
-      await servicesApi.create({
+      const billingFields = billingKindToFields(form.billingKind, form.meterMeasure);
+      const payload = {
         name: form.name.trim(),
         type: form.type,
         price: p,
-        unit: form.unit,
-        measureUnit: form.measureUnit,
-        tariffType: form.measureUnit === "kwh" || form.measureUnit === "m3" ? "variable" : form.tariffType,
-        description: form.description,
-        isActive: true,
-      });
-      setForm({ name: "", type: "common", price: "", unit: "monthly", measureUnit: "month", tariffType: "fixed", description: "" });
+        unit: billingFields.unit,
+        measureUnit: billingFields.measureUnit,
+        tariffType: billingFields.tariffType,
+        description: form.description.trim(),
+        isActive: form.isActive,
+      };
+      if (editing) {
+        await servicesApi.update(editing._id, payload);
+      } else {
+        await servicesApi.create(payload);
+      }
+      closeDrawer();
       await loadServices();
     } catch (ex: unknown) {
-      setErr((ex as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi tạo dịch vụ");
+      setErr((ex as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lưu thất bại");
     } finally {
-      setLoading(false);
+      setSvcLoading(false);
     }
   };
 
-  const toggleSvc = async (id: string) => {
+  const toggleSvc = async (s: Svc) => {
+    setToggleId(s._id);
     try {
-      await servicesApi.toggle(id);
+      await servicesApi.toggle(s._id);
       await loadServices();
     } catch (ex: unknown) {
-      setErr((ex as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+      setErr((ex as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không đổi được trạng thái");
+    } finally {
+      setToggleId(null);
     }
   };
 
@@ -369,11 +522,22 @@ const ServiceManagementBootstrapPage: React.FC = () => {
   const filteredUsageRows = usageRows;
 
   return (
-    <div className="container-fluid px-0">
-      <h4 className="mb-3">Quản lý dịch vụ</h4>
-      {err && <div className="alert alert-danger">{err}</div>}
+    <div className="admin-dorm-services">
+      <div className="mb-4">
+        <h1 className="page-title">Dịch vụ KTX</h1>
+        <p className="page-desc">
+          Cấu hình dịch vụ chung (chia trên hóa đơn phòng) và dịch vụ cá nhân (sinh viên đăng ký). Giá chung được tự động đưa vào hóa đơn tháng.
+        </p>
+      </div>
 
-      <ul className="nav nav-tabs mb-3">
+      {err && (
+        <div className="alert alert-danger py-2 small mb-3 d-flex justify-content-between align-items-start" role="alert">
+          <span>{err}</span>
+          <button type="button" className="btn-close" aria-label="Đóng" onClick={() => setErr(null)} />
+        </div>
+      )}
+
+      <ul className="nav nav-tabs nav-tabs-svc">
         <li className="nav-item">
           <button type="button" className={`nav-link ${tab === "svc" ? "active" : ""}`} onClick={() => setTab("svc")}>
             Danh mục dịch vụ
@@ -391,122 +555,201 @@ const ServiceManagementBootstrapPage: React.FC = () => {
         </li>
       </ul>
 
-      {loading && tab === "svc" && (
-        <div className="spinner-border spinner-border-sm text-primary mb-2" role="status" />
-      )}
-
       {tab === "svc" && (
-        <div className="row">
-          <div className="col-lg-5 mb-4">
-            <div className="card">
-              <div className="card-header">Thêm dịch vụ</div>
-              <div className="card-body">
-                <form onSubmit={submitService}>
-                  <div className="mb-2">
-                    <label className="form-label">Tên</label>
-                    <input className="form-control form-control-sm" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-                  </div>
-                  <div className="mb-2">
-                    <label className="form-label">Đơn giá (VNĐ)</label>
-                    <input className="form-control form-control-sm" required type="number" min={0.01} step={0.01} value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
-                  </div>
-                  <div className="row g-2">
-                    <div className="col-6">
-                      <label className="form-label">Loại SV</label>
-                      <select className="form-select form-select-sm" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as "common" | "personal" })}>
-                        <option value="common">Chung (phòng)</option>
-                        <option value="personal">Cá nhân</option>
-                      </select>
-                    </div>
-                    <div className="col-6">
-                      <label className="form-label">Đăng ký</label>
-                      <select className="form-select form-select-sm" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value as "monthly" | "once" })}>
-                        <option value="monthly">Theo tháng</option>
-                        <option value="once">Một lần</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="row g-2 mt-1">
-                    <div className="col-6">
-                      <label className="form-label">Đơn vị đo</label>
-                      <select
-                        className="form-select form-select-sm"
-                        value={form.measureUnit}
-                        onChange={(e) => {
-                          const measureUnit = e.target.value as "month" | "kwh" | "m3";
-                          setForm({
-                            ...form,
-                            measureUnit,
-                            tariffType: measureUnit === "kwh" || measureUnit === "m3" ? "variable" : form.tariffType,
-                          });
-                        }}
-                      >
-                        <option value="month">Tháng</option>
-                        <option value="kwh">kWh</option>
-                        <option value="m3">m³</option>
-                      </select>
-                    </div>
-                    <div className="col-6">
-                      <label className="form-label">Kiểu tính</label>
-                      <select className="form-select form-select-sm" value={form.tariffType} onChange={(e) => setForm({ ...form, tariffType: e.target.value as "fixed" | "variable" })}>
-                        <option value="fixed">Cố định</option>
-                        <option value="variable">Theo chỉ số</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="mb-2 mt-2">
-                    <label className="form-label">Mô tả</label>
-                    <input className="form-control form-control-sm" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-                  </div>
-                  <button type="submit" className="btn btn-primary btn-sm">
-                    Lưu
-                  </button>
-                </form>
+        <>
+          <div className="row g-3 mb-4">
+            <div className="col-12 col-sm-6 col-lg-3">
+              <div className="stat-card">
+                <div className="stat-label">Tổng dịch vụ</div>
+                <div className="stat-value">{svcStats.total}</div>
+              </div>
+            </div>
+            <div className="col-12 col-sm-6 col-lg-3">
+              <div className="stat-card">
+                <div className="stat-label">Đang hoạt động</div>
+                <div className="stat-value success">{svcStats.active}</div>
+              </div>
+            </div>
+            <div className="col-12 col-sm-6 col-lg-3">
+              <div className="stat-card">
+                <div className="stat-label">Dịch vụ chung</div>
+                <div className="stat-value">{svcStats.common}</div>
+              </div>
+            </div>
+            <div className="col-12 col-sm-6 col-lg-3">
+              <div className="stat-card">
+                <div className="stat-label">Dịch vụ cá nhân</div>
+                <div className="stat-value">{svcStats.personal}</div>
               </div>
             </div>
           </div>
-          <div className="col-lg-7">
-            <div className="table-responsive">
-              <table className="table table-sm table-bordered">
-                <thead className="table-light">
-                  <tr>
-                    <th>Tên</th>
-                    <th>Giá</th>
-                    <th>Đo / Kiểu</th>
-                    <th>TT</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {services.map((s) => (
-                    <tr key={s._id}>
-                      <td>{s.name}</td>
-                      <td className="text-end fw-semibold">{fmt(s.price)}</td>
-                      <td className="small">
-                        {s.measureUnit || "month"} / {s.tariffType || "fixed"}
-                      </td>
-                      <td>{s.isActive ? <span className="badge text-bg-success">Active</span> : <span className="badge text-bg-secondary">Off</span>}</td>
-                      <td>
-                        <button type="button" className="btn btn-outline-secondary btn-sm me-1" onClick={() => toggleSvc(s._id)}>
-                          Bật/tắt
-                        </button>
-                        <button type="button" className="btn btn-outline-danger btn-sm" onClick={() => delSvc(s._id)}>
-                          Xóa
-                        </button>
-                      </td>
-                    </tr>
+
+          <div className="main-panel">
+            <div className="main-panel-header">
+              <div className="filter-bar mb-0 flex-grow-1">
+                <input
+                  type="search"
+                  className="form-control form-control-sm search-input"
+                  placeholder="Tìm theo tên hoặc mô tả…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                <div className="btn-group segment-group" role="group">
+                  {(
+                    [
+                      ["all", "Tất cả"],
+                      ["common", "Chung"],
+                      ["personal", "Cá nhân"],
+                    ] as const
+                  ).map(([val, label]) => (
+                    <button
+                      key={val}
+                      type="button"
+                      className={`btn btn-outline-secondary ${segment === val ? "active" : ""}`}
+                      onClick={() => setSegment(val)}
+                    >
+                      {label}
+                    </button>
                   ))}
-                </tbody>
-              </table>
+                </div>
+              </div>
+              <div className="d-flex gap-2">
+                <button type="button" className="btn btn-outline-secondary btn-sm" disabled={svcLoading} onClick={() => void loadServices()}>
+                  {svcLoading ? "Đang tải…" : "Làm mới"}
+                </button>
+                <button type="button" className="btn btn-primary btn-sm" onClick={openCreateDrawer}>
+                  + Thêm dịch vụ
+                </button>
+              </div>
+            </div>
+            <div className="main-panel-body">
+              <div className="table-responsive">
+                <table className="table svc-table align-middle">
+                  <thead>
+                    <tr>
+                      <th>Dịch vụ</th>
+                      <th style={{ width: 130 }}>Loại</th>
+                      <th style={{ width: 140 }}>Giá</th>
+                      <th style={{ width: 150 }}>Cách tính</th>
+                      <th style={{ width: 110 }}>Trạng thái</th>
+                      <th style={{ width: 72 }} className="text-center">
+                        Bật
+                      </th>
+                      <th style={{ width: 72 }} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {svcLoading && pagedServices.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="text-center text-muted py-4">
+                          <span className="spinner-border spinner-border-sm me-2" role="status" />
+                          Đang tải…
+                        </td>
+                      </tr>
+                    ) : null}
+                    {!svcLoading && pagedServices.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="text-center text-muted py-4">
+                          {search ? "Không khớp bộ lọc" : "Chưa có dịch vụ"}
+                        </td>
+                      </tr>
+                    ) : null}
+                    {pagedServices.map((s) => (
+                      <tr key={s._id}>
+                        <td>
+                          <div className="svc-name">{s.name}</div>
+                          {s.description ? <div className="svc-desc">{s.description}</div> : null}
+                        </td>
+                        <td>
+                          {s.type === "common" ? (
+                            <span className="tag tag-geekblue">Chung</span>
+                          ) : (
+                            <span className="tag tag-purple">Cá nhân</span>
+                          )}
+                        </td>
+                        <td className="fw-semibold">{fmt(s.price)}</td>
+                        <td>
+                          <span className="tag tag-default">{getUnitLabel(s)}</span>
+                        </td>
+                        <td>
+                          {s.isActive !== false ? (
+                            <span className="tag tag-success">Hoạt động</span>
+                          ) : (
+                            <span className="tag tag-default">Ngừng</span>
+                          )}
+                        </td>
+                        <td className="text-center">
+                          <div className="form-check form-switch d-inline-block mb-0">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              role="switch"
+                              checked={s.isActive !== false}
+                              disabled={toggleId === s._id}
+                              title={s.isActive !== false ? "Tạm ngừng cung cấp" : "Kích hoạt lại"}
+                              onChange={() => void toggleSvc(s)}
+                            />
+                          </div>
+                        </td>
+                        <td>
+                          <button type="button" className="btn-link-edit" onClick={() => openEditDrawer(s)}>
+                            Sửa
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {filteredServices.length > 0 ? (
+                <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3">
+                  <span className="small text-muted">{filteredServices.length} dịch vụ</span>
+                  <div className="d-flex align-items-center gap-2">
+                    <select
+                      className="form-select form-select-sm"
+                      style={{ width: 88 }}
+                      value={svcPageSize}
+                      onChange={(e) => {
+                        setSvcPageSize(Number(e.target.value));
+                        setSvcPage(1);
+                      }}
+                    >
+                      {[10, 20, 50].map((n) => (
+                        <option key={n} value={n}>
+                          {n}/trang
+                        </option>
+                      ))}
+                    </select>
+                    <div className="btn-group btn-group-sm">
+                      <button type="button" className="btn btn-outline-secondary" disabled={svcPage <= 1} onClick={() => setSvcPage((p) => p - 1)}>
+                        ‹
+                      </button>
+                      <button type="button" className="btn btn-outline-secondary disabled">
+                        {svcPage}/{svcPageCount}
+                      </button>
+                      <button type="button" className="btn btn-outline-secondary" disabled={svcPage >= svcPageCount} onClick={() => setSvcPage((p) => p + 1)}>
+                        ›
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {svcStats.estCommonMonth > 0 && segment !== "personal" ? (
+                <span className="hint-text">
+                  Gợi ý: tổng dịch vụ chung (trừ mục &quot;Tiền phòng&quot;) ~ <strong>{fmt(svcStats.estCommonMonth)}</strong> / phòng / tháng — cộng vào hóa đơn và chia theo số người ở.
+                </span>
+              ) : null}
             </div>
           </div>
-        </div>
+        </>
       )}
 
       {tab === "room" && (
         <div className="row">
           <div className="col-md-5 mb-3">
-            <div className="card">
+            <div className="sub-panel card border-0">
               <div className="card-header">Gán dịch vụ cho phòng</div>
               <div className="card-body">
                 <form onSubmit={submitRoomService}>
@@ -540,7 +783,8 @@ const ServiceManagementBootstrapPage: React.FC = () => {
             </div>
           </div>
           <div className="col-md-7">
-            <table className="table table-sm table-bordered">
+            <div className="sub-panel">
+            <table className="table table-sm svc-table mb-0">
               <thead>
                 <tr>
                   <th>Phòng</th>
@@ -562,6 +806,7 @@ const ServiceManagementBootstrapPage: React.FC = () => {
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       )}
@@ -569,7 +814,7 @@ const ServiceManagementBootstrapPage: React.FC = () => {
       {tab === "usage" && (
         <div className="row">
           <div className="col-lg-5 mb-3">
-            <div className="card border-primary">
+            <div className="sub-panel card border-0 border-primary">
               <div className="card-header d-flex justify-content-between align-items-center">
                 <span>Nhập chỉ số (kWh / m³)</span>
                 {periodStatus?.billingStatus && (
@@ -761,9 +1006,9 @@ const ServiceManagementBootstrapPage: React.FC = () => {
             {usageLoading && (
               <div className="spinner-border spinner-border-sm text-primary mb-2" role="status" />
             )}
-            <div className="table-responsive">
-              <table className="table table-sm table-bordered">
-                <thead className="table-light">
+            <div className="sub-panel table-responsive">
+              <table className="table table-sm svc-table mb-0">
+                <thead>
                   <tr>
                     <th>Phòng</th>
                     <th>Dịch vụ</th>
@@ -818,6 +1063,98 @@ const ServiceManagementBootstrapPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <div className={`offcanvas offcanvas-end offcanvas-svc ${drawerOpen ? "show" : ""}`} tabIndex={-1} style={{ visibility: drawerOpen ? "visible" : "hidden" }}>
+        <div className="offcanvas-header border-bottom">
+          <h5 className="offcanvas-title">{editing ? "Sửa dịch vụ" : "Thêm dịch vụ mới"}</h5>
+          <button type="button" className="btn-close" aria-label="Đóng" onClick={closeDrawer} />
+        </div>
+        <div className="offcanvas-body">
+          <form onSubmit={submitService}>
+            <div className="mb-3">
+              <label className="form-label">Tên dịch vụ</label>
+              <input className="form-control" required placeholder="VD: WiFi, Gửi xe, Giặt ủi…" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            </div>
+            <div className="mb-3">
+              <label className="form-label">Loại</label>
+              <select className="form-select" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as "common" | "personal" })}>
+                <option value="common">Dịch vụ chung — giá theo phòng, chia đều số slot (capacity)</option>
+                <option value="personal">Dịch vụ cá nhân — sinh viên tự đăng ký</option>
+              </select>
+            </div>
+            <div className="mb-3">
+              <label className="form-label">Giá (VNĐ)</label>
+              <input className="form-control" required type="number" min={0} step={1} value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
+            </div>
+            <div className="mb-3">
+              <label className="form-label">Kiểu tính</label>
+              <select
+                className="form-select"
+                value={form.billingKind}
+                onChange={(e) => applyBillingKind(e.target.value as BillingKind)}
+              >
+                <option value="monthly_fixed">Cố định theo tháng</option>
+                <option value="meter">Theo chỉ số (điện / nước)</option>
+                <option value="per_use">Tính theo số lần</option>
+              </select>
+              {form.billingKind === "per_use" ? (
+                <p className="form-text text-muted mb-0 mt-1">
+                  Sinh viên nhập số lần sử dụng khi đăng ký; tiền = đơn giá × số lần.
+                </p>
+              ) : null}
+              {form.billingKind === "monthly_fixed" ? (
+                <p className="form-text text-muted mb-0 mt-1">Bật/tắt theo tháng; giá cố định mỗi kỳ.</p>
+              ) : null}
+            </div>
+            {form.billingKind === "meter" ? (
+              <div className="mb-3">
+                <label className="form-label">Loại đồng hồ</label>
+                <select
+                  className="form-select"
+                  value={form.meterMeasure}
+                  onChange={(e) => applyBillingKind("meter", e.target.value as "kwh" | "m3")}
+                >
+                  <option value="kwh">Điện (kWh)</option>
+                  <option value="m3">Nước (m³)</option>
+                </select>
+                <p className="form-text text-muted mb-0 mt-1">Nhập chỉ số ở tab «Chỉ số điện / nước».</p>
+              </div>
+            ) : null}
+            <div className="mb-3">
+              <label className="form-label">Mô tả (tuỳ chọn)</label>
+              <textarea className="form-control" rows={3} placeholder="Hiển thị cho admin và có thể dùng cho sinh viên hiểu rõ dịch vụ." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            </div>
+            <div className="form-check form-switch mb-4">
+              <input className="form-check-input" type="checkbox" id="svcActive" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
+              <label className="form-check-label" htmlFor="svcActive">
+                Đang cung cấp
+              </label>
+            </div>
+            <div className="d-flex gap-2">
+              <button type="submit" className="btn btn-primary" disabled={svcLoading}>
+                {svcLoading ? "Đang lưu…" : editing ? "Lưu" : "Tạo"}
+              </button>
+              <button type="button" className="btn btn-outline-secondary" onClick={closeDrawer}>
+                Hủy
+              </button>
+              {editing ? (
+                <button
+                  type="button"
+                  className="btn btn-outline-danger ms-auto"
+                  onClick={() => {
+                    if (window.confirm("Xóa dịch vụ? Chỉ xóa được khi không còn liên kết.")) {
+                      void delSvc(editing._id).then(() => closeDrawer());
+                    }
+                  }}
+                >
+                  Xóa
+                </button>
+              ) : null}
+            </div>
+          </form>
+        </div>
+      </div>
+      {drawerOpen ? <div className="offcanvas-backdrop fade show" onClick={closeDrawer} aria-hidden /> : null}
     </div>
   );
 };

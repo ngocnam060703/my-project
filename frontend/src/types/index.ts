@@ -100,6 +100,10 @@ export interface StayHistoryRow {
     | "pending_checkin"
     | "staying"
     | "checked_out"
+    | "ended_cancelled"
+    | "ended_transfer_settled"
+    | "ended_terminated"
+    | "ended_expired"
     | "pending_bed"
     | "not_started"
     | string;
@@ -251,6 +255,13 @@ export interface TransferFinancialSnapshot {
   supplementAmount?: number;
   walletCreditAmount?: number;
   financialAction?: "none" | "supplement" | "wallet_credit";
+  /** room_offset = đã trả HĐ tiền phòng cũ, có bù trừ; defer_room_invoice = chốt ngày ở, HĐ tháng lẻ sau */
+  financialMode?: "room_offset" | "defer_room_invoice";
+  hasPaidOldRoomBill?: boolean;
+  settlementDate?: string;
+  newFirstMonthProrated?: number;
+  daysNewFirstMonth?: number;
+  totalCreditFromOld?: number;
   priceComparison?: "higher" | "lower" | "equal";
   labels?: {
     oldRoom?: { roomNumber?: string; areaName?: string };

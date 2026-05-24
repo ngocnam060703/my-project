@@ -317,6 +317,9 @@ exports.approve = async (req, res) => {
       link: "/student/my-contracts",
     });
 
+    const appUser = await User.findById(reg.user._id).select("priorityType").lean();
+    const { buildContractPricingFields } = require("../services/contractPricing");
+    const pricing = buildContractPricingFields({ roomDoc: room, userDoc: appUser });
     const contract = await Contract.create({
       registration: reg._id,
       user: reg.user._id,
@@ -327,6 +330,7 @@ exports.approve = async (req, res) => {
       status: "pending_payment",
       signedAt: null,
       createdBy: req.user._id,
+      ...pricing,
     });
     await recountRoomOccupancyForRoom(reg.room._id);
     res.json({ registration: reg, contract });
