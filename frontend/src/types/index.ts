@@ -571,8 +571,13 @@ export interface MaintenanceReport {
   _id: string;
   user?: User | string;
   room?: Room | string;
-  incidentType: MaintenanceIncidentType;
+  incidentType?: MaintenanceIncidentType | "";
+  facility?: { _id: string; name?: string; code?: string } | string | null;
+  facilityLocation?: string | null;
+  damagedItemLabel?: string;
   description: string;
+  /** SV: chỉ biết có hóa đơn đền bù, không thấy số tiền */
+  hasCompensationBill?: boolean;
   images?: string[];
   status: MaintenanceReportStatus;
   adminNote?: string;

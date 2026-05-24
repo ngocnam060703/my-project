@@ -19,9 +19,9 @@ export const STATUS_MAP: Record<
   MaintenanceReportStatus,
   { color: string; label: string }
 > = {
-  pending: { color: "orange", label: "Chờ xử lý" },
-  processing: { color: "blue", label: "Đang xử lý" },
-  resolved: { color: "green", label: "Đã xử lý" },
+  pending: { color: "orange", label: "Chờ kiểm tra" },
+  processing: { color: "blue", label: "Đang sửa chữa" },
+  resolved: { color: "green", label: "Đã khắc phục" },
   cancelled: { color: "default", label: "Đã hủy" },
 };
 
@@ -33,8 +33,8 @@ export const SEVERITY_LABEL: Record<MaintenanceSeverity, string> = {
 };
 
 export const DAMAGE_CAUSE_LABEL: Record<MaintenanceDamageCause, string> = {
-  natural_wear: "Hỏng tự nhiên / xuống cấp CSVC",
-  student_caused: "Do sinh viên gây ra",
+  natural_wear: "Thiết bị bảo trì / Hao mòn tự nhiên",
+  student_caused: "Sinh viên làm hỏng",
   "": "—",
 };
 
@@ -64,4 +64,11 @@ export function requestCodeDisplay(r: MaintenanceReport): string {
 export function incidentAreaLabel(type?: MaintenanceIncidentType): string {
   if (!type) return "—";
   return INCIDENT_LABEL[type] || type;
+}
+
+/** Thiết bị/vật tư hỏng — ưu tiên snapshot trên đơn. */
+export function damagedItemDisplay(r: MaintenanceReport): string {
+  if (r.damagedItemLabel?.trim()) return r.damagedItemLabel.trim();
+  if (r.incidentType) return incidentAreaLabel(r.incidentType);
+  return "—";
 }

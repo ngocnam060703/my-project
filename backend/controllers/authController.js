@@ -4,6 +4,41 @@ const { validationResult } = require("express-validator");
 const { isProfileComplete } = require("../utils/profileComplete");
 const { findUserByEmailFlexible } = require("../utils/findUserByEmail");
 
+function registerDuplicateMessage(error) {
+  const code = error?.code;
+  if (code !== 11000 && code !== 11001) {
+    const raw = String(error?.message || "");
+    if (!raw.includes("E11000")) return null;
+    if (/email/i.test(raw)) return "Email này đã được đăng ký. Vui lòng đăng nhập hoặc dùng email khác.";
+    if (/studentId/i.test(raw)) return "MSSV này đã được đăng ký. Vui lòng đăng nhập hoặc dùng MSSV khác.";
+    return "Thông tin đăng ký đã trùng với tài khoản khác. Vui lòng kiểm tra email và MSSV.";
+  }
+  const pattern = error?.keyPattern || {};
+  if (pattern.email != null) {
+    return "Email này đã được đăng ký. Vui lòng đăng nhập hoặc dùng email khác.";
+  }
+  if (pattern.studentId != null) {
+    return "MSSV này đã được đăng ký. Vui lòng đăng nhập hoặc dùng MSSV khác.";
+  }
+  return "Thông tin đăng ký đã trùng với tài khoản khác. Vui lòng kiểm tra email và MSSV.";
+}
+
+/** Tìm user theo email (kể cả đã xóa mềm) — tránh lọt qua kiểm tra chỉ user còn hiệu lực. */
+async function findUserByEmailAny(User, normalizedEmail) {
+  const email = String(normalizedEmail || "").trim().toLowerCase();
+  if (!email) return null;
+  let user = await User.findOne({ email });
+  if (user) return user;
+  try {
+    user = await User.findOne({
+      $expr: { $eq: [{ $toLower: { $ifNull: ["$email", ""] } }, email] },
+    });
+  } catch {
+  }
+  if (user) return user;
+  return findUserByEmailFlexible(User, email);
+}
+
 const generateToken = (userId) => {
   const id =
     userId == null
@@ -36,16 +71,23 @@ exports.register = async (req, res) => {
     if (String(password || "") !== String(confirmPassword || "")) {
       return res.status(400).json({ message: "Xác nhận mật khẩu không khớp" });
     }
-    const existingUser = await findUserByEmailFlexible(User, normalizedEmail);
+    const existingUser = await findUserByEmailAny(User, normalizedEmail);
     if (existingUser) {
-      return res.status(400).json({ message: "Email đã tồn tại" });
+      if (existingUser.isDeleted) {
+        return res.status(400).json({
+          message: "Email đã từng được đăng ký. Vui lòng liên hệ quản trị viên hoặc dùng email khác.",
+        });
+      }
+      return res.status(400).json({ message: "Email đã tồn tại. Vui lòng đăng nhập hoặc dùng email khác." });
     }
-    const existingStudentId = await User.findOne({
-      studentId: normalizedStudentId,
-      isDeleted: { $ne: true },
-    }).select("_id");
+    const existingStudentId = await User.findOne({ studentId: normalizedStudentId }).select("_id isDeleted");
     if (existingStudentId) {
-      return res.status(400).json({ message: "MSSV đã tồn tại" });
+      if (existingStudentId.isDeleted) {
+        return res.status(400).json({
+          message: "MSSV đã từng được đăng ký. Vui lòng liên hệ quản trị viên hoặc dùng MSSV khác.",
+        });
+      }
+      return res.status(400).json({ message: "MSSV đã tồn tại. Vui lòng đăng nhập hoặc dùng MSSV khác." });
     }
     const user = await User.create({
       email: normalizedEmail,
@@ -73,7 +115,12 @@ exports.register = async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    const dup = registerDuplicateMessage(error);
+    if (dup) {
+      return res.status(409).json({ message: dup });
+    }
+    console.error("register:", error);
+    res.status(500).json({ message: "Không thể đăng ký tài khoản. Vui lòng thử lại sau." });
   }
 };
 

@@ -508,7 +508,13 @@ async function getMyMaintenanceReports(): Promise<AxiosResponse<unknown>> {
 /** Khai báo hư hỏng theo loại sự cố (điện/nước/thiết bị/khác) — REST: my-reports + reports */
 export const maintenanceReportsApi = {
   getMy: () => getMyMaintenanceReports(),
-  create: (data: { type: string; description: string; images?: string[] }) => client.post("/reports", data),
+  getRoomFacilities: () => client.get("/reports/room-facilities"),
+  create: (data: {
+    facilityLocationId?: string;
+    damagedItemLabel?: string;
+    description: string;
+    images?: string[];
+  }) => client.post("/reports", data),
   getById: (id: string) => client.get(`/reports/${id}`),
   cancel: (id: string) => client.delete(`/reports/${id}`),
 };

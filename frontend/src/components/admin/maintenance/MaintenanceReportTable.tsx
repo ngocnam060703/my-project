@@ -4,12 +4,9 @@ import { EyeOutlined } from "@ant-design/icons";
 import { formatDateTimeVi } from "../../../utils/formatDateTime";
 import {
   DAMAGE_CAUSE_LABEL,
+  damagedItemDisplay,
   formatMoney,
-  incidentAreaLabel,
-  MAINTENANCE_STATUS_LABEL,
   requestCodeDisplay,
-  RESOLUTION_LABEL,
-  SEVERITY_LABEL,
   STATUS_MAP,
 } from "../../../utils/maintenanceReportDisplay";
 import type { Bill, MaintenanceReport, MaintenanceReportStatus, Room, User } from "../../../types";
@@ -80,43 +77,30 @@ const MaintenanceReportTable: React.FC<Props> = ({
       render: (_: unknown, r: MaintenanceReport) => roomOf(r)?.roomNumber || "—",
     },
     {
-      title: "Khu vực HH",
-      key: "incidentType",
-      width: 100,
-      render: (_: unknown, r: MaintenanceReport) => incidentAreaLabel(r.incidentType),
-    },
-    {
-      title: "Mức độ HH",
-      key: "severity",
-      width: 100,
-      render: (_: unknown, r: MaintenanceReport) =>
-        r.severity ? SEVERITY_LABEL[r.severity] || r.severity : "—",
-    },
-    {
-      title: "Nguyên nhân HH",
-      key: "damageCause",
+      title: "Thiết bị / vật tư",
+      key: "damagedItem",
       width: 160,
+      ellipsis: true,
+      render: (_: unknown, r: MaintenanceReport) => damagedItemDisplay(r),
+    },
+    {
+      title: "Nguyên nhân",
+      key: "damageCause",
+      width: 180,
       ellipsis: true,
       render: (_: unknown, r: MaintenanceReport) =>
         r.damageCause ? DAMAGE_CAUSE_LABEL[r.damageCause] || r.damageCause : "—",
     },
     {
-      title: "Loại xử lý",
-      key: "resolutionType",
-      width: 130,
-      render: (_: unknown, r: MaintenanceReport) => {
-        if (!r.resolutionType) return "—";
-        const color = r.resolutionType === "compensation" ? "volcano" : "cyan";
-        return <Tag color={color}>{RESOLUTION_LABEL[r.resolutionType]}</Tag>;
-      },
-    },
-    {
-      title: "Chi phí BT",
+      title: "Phí đền bù",
       key: "compensationAmount",
       width: 110,
       align: "right" as const,
-      render: (_: unknown, r: MaintenanceReport) =>
-        r.resolutionType === "compensation" ? formatMoney(r.compensationAmount) : "—",
+      render: (_: unknown, r: MaintenanceReport) => {
+        if (!r.damageCause) return "—";
+        if (r.damageCause === "natural_wear") return "0đ";
+        return formatMoney(r.compensationAmount);
+      },
     },
     {
       title: "Ngày khai báo",
@@ -142,11 +126,6 @@ const MaintenanceReportTable: React.FC<Props> = ({
         return (
           <Space direction="vertical" size={0}>
             <Tag color={m.color}>{m.label}</Tag>
-            {r.resolutionType === "maintenance" && r.maintenanceStatus ? (
-              <span style={{ fontSize: 11, color: "#64748b" }}>
-                {MAINTENANCE_STATUS_LABEL[r.maintenanceStatus]}
-              </span>
-            ) : null}
             {billOf(r)?.billCode ? (
               <Tooltip title="Mã hóa đơn bồi thường">
                 <span style={{ fontSize: 11, color: "#64748b" }}>{billOf(r)?.billCode}</span>
@@ -168,12 +147,12 @@ const MaintenanceReportTable: React.FC<Props> = ({
           </Button>
           {r.status === "pending" && (
             <Button size="small" type="primary" onClick={() => onReceive(r)}>
-              Nhận xử lý
+              Tiếp nhận
             </Button>
           )}
           {r.status === "processing" && (
             <Button size="small" type="primary" onClick={() => onProcess(r)}>
-              Xử lý đơn
+              Phán quyết
             </Button>
           )}
         </Space>

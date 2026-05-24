@@ -1,15 +1,18 @@
 const { body, param, query } = require("express-validator");
 
-const INCIDENT_TYPES = ["electricity", "water", "equipment", "other"];
 const STATUSES = ["pending", "processing", "resolved", "cancelled", "all"];
-const SEVERITIES = ["light", "medium", "heavy", ""];
-const DAMAGE_CAUSES = ["natural_wear", "student_caused", ""];
-const RESOLUTION_TYPES = ["maintenance", "compensation", ""];
-const MAINTENANCE_STATUSES = ["none", "scheduled", "in_progress", "completed", ""];
+const DAMAGE_CAUSES = ["natural_wear", "student_caused"];
 
-/** POST /api/reports — sinh viên: type + description; phòng lấy từ hợp đồng active */
+/** POST /api/reports — SV: thiết bị/vật tư + mô tả + ảnh */
 exports.validateCreateMaintenance = [
-  body("type").isIn(INCIDENT_TYPES).withMessage("Loại sự cố không hợp lệ"),
+  body("type").not().exists().withMessage("Sinh viên không gửi loại sự cố cũ"),
+  body("incidentType").not().exists().withMessage("Sinh viên không gửi loại sự cố cũ"),
+  body("facilityLocationId").optional().isMongoId().withMessage("CSVC phòng không hợp lệ"),
+  body("damagedItemLabel")
+    .optional()
+    .trim()
+    .isLength({ max: 200 })
+    .withMessage("Tên thiết bị quá dài"),
   body("description")
     .trim()
     .notEmpty()
@@ -25,27 +28,42 @@ exports.validateCreateMaintenance = [
     .isString()
     .isLength({ max: 600000 })
     .withMessage("Một ảnh/URL quá dài"),
+  body("status").not().exists().withMessage("Sinh viên không được đặt trạng thái"),
   body("resolutionType").not().exists().withMessage("Sinh viên không được chọn loại xử lý"),
-  body("compensationAmount").not().exists().withMessage("Sinh viên không được nhập bồi thường"),
-  body("damageCause").not().exists().withMessage("Sinh viên không được chọn nguyên nhân xử lý"),
-  body("severity").not().exists().withMessage("Sinh viên không được chọn mức độ xử lý"),
+  body("compensationAmount").not().exists().withMessage("Sinh viên không được nhập phí đền bù"),
+  body("damageCause").not().exists().withMessage("Sinh viên không được chọn nguyên nhân"),
+  body("severity").not().exists().withMessage("Sinh viên không được chọn mức độ"),
+  body().custom((_, { req }) => {
+    const loc = req.body?.facilityLocationId;
+    const label = String(req.body?.damagedItemLabel || "").trim();
+    if (!loc && label.length < 2) {
+      throw new Error("Vui lòng chọn thiết bị/vật tư hỏng hoặc nhập tên (tối thiểu 2 ký tự)");
+    }
+    return true;
+  }),
 ];
 
 exports.validateMongoIdParam = [param("id").isMongoId().withMessage("id không hợp lệ")];
 
-/** PATCH admin */
+/** PATCH admin — kiểm tra & phán quyết */
 exports.validateAdminPatch = [
   param("id").isMongoId().withMessage("id không hợp lệ"),
-  body("status").optional().isIn(["pending", "processing", "resolved"]).withMessage("status không hợp lệ"),
+  body("status")
+    .optional()
+    .isIn(["pending", "processing", "resolved"])
+    .withMessage("status không hợp lệ"),
   body("adminNote").optional().isString().isLength({ max: 4000 }),
-  body("severity").optional().isIn(SEVERITIES).withMessage("Mức độ không hợp lệ"),
-  body("damageCause").optional().isIn(DAMAGE_CAUSES).withMessage("Nguyên nhân không hợp lệ"),
-  body("resolutionType").optional().isIn(RESOLUTION_TYPES).withMessage("Loại xử lý không hợp lệ"),
-  body("maintenanceStatus").optional().isIn(MAINTENANCE_STATUSES).withMessage("Trạng thái bảo trì không hợp lệ"),
+  body("damageCause")
+    .optional()
+    .isIn(DAMAGE_CAUSES)
+    .withMessage("Nguyên nhân phải là hao mòn tự nhiên hoặc sinh viên làm hỏng"),
   body("compensationAmount")
     .optional()
     .isFloat({ min: 0 })
-    .withMessage("Chi phí bồi thường không hợp lệ"),
+    .withMessage("Phí đền bù không hợp lệ"),
+  body("severity").not().exists().withMessage("Không dùng mức độ — chỉ nguyên nhân & phí đền bù"),
+  body("resolutionType").not().exists().withMessage("Loại xử lý được suy ra từ nguyên nhân"),
+  body("maintenanceStatus").not().exists().withMessage("Trạng thái đơn dùng pending/processing/resolved"),
 ];
 
 exports.validateAdminListQuery = [

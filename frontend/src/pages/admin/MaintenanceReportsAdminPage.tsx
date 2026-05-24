@@ -104,7 +104,7 @@ const MaintenanceReportsAdminPage: React.FC = () => {
   const receiveRow = async (r: MaintenanceReport) => {
     try {
       await maintenanceReportsAdminApi.patch(r._id, { status: "processing" });
-      message.success("Đã nhận xử lý đơn");
+      message.success("Đã tiếp nhận — trạng thái «Đang sửa chữa»");
       await load();
     } catch (e) {
       message.error(
@@ -119,17 +119,14 @@ const MaintenanceReportsAdminPage: React.FC = () => {
     try {
       await maintenanceReportsAdminApi.patch(selected._id, {
         status: "resolved",
-        severity: vals.severity,
         damageCause: vals.damageCause,
-        resolutionType: vals.resolutionType,
-        compensationAmount: vals.resolutionType === "compensation" ? vals.compensationAmount : 0,
-        maintenanceStatus: vals.resolutionType === "maintenance" ? vals.maintenanceStatus : "",
+        compensationAmount: vals.damageCause === "student_caused" ? vals.compensationAmount : 0,
         adminNote: vals.adminNote,
       });
       message.success(
-        vals.resolutionType === "compensation"
-          ? "Đã xử lý và tạo hóa đơn bồi thường hư hỏng"
-          : "Đã xử lý yêu cầu bảo trì"
+        vals.damageCause === "student_caused"
+          ? "Đã khắc phục và tạo hóa đơn đền bù"
+          : "Đã khắc phục (hao mòn tự nhiên — không tạo hóa đơn)"
       );
       setModalOpen(false);
       setSelected(null);

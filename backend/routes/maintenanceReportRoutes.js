@@ -12,6 +12,9 @@ router.post("/", auth, requireRole("user"), validateCreateMaintenance, validateR
 /** Danh sách của tôi (alias REST — đặt TRƯỚC /:id để không bị coi "my" là id) */
 router.get("/my", auth, requireRole("user"), maintenanceReportController.listMine);
 
+/** CSVC phòng — đặt trước /:id */
+router.get("/room-facilities", auth, requireRole("user"), maintenanceReportController.roomFacilities);
+
 /** Chi tiết: sinh viên (của mình) hoặc BQL */
 router.get("/:id", auth, validateMongoIdParam, validateRequest, maintenanceReportController.getById);
 

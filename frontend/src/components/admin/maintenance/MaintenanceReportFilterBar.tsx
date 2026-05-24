@@ -18,6 +18,8 @@ type Props = {
   onPageReset: () => void;
   onClearFilters: () => void;
   onReload: () => void;
+  /** Placeholder ô tìm kiếm (mặc định: admin). */
+  searchPlaceholder?: string;
 };
 
 const MaintenanceReportFilterBar: React.FC<Props> = ({
@@ -28,6 +30,7 @@ const MaintenanceReportFilterBar: React.FC<Props> = ({
   onPageReset,
   onClearFilters,
   onReload,
+  searchPlaceholder = "Tên SV, MSSV, mã yêu cầu",
 }) => {
   const dateValue = filters.date ? dayjs(filters.date) : null;
 
@@ -44,9 +47,9 @@ const MaintenanceReportFilterBar: React.FC<Props> = ({
           onPageReset();
         }}
       >
-        <Select.Option value="pending">Chờ xử lý</Select.Option>
-        <Select.Option value="processing">Đang xử lý</Select.Option>
-        <Select.Option value="resolved">Đã xử lý</Select.Option>
+        <Select.Option value="pending">Chờ kiểm tra</Select.Option>
+        <Select.Option value="processing">Đang sửa chữa</Select.Option>
+        <Select.Option value="resolved">Đã khắc phục</Select.Option>
         <Select.Option value="cancelled">Đã hủy</Select.Option>
       </Select>
       <DatePicker
@@ -92,7 +95,7 @@ const MaintenanceReportFilterBar: React.FC<Props> = ({
         }}
       />
       <Input
-        placeholder="Tên SV, MSSV, mã yêu cầu"
+        placeholder={searchPlaceholder}
         allowClear
         style={{ width: 240 }}
         value={searchInput}
