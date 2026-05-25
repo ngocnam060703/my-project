@@ -37,9 +37,11 @@ import { useSocket } from "../../contexts/SocketContext";
 import type { Area, Contract, ContractExtendRequest, Room, User } from "../../types";
 import dayjs from "dayjs";
 import {
-  effectiveContractPrice,
   contractRoomMonthlySnapshot,
+  contractSlotPriceMonthly,
+  capacityAtSigning,
   isContractPricingFrozen,
+  roomManagementMonthly,
 } from "../../utils/contractPricing";
 import {
   buildContractStatusMapForAdmin,
@@ -66,18 +68,18 @@ function monthsBetweenStartEnd(start: string | Date, end: string | Date): number
   return Math.max(1, m);
 }
 
-function roomSlots(r: Room | null | undefined): number {
-  const cap = Number(r?.capacity ?? 0);
+function roomSlots(r: Room | null | undefined, c?: Contract): number {
+  if (c && isContractPricingFrozen(c)) {
+    const cap = capacityAtSigning(c, r);
+    if (cap >= 1) return cap;
+  }
+  const cap = Number(r?.maxCapacity ?? r?.capacity ?? 0);
   return Number.isFinite(cap) && cap >= 1 ? cap : 1;
 }
 
-/** Giá 01 slot/tháng — ưu tiên snapshot HĐ, không lấy giá phòng live khi HĐ đã khóa. */
+/** Giá 01 slot/tháng = giá phòng ÷ số chỗ. */
 function studentMonthlyRentVnd(c: Contract, room: Room | null): number {
-  const frozen = effectiveContractPrice(c);
-  if (frozen > 0) return frozen;
-  if (isContractPricingFrozen(c)) return 0;
-  const full = contractRoomMonthlySnapshot(c, room) || Math.round(Number(room?.price ?? 0));
-  return Math.round(full / roomSlots(room || undefined));
+  return contractSlotPriceMonthly(c, room);
 }
 
 const extendStatusMap: Record<string, { color: string; text: string }> = {
@@ -387,11 +389,16 @@ const ContractsPage: React.FC = () => {
       void loadExtendRequests();
       void opsContractsApi.dashboard().then((res) => setOps(res.data?.cards || null)).catch(() => {});
     };
+    const onContractsRefresh = () => void load();
     socket.on("contract:extend-request:new", onNewExtend);
+    socket.on("registration:transfer-changed", onContractsRefresh);
+    socket.on("registration:approved", onContractsRefresh);
     return () => {
       socket.off("contract:extend-request:new", onNewExtend);
+      socket.off("registration:transfer-changed", onContractsRefresh);
+      socket.off("registration:approved", onContractsRefresh);
     };
-  }, [socket, extendStatusFilter, extendSearch]);
+  }, [socket, extendStatusFilter, extendSearch, load]);
 
   useEffect(() => {
     if (!openContractId) return;
@@ -547,25 +554,24 @@ const ContractsPage: React.FC = () => {
       width: 188,
       render: (_: unknown, r: Contract) => {
         const room = typeof r.room === "object" ? (r.room as Room) : null;
-        const slot = studentMonthlyRentVnd(r, room);
         const frozen = isContractPricingFrozen(r);
-        const full =
-          contractRoomMonthlySnapshot(r, room) ||
-          (room?.price != null ? Math.round(Number(room.price)) : 0);
-        const slots = frozen
-          ? Math.max(1, Math.round(Number(r.roomCapacityAtSigning) || roomSlots(room)))
-          : roomSlots(room);
-        if (!slot && !full) return "—";
+        const full = contractRoomMonthlySnapshot(r, room) || roomManagementMonthly(room);
+        const slots = roomSlots(room, r);
+        const slot = contractSlotPriceMonthly(r, room);
+        if (!full && !slot) return "—";
         return (
           <div style={{ fontSize: 12, lineHeight: 1.45 }}>
             {frozen ? (
               <div style={{ color: "#1677ff", marginBottom: 2 }}>Đã khóa trên HĐ</div>
+            ) : r.status === "pending_payment" ? (
+              <div style={{ color: "#059669", marginBottom: 2 }}>Theo giá phòng hiện tại</div>
             ) : null}
             <div>
               Tổng phòng: <strong>{full.toLocaleString("vi-VN")}</strong>đ/th
             </div>
             <div>
-              {slots} slot → <strong>{(slot || Math.round(full / slots)).toLocaleString("vi-VN")}</strong>đ/slot
+              {slots} slot → <strong>{slot.toLocaleString("vi-VN")}</strong>đ
+              {full > 0 && slots >= 1 ? ` (${full.toLocaleString("vi-VN")}÷${slots})` : ""}
             </div>
           </div>
         );
@@ -628,8 +634,12 @@ const ContractsPage: React.FC = () => {
             <Button
               type="link"
               size="small"
-              disabled={!r.signedAt}
-              title={!r.signedAt ? "Sinh viên chưa ký xác nhận" : undefined}
+              disabled={!hasStudentSignedContract(r)}
+              title={
+                !hasStudentSignedContract(r)
+                  ? "Sinh viên chưa ký xác nhận"
+                  : "Upload PDF đã ký và xác nhận để hợp đồng có hiệu lực"
+              }
               onClick={() =>
                 setConfirmModal({
                   contract: r,
@@ -637,7 +647,7 @@ const ContractsPage: React.FC = () => {
                 })
               }
             >
-              Xác nhận
+              Xác nhận — có hiệu lực
             </Button>
           )}
           {r.status === "active" && (
@@ -1131,7 +1141,7 @@ const ContractsPage: React.FC = () => {
                   "Tổng phòng/tháng (đ)": (() => {
                     const room = c.room && typeof c.room === "object" ? (c.room as Room) : null;
                     const v = contractRoomMonthlySnapshot(c, room);
-                    return v > 0 ? v : room?.price != null ? Math.round(Number(room.price)) : "-";
+                    return v > 0 ? v : room != null ? Math.round(Number(room.currentPrice ?? room.price ?? 0)) : "-";
                   })(),
                   "Giá 01 slot/tháng (đ)": (() => {
                     const room = c.room && typeof c.room === "object" ? (c.room as Room) : null;
@@ -1258,11 +1268,8 @@ const ContractsPage: React.FC = () => {
                 const slots = frozen
                   ? Math.max(1, Math.round(Number(detailModal.roomCapacityAtSigning) || roomSlots(room)))
                   : roomSlots(room);
-                const full =
-                  contractRoomMonthlySnapshot(detailModal, room) ||
-                  Math.round(Number(room.price || 0));
-                const perSlot = studentMonthlyRentVnd(detailModal, room);
-                const livePerSlot = Math.round(full / slots);
+                const full = frozen ? contractRoomMonthlySnapshot(detailModal, room) : roomManagementMonthly(room);
+                const slot = contractSlotPriceMonthly(detailModal, room);
                 return (
                   <Alert
                     type="info"
@@ -1271,7 +1278,7 @@ const ContractsPage: React.FC = () => {
                     message={
                       frozen
                         ? "Giá đã khóa trên hợp đồng — không đổi khi admin sửa bảng giá phòng"
-                        : "Thông tin phòng — Bên lập hợp đồng cần nắm để ghi Điều 2"
+                        : "Giá lấy từ Quản lý khu & phòng (giá phòng ÷ số chỗ)"
                     }
                     description={
                       <div style={{ fontSize: 13, lineHeight: 1.55 }}>
@@ -1283,13 +1290,8 @@ const ContractsPage: React.FC = () => {
                           {frozen ? " (snapshot HĐ)" : ""}
                         </div>
                         <div>
-                          <strong>Giá 01 chỗ/tháng trên HĐ:</strong>{" "}
-                          {perSlot.toLocaleString("vi-VN")}đ
-                          {!frozen && full > 0
-                            ? ` (= ${full.toLocaleString("vi-VN")} ÷ ${slots})`
-                            : frozen && livePerSlot !== perSlot
-                              ? ` — bảng giá phòng hiện tại: ${livePerSlot.toLocaleString("vi-VN")}đ/slot`
-                              : ""}
+                          <strong>Giá 01 chỗ/tháng:</strong> {slot.toLocaleString("vi-VN")}đ
+                          {full > 0 && slots >= 1 ? ` (= ${full.toLocaleString("vi-VN")} ÷ ${slots})` : ""}
                         </div>
                       </div>
                     }
@@ -1336,22 +1338,24 @@ const ContractsPage: React.FC = () => {
                 const slots = frozen
                   ? Math.max(1, Math.round(Number(detailModal.roomCapacityAtSigning) || roomSlots(room)))
                   : roomSlots(room);
-                const fullMonthly =
-                  contractRoomMonthlySnapshot(detailModal, room) ||
-                  Math.round(Number(room.price || 0));
-                const studentMonthly = studentMonthlyRentVnd(detailModal, room);
+                const fullMonthly = frozen ? contractRoomMonthlySnapshot(detailModal, room) : roomManagementMonthly(room);
+                const slotMonthly = contractSlotPriceMonthly(detailModal, room);
                 const months = monthsBetweenStartEnd(detailModal.startDate, detailModal.endDate);
-                const totalStudentPeriod = studentMonthly * months;
+                const totalStudentPeriod = slotMonthly * months;
                 return (
                   <>
                     <p>
                       <strong>Giá thuê:</strong> Phòng có <strong>{slots}</strong> chỗ (slot). Tổng tiền thuê{" "}
                       <strong>toàn phòng</strong>:{" "}
                       <strong>{fullMonthly.toLocaleString("vi-VN")} VNĐ/tháng</strong>
-                      {frozen ? " (theo snapshot hợp đồng)" : ""}. Giá thuê{" "}
+                      {frozen ? " (theo snapshot hợp đồng)" : " (theo Quản lý phòng)"}. Giá thuê{" "}
                       <strong>01 chỗ (01 sinh viên — Bên B)</strong>:{" "}
-                      <strong>{studentMonthly.toLocaleString("vi-VN")} VNĐ/tháng</strong>
-                      {frozen ? " (đã khóa trên hợp đồng)" : ` (= ${fullMonthly.toLocaleString("vi-VN")} ÷ ${slots})`}.
+                      <strong>{slotMonthly.toLocaleString("vi-VN")} VNĐ/tháng</strong>
+                      {fullMonthly > 0 && slots >= 1
+                        ? ` (= ${fullMonthly.toLocaleString("vi-VN")} ÷ ${slots})`
+                        : ""}
+                      {frozen ? " (đã khóa trên hợp đồng)" : ""}
+                      .
                     </p>
                     <p>
                       Tổng tiền Bên B thanh toán tiền thuê cho cả thời hạn hợp đồng (theo 01 chỗ, {months} tháng):{" "}

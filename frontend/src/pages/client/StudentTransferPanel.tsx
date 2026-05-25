@@ -2,17 +2,35 @@
  * Tab «Chuyển phòng» trong trang Đơn của tôi (sinh viên) — Bootstrap 5, giao diện gần admin ApplicationsPage.
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { contractsApi, registrationsApi, roomsApi } from "../../api";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { contractsApi, registrationsApi } from "../../api";
+import { useAuth } from "../../contexts/AuthContext";
+import { useSocket } from "../../contexts/SocketContext";
 import { apiErrorMessage } from "../../utils/apiErrorMessage";
+import { formatStudentGender, areaGenderPolicyLabel } from "../../utils/genderDisplay";
 import { canRequestRoomTransfer, pickResidenceContract } from "../../utils/ktxMembership";
 import type {
   Contract,
   Registration,
   Room,
   TransferEligibilityContext,
-  TransferFinancialSnapshot,
+  User,
 } from "../../types";
+
+type TransferRoomGroup = {
+  areaId: string;
+  areaName: string;
+  genderPolicy: string;
+  isCurrentArea: boolean;
+  isGenderZone: boolean;
+  rooms: Array<{
+    _id: string;
+    roomNumber: string;
+    capacity: number;
+    currentOccupancy: number;
+    vacantSlots: number;
+  }>;
+};
 
 const statusBadge: Record<string, { cls: string; text: string }> = {
   pending: { cls: "text-bg-warning", text: "Chờ duyệt" },
@@ -25,10 +43,11 @@ function formatVnd(n?: number): string {
 }
 
 function isTransferCompleted(r: Registration): boolean {
-  return r.status === "approved" && (r.transferPhase === "completed" || !!r.newContract);
+  return r.status === "approved" && r.transferPhase === "completed";
 }
 
-function needsStudentConfirm(r: Registration): boolean {
+/** Admin đã duyệt — SV cần ký HĐ mới tại trang Hợp đồng. */
+function needsTransferContractSign(r: Registration): boolean {
   return r.status === "approved" && !isTransferCompleted(r);
 }
 
@@ -49,6 +68,9 @@ type StudentTransferPanelProps = {
 };
 
 const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify }) => {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { socket } = useSocket();
   const [searchParams, setSearchParams] = useSearchParams();
   const deepLinkRoomId = searchParams.get("roomId")?.trim() || "";
 
@@ -60,15 +82,14 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
 
   const [activeContract, setActiveContract] = useState<Contract | null>(null);
   const [myContracts, setMyContracts] = useState<Contract[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
+  const [candidateGroups, setCandidateGroups] = useState<TransferRoomGroup[]>([]);
+  const [candidateLoading, setCandidateLoading] = useState(false);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [targetRoomId, setTargetRoomId] = useState("");
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [transferReason, setTransferReason] = useState("");
   const [detail, setDetail] = useState<Registration | null>(null);
-  const [confirmTarget, setConfirmTarget] = useState<Registration | null>(null);
-  const [confirming, setConfirming] = useState(false);
   const [transferEligibility, setTransferEligibility] = useState<TransferEligibilityContext | null>(null);
   const [showUpcomingAckModal, setShowUpcomingAckModal] = useState(false);
 
@@ -80,10 +101,9 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
     setLoading(true);
     setErr(null);
     try {
-      const [regRes, contractsRes, roomsRes, eligRes] = await Promise.all([
+      const [regRes, contractsRes, eligRes] = await Promise.all([
         registrationsApi.getMy(),
         contractsApi.getMy().catch(() => ({ data: [] })),
-        roomsApi.getAll().catch(() => ({ data: { rooms: [] as Room[] } })),
         registrationsApi.getTransferEligibility().catch(() => ({ data: null })),
       ]);
       setList(Array.isArray(regRes.data) ? regRes.data : []);
@@ -91,7 +111,6 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
       setMyContracts(contracts);
       setActiveContract(pickResidenceContract(contracts));
       setTransferEligibility((eligRes.data as TransferEligibilityContext) || null);
-      setRooms((roomsRes.data?.rooms || []) as Room[]);
     } catch (e) {
       setErr(apiErrorMessage(e, "Không tải được dữ liệu chuyển phòng"));
     } finally {
@@ -103,23 +122,35 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (!socket || !user) return;
+    const uid = String((user as { _id?: string })._id || (user as { id?: string }).id || "");
+    if (!uid) return;
+    const refresh = (payload: { userId?: string }) => {
+      if (!payload?.userId || payload.userId === uid) void load();
+    };
+    socket.on("registration:approved", refresh);
+    socket.on("registration:rejected", refresh);
+    socket.on("registration:transfer-changed", refresh);
+    return () => {
+      socket.off("registration:approved", refresh);
+      socket.off("registration:rejected", refresh);
+      socket.off("registration:transfer-changed", refresh);
+    };
+  }, [socket, user, load]);
+
   const currentRoom = activeContract?.room && typeof activeContract.room === "object" ? activeContract.room : null;
-  const currentAreaId = currentRoom?.area && typeof currentRoom.area === "object" ? currentRoom.area._id : undefined;
 
   const candidateRooms = useMemo(
-    () =>
-      rooms.filter((r) => {
-        const rid = String(r._id);
-        const rArea = typeof r.area === "object" ? r.area?._id : r.area;
-        if (!currentAreaId || String(rArea) !== String(currentAreaId)) return false;
-        if (currentRoom && String(currentRoom._id) === rid) return false;
-        return r.status !== "maintenance";
-      }),
-    [rooms, currentAreaId, currentRoom]
+    () => candidateGroups.flatMap((g) => g.rooms.map((r) => ({ ...r, _areaName: g.areaName, _genderPolicy: g.genderPolicy }))),
+    [candidateGroups]
   );
 
+  const hasRoomsInCurrentArea = candidateGroups.some((g) => g.isCurrentArea && g.rooms.length > 0);
+  const hasRoomsOtherAreas = candidateGroups.some((g) => !g.isCurrentArea && g.rooms.length > 0);
+
   const pendingTransfer = useMemo(() => list.find((r) => r.status === "pending"), [list]);
-  const awaitingConfirm = useMemo(() => list.find(needsStudentConfirm), [list]);
+  const awaitingSignContract = useMemo(() => list.find(needsTransferContractSign), [list]);
 
   const filtered = useMemo(() => {
     if (!statusFilter) return list;
@@ -150,14 +181,34 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
     setSearchParams(next, { replace: true });
   }, [deepLinkRoomId, loading, activeContract, candidateRooms, searchParams, setSearchParams]);
 
+  const loadCandidateRooms = async () => {
+    setCandidateLoading(true);
+    try {
+      const { data } = await registrationsApi.getTransferCandidateRooms();
+      setCandidateGroups(data?.groups || []);
+    } catch (e) {
+      setCandidateGroups([]);
+      setErr(apiErrorMessage(e, "Không tải được danh sách phòng chuyển"));
+    } finally {
+      setCandidateLoading(false);
+    }
+  };
+
+  const regUserGender = (r: Registration) => {
+    const u = r.user;
+    if (u && typeof u === "object") return formatStudentGender((u as User).gender);
+    return formatStudentGender(user?.gender);
+  };
+
   const openCreate = async () => {
     setErr(null);
     setTargetRoomId("");
     setStartDate(new Date().toISOString().slice(0, 10));
     setTransferReason("");
     try {
-      const { data } = await registrationsApi.getTransferEligibility();
-      setTransferEligibility(data as TransferEligibilityContext);
+      const eligRes = await registrationsApi.getTransferEligibility();
+      setTransferEligibility(eligRes.data as TransferEligibilityContext);
+      await loadCandidateRooms();
     } catch {
       /* giữ snapshot cũ nếu API lỗi */
     }
@@ -206,26 +257,6 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
       return;
     }
     void submitTransferRequest(false);
-  };
-
-  const openConfirmFlow = (r: Registration) => {
-    setConfirmTarget(r);
-    setDetail(null);
-  };
-
-  const submitConfirmTransfer = async () => {
-    if (!confirmTarget) return;
-    setConfirming(true);
-    try {
-      await registrationsApi.confirmTransfer(confirmTarget._id);
-      notify({ type: "success", text: "Đã xác nhận nhận phòng mới. Hợp đồng và giường đã được cập nhật." });
-      setConfirmTarget(null);
-      await load();
-    } catch (e) {
-      notify({ type: "danger", text: apiErrorMessage(e, "Xác nhận thất bại") });
-    } finally {
-      setConfirming(false);
-    }
   };
 
   const cancelReg = async (id: string) => {
@@ -284,7 +315,7 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
             {areaName(currentRoom || undefined)}
           </p>
           <p className="mb-0 text-muted">
-            Chỉ được chuyển phòng <strong>trong cùng khu</strong> (theo quy định giới tính / phân khu). Đơn có hiệu lực sau khi
+            Chỉ chuyển vào phòng có <strong>bạn cùng giới tính</strong> đang ở; ưu tiên khu hiện tại, nếu không còn chỗ sẽ hiển thị khu khác phù hợp. Đơn có hiệu lực sau khi
             admin duyệt.
           </p>
         </div>
@@ -329,10 +360,13 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
         <div className="alert alert-info small">Bạn đã có đơn chuyển phòng đang chờ duyệt — không thể gửi thêm cho đến khi được xử lý hoặc hủy đơn.</div>
       )}
 
-      {awaitingConfirm && (
+      {awaitingSignContract && (
         <div className="alert alert-info small mb-3">
-          Đơn chuyển phòng đã được admin duyệt một phần — đang chờ hoàn tất hệ thống. Vui lòng tải lại trang hoặc liên hệ
-          ban quản lý nếu trạng thái không đổi.
+          Admin đã duyệt đơn chuyển phòng. Vui lòng{" "}
+          <button type="button" className="btn btn-link btn-sm p-0 align-baseline" onClick={() => navigate("/student/my-contracts")}>
+            ký hợp đồng mới
+          </button>{" "}
+          tại mục «Hợp đồng của tôi», sau đó chờ admin xác nhận để hoàn tất chuyển phòng.
         </div>
       )}
 
@@ -360,6 +394,7 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
               <tr>
                 <th style={{ width: 50 }}>STT</th>
                 <th>Ngày gửi</th>
+                <th>Giới tính</th>
                 <th>Phòng hiện tại</th>
                 <th>Phòng muốn chuyển</th>
                 <th>Khu</th>
@@ -376,8 +411,8 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
                     ? r.rejectionReason || r.note || "—"
                     : isTransferCompleted(r)
                       ? "Đã hoàn tất chuyển phòng"
-                      : needsStudentConfirm(r)
-                        ? "Đã duyệt — chờ hoàn tất"
+                      : needsTransferContractSign(r)
+                        ? "Đã duyệt — chờ ký HĐ mới"
                         : r.status === "pending"
                           ? "Chờ admin duyệt"
                           : "—";
@@ -385,6 +420,7 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
                   <tr key={r._id}>
                     <td>{idx + 1}</td>
                     <td>{r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN") : "—"}</td>
+                    <td>{regUserGender(r)}</td>
                     <td>{roomNum(r.fromRoom)}</td>
                     <td>{roomNum(r.room)}</td>
                     <td>{areaName(r.room)}</td>
@@ -397,9 +433,9 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
                         <button type="button" className="btn btn-outline-primary" onClick={() => setDetail(r)}>
                           Xem
                         </button>
-                        {needsStudentConfirm(r) && (
-                          <button type="button" className="btn btn-success" onClick={() => openConfirmFlow(r)}>
-                            Xác nhận
+                        {needsTransferContractSign(r) && (
+                          <button type="button" className="btn btn-success" onClick={() => navigate("/student/my-contracts")}>
+                            Ký HĐ
                           </button>
                         )}
                         {r.status === "pending" && (
@@ -414,7 +450,7 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
               })}
               {!loading && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="text-center text-muted py-4">
+                  <td colSpan={9} className="text-center text-muted py-4">
                     Chưa có đơn chuyển phòng. Nhấn &quot;Gửi đơn chuyển phòng&quot; để tạo mới.
                   </td>
                 </tr>
@@ -492,8 +528,8 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
               <form onSubmit={submitTransfer}>
                 <div className="modal-body">
                   <p className="small text-muted">
-                    Từ phòng <strong>{roomNum(currentRoom || undefined)}</strong> ({areaName(currentRoom || undefined)}) → chọn phòng
-                    đích trong cùng khu.
+                    Từ phòng <strong>{roomNum(currentRoom || undefined)}</strong> ({areaName(currentRoom || undefined)}) — giới tính của bạn:{" "}
+                    <strong>{formatStudentGender(user?.gender)}</strong>. Chỉ chọn phòng có người cùng giới tính đang ở.
                   </p>
                   <div className="mb-3">
                     <label className="form-label">Phòng đích</label>
@@ -502,20 +538,35 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
                       value={targetRoomId}
                       onChange={(e) => setTargetRoomId(e.target.value)}
                       required
-                      disabled={!activeContract}
+                      disabled={!activeContract || candidateLoading}
                     >
                       <option value="">-- Chọn phòng --</option>
-                      {candidateRooms.map((r) => {
-                        const occ = `${Number(r.currentOccupancy || 0)}/${Number(r.capacity || 0)}`;
-                        return (
-                          <option key={r._id} value={r._id}>
-                            Phòng {r.roomNumber} — {occ}
-                          </option>
-                        );
-                      })}
+                      {candidateGroups.map((g) => (
+                        <optgroup
+                          key={g.areaId}
+                          label={`${g.areaName} (${areaGenderPolicyLabel(g.genderPolicy)})${g.isCurrentArea ? " — khu hiện tại" : g.isGenderZone ? " — khu cùng giới" : ""}`}
+                        >
+                          {g.rooms.map((r) => {
+                            const occ = `${Number(r.currentOccupancy || 0)}/${Number(r.capacity || 0)}`;
+                            return (
+                              <option key={r._id} value={r._id}>
+                                Phòng {r.roomNumber} — trống {r.vacantSlots}/{r.capacity} ({occ})
+                              </option>
+                            );
+                          })}
+                        </optgroup>
+                      ))}
                     </select>
-                    {candidateRooms.length === 0 && activeContract && (
-                      <div className="form-text text-warning">Không có phòng khác trong khu để chuyển.</div>
+                    {candidateLoading && <div className="form-text">Đang tải phòng phù hợp…</div>}
+                    {!candidateLoading && candidateRooms.length === 0 && activeContract && (
+                      <div className="form-text text-warning">
+                        Không có phòng phù hợp giới tính. Liên hệ ban quản lý KTX.
+                      </div>
+                    )}
+                    {!candidateLoading && !hasRoomsInCurrentArea && hasRoomsOtherAreas && (
+                      <div className="form-text text-info">
+                        Khu hiện tại không còn phòng trống phù hợp — danh sách bên dưới là các khu khác bạn có thể chuyển tới.
+                      </div>
                     )}
                   </div>
                   <div className="mb-3">
@@ -570,17 +621,6 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
         </div>
       )}
 
-      {confirmTarget && (
-        <TransferConfirmModal
-          registration={confirmTarget}
-          confirming={confirming}
-          onClose={() => setConfirmTarget(null)}
-          onConfirm={() => void submitConfirmTransfer()}
-          roomNum={roomNum}
-          areaName={areaName}
-        />
-      )}
-
       {detail && (
         <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,.45)" }}>
           <div className="modal-dialog">
@@ -593,6 +633,9 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
                 <ul className="list-unstyled mb-0">
                   <li>
                     <strong>Mã đơn:</strong> {detail._id?.slice(-8).toUpperCase()}
+                  </li>
+                  <li>
+                    <strong>Giới tính:</strong> {regUserGender(detail)}
                   </li>
                   <li>
                     <strong>Phòng hiện tại:</strong> {roomNum(detail.fromRoom)}
@@ -620,10 +663,10 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
                       <strong>Lý do từ chối:</strong> {detail.rejectionReason || detail.note}
                     </li>
                   )}
-                  {needsStudentConfirm(detail) && (
+                  {needsTransferContractSign(detail) && (
                     <li className="mt-2">
-                      <button type="button" className="btn btn-success btn-sm" onClick={() => openConfirmFlow(detail)}>
-                        Xác nhận nhận phòng mới
+                      <button type="button" className="btn btn-success btn-sm" onClick={() => navigate("/student/my-contracts")}>
+                        Ký hợp đồng mới
                       </button>
                     </li>
                   )}
@@ -646,157 +689,6 @@ const StudentTransferPanel: React.FC<StudentTransferPanelProps> = ({ onNotify })
         </div>
       )}
     </>
-  );
-};
-
-type TransferConfirmModalProps = {
-  registration: Registration;
-  confirming: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  roomNum: (room: Room | string | undefined) => string;
-  areaName: (room: Room | string | undefined) => string;
-};
-
-const TransferConfirmModal: React.FC<TransferConfirmModalProps> = ({
-  registration,
-  confirming,
-  onClose,
-  onConfirm,
-  roomNum,
-  areaName,
-}) => {
-  const fin: TransferFinancialSnapshot | null | undefined = registration.financialSnapshot;
-  const oldLabel = fin?.labels?.oldRoom;
-  const newLabel = fin?.labels?.newRoom;
-
-  const financialLine = () => {
-    if (!fin) return <p className="small text-muted mb-0">Đang tải thông tin tài chính…</p>;
-    if (fin.financialMode === "defer_room_invoice" || fin.hasPaidOldRoomBill === false) {
-      return (
-        <p className="mb-0 text-muted small">
-          Chưa có hóa đơn tiền phòng cũ đã thanh toán — <strong>không phát sinh phụ thu chuyển phòng</strong>.
-          Hệ thống chốt {fin.daysUsedOld ?? "—"} ngày ở phòng cũ (đến ngày nộp đơn) và xuất hóa đơn tiền phòng riêng sau.
-        </p>
-      );
-    }
-    if (fin.financialAction === "supplement" && (fin.supplementAmount || 0) > 0) {
-      return (
-        <p className="mb-0">
-          <span className="text-muted">Cần đóng thêm (phụ thu tiền phòng):</span>{" "}
-          <strong className="text-danger fs-5">{formatVnd(fin.supplementAmount)}</strong>
-          <span className="d-block small text-muted mt-1">
-            Bù trừ từ tiền đã đóng phòng cũ so với tháng đầu HĐ mới (prorate từ ngày nộp đơn).
-          </span>
-        </p>
-      );
-    }
-    if (fin.financialAction === "wallet_credit" && (fin.walletCreditAmount || 0) > 0) {
-      const renewalRefund = fin.upcomingRenewal?.refundAmount || 0;
-      return (
-        <p className="mb-0">
-          <span className="text-muted">Được khấu trừ (ví):</span>{" "}
-          <strong className="text-success fs-5">{formatVnd(fin.walletCreditAmount)}</strong>
-          <span className="d-block small text-muted mt-1">
-            {renewalRefund > 0
-              ? `Gồm hoàn 100% HĐ gia hạn bị hủy (${formatVnd(renewalRefund)}) + bù trừ chuyển phòng. Tự trừ vào hóa đơn sau.`
-              : "Số dư sẽ tự trừ vào hóa đơn tháng sau."}
-          </span>
-        </p>
-      );
-    }
-    return (
-      <p className="mb-0 text-muted small">
-        Không phát sinh phụ thu hoặc số dư ví — bạn có thể xác nhận nhận phòng.
-      </p>
-    );
-  };
-
-  return (
-    <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,.5)" }}>
-      <div className="modal-dialog modal-lg modal-dialog-centered">
-        <div className="modal-content border-0 shadow">
-          <div className="modal-header border-0 pb-0">
-            <h5 className="modal-title fw-semibold">Xác nhận nhận phòng mới</h5>
-            <button type="button" className="btn-close" aria-label="Đóng" onClick={onClose} disabled={confirming} />
-          </div>
-          <div className="modal-body pt-2">
-            <p className="text-muted small">
-              Hợp đồng mới có hiệu lực 1 năm kể từ <strong>ngày nộp đơn</strong>; hợp đồng cũ thanh lý cùng ngày đó.
-            </p>
-            {fin?.newContractStartDate && fin?.newContractEndDate && (
-              <p className="small mb-3">
-                Thời hạn HĐ mới:{" "}
-                <strong>
-                  {new Date(fin.newContractStartDate).toLocaleDateString("vi-VN")} →{" "}
-                  {new Date(fin.newContractEndDate).toLocaleDateString("vi-VN")}
-                </strong>
-              </p>
-            )}
-            <div className="row g-3 mb-3">
-              <div className="col-md-6">
-                <div className="p-3 rounded h-100" style={{ background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                  <div className="small text-uppercase text-muted fw-semibold mb-2">Phòng cũ</div>
-                  <div className="fs-5 fw-semibold">{oldLabel?.roomNumber || roomNum(registration.fromRoom)}</div>
-                  <div className="small text-muted">{oldLabel?.areaName || areaName(registration.fromRoom)}</div>
-                  {fin?.oldContractNumber && (
-                    <div className="small mt-2">HĐ: {fin.oldContractNumber}</div>
-                  )}
-                  {fin?.oldActualCharge != null && (
-                    <div className="small mt-1">
-                      Tiền phòng thực tế ({fin.daysUsedOld}/{fin.daysInMonth} ngày):{" "}
-                      <strong>{formatVnd(fin.oldActualCharge)}</strong>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="col-md-6">
-                <div className="p-3 rounded h-100" style={{ background: "#ecfdf5", border: "1px solid #a7f3d0" }}>
-                  <div className="small text-uppercase text-success fw-semibold mb-2">Phòng mới</div>
-                  <div className="fs-5 fw-semibold text-success">
-                    {newLabel?.roomNumber || roomNum(registration.room)}
-                  </div>
-                  <div className="small text-muted">{newLabel?.areaName || areaName(registration.room)}</div>
-                  {fin?.newMonthlySlotPrice != null && (
-                    <div className="small mt-2">
-                      Giá slot/tháng (chốt HĐ mới): <strong>{formatVnd(fin.newMonthlySlotPrice)}</strong>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="p-3 rounded mb-0" style={{ background: "#fffbeb", border: "1px solid #fde68a" }}>
-              <div className="small text-uppercase text-muted fw-semibold mb-2">Bù trừ tài chính tháng này</div>
-              {financialLine()}
-              {fin && (
-                <details className="mt-2 small text-muted">
-                  <summary className="user-select-none">Chi tiết tính toán</summary>
-                  <ul className="mb-0 mt-2 ps-3">
-                    <li>Đã đóng tiền phòng cũ (tháng): {formatVnd(fin.amountPaidAtMonthStart)}</li>
-                    <li>Phòng cũ thực tế ({fin.daysUsedOld}/{fin.daysInMonth} ngày): {formatVnd(fin.oldActualCharge)}</li>
-                    <li>
-                      Phòng mới tháng đầu ({fin.daysNewFirstMonth ?? fin.daysRemaining} ngày):{" "}
-                      {formatVnd(fin.newFirstMonthProrated ?? fin.newRemainingCharge)}
-                    </li>
-                    {fin.totalCreditFromOld != null ? (
-                      <li>Bù trừ từ phòng cũ: {formatVnd(fin.totalCreditFromOld)}</li>
-                    ) : null}
-                  </ul>
-                </details>
-              )}
-            </div>
-          </div>
-          <div className="modal-footer border-0 pt-0">
-            <button type="button" className="btn btn-outline-secondary" onClick={onClose} disabled={confirming}>
-              Để sau
-            </button>
-            <button type="button" className="btn btn-success px-4" onClick={onConfirm} disabled={confirming}>
-              {confirming ? "Đang xử lý…" : "Xác nhận nhận phòng mới"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 };
 

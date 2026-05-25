@@ -148,13 +148,33 @@ export type ContractStatusRow = {
   status?: string;
   endDate?: string | Date | null;
   signedAt?: string | Date | null;
+  paymentConfirmedAt?: string | Date | null;
+  studentSignStatus?: string | null;
+  consentAcceptedAt?: string | Date | null;
+  isTransferContract?: boolean;
+  contractNumber?: string | null;
 };
+
+/** HĐ đã được admin xác nhận — mới coi là có hiệu lực (backend status = active). */
+export function isContractActiveStatus(status?: string | null): boolean {
+  return String(status || "").trim() === "active";
+}
+
+/** SV đã ký nhưng admin chưa xác nhận + chưa upload PDF — chưa có hiệu lực. */
+export function isContractAwaitingAdminConfirm(c: ContractStatusRow): boolean {
+  if (String(c.status || "") !== "pending_payment") return false;
+  if (c.paymentConfirmedAt) return false;
+  return hasStudentSignedContract(c);
+}
+
+const AWAITING_ADMIN_CONFIRM_LABEL = "Đã ký — chờ admin xác nhận";
 
 /** Nhãn trạng thái HĐ trên giao diện admin (có xét SV đã ký). */
 export function contractStatusLabelViAdmin(
   status?: string | null,
   signedAt?: string | Date | null,
   contract?: {
+    paymentConfirmedAt?: string | Date | null;
     studentSignStatus?: string | null;
     consentAcceptedAt?: string | Date | null;
     isTransferContract?: boolean;
@@ -162,15 +182,14 @@ export function contractStatusLabelViAdmin(
   } | null,
 ): string {
   const st = String(status || "").trim();
-  if (st === "pending_payment") {
-    const row = { signedAt, ...contract };
-    return hasStudentSignedContract(row) ? CONTRACT_STATUS_VI.active : CONTRACT_STATUS_VI_ADMIN.pending_payment;
-  }
+  const row: ContractStatusRow = { status: st, signedAt, ...contract };
+  if (isContractAwaitingAdminConfirm(row)) return AWAITING_ADMIN_CONFIRM_LABEL;
+  if (st === "pending_payment") return CONTRACT_STATUS_VI_ADMIN.pending_payment;
   return CONTRACT_STATUS_VI[st] || CONTRACT_STATUS_VI_ADMIN[st] || st || "—";
 }
 
 /**
- * Trạng thái HĐ cho admin: đã ký → «Đang hiệu lực»; quá hạn chỉ gắn với hóa đơn.
+ * Trạng thái HĐ cho admin: chỉ «Đang hiệu lực» khi status = active (sau admin xác nhận + PDF).
  */
 export function contractStatusAntTagAdmin(
   c: ContractStatusRow,
@@ -183,17 +202,14 @@ export function contractStatusAntTagAdmin(
   const settledLike = ["expired", "terminated", "cancelled", "transferred_settled", "terminated_due_to_transfer"].includes(
     st,
   );
-  if (
-    cid &&
-    overdueContractIds?.has(cid) &&
-    !settledLike &&
-    (st === "active" || (st === "pending_payment" && hasStudentSignedContract(c)))
-  ) {
+  if (cid && overdueContractIds?.has(cid) && !settledLike && isContractActiveStatus(st)) {
     return { color: "red", text: "Hóa đơn quá hạn" };
   }
   if (st === "active" && expiredByDate) return { color: "orange", text: "Hết hạn" };
+  if (isContractAwaitingAdminConfirm(c)) {
+    return { color: "blue", text: AWAITING_ADMIN_CONFIRM_LABEL };
+  }
   if (st === "pending_payment") {
-    if (hasStudentSignedContract(c)) return { color: "green", text: CONTRACT_STATUS_VI.active };
     return { color: "gold", text: CONTRACT_STATUS_VI_ADMIN.pending_payment };
   }
   const color = CONTRACT_STATUS_ANT_COLOR[st] || "default";

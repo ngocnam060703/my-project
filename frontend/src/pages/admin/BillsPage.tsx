@@ -14,7 +14,7 @@ import {
 import { billPaymentMethodLabel, billPaymentPayerLabel } from "../../utils/billPaymentLabels";
 import { roomSelectLabel } from "../../utils/roomDisplay";
 import BillsFilterToolbar from "../../components/admin/BillsFilterToolbar";
-import { billsApi, client, roomCostsApi, serviceUsageApi, usersApi } from "../../api";
+import { billsApi, client, roomCostsApi, roomServicesApi, serviceUsageApi, usersApi } from "../../api";
 import { useSocket } from "../../contexts/SocketContext";
 import type { Bill } from "../../types";
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -35,6 +35,23 @@ const formatPersonalServiceLine = (it: PersonalLine) => {
   const suffix = it.unit === "once" ? ` (${it.quantity ?? 0} lần)` : " (/ tháng)";
   return `${name}: ${amt}${suffix}`;
 };
+
+const isWifiServiceName = (name?: string) => {
+  const n = String(name || "").toLowerCase();
+  return n.includes("wifi") || n.includes("wi-fi") || n.includes("wi fi");
+};
+
+async function roomHasWifiServiceAssigned(roomId: string): Promise<boolean> {
+  const rsRes = await roomServicesApi.list({ room: roomId, limit: 100 });
+  const items =
+    (rsRes.data as { items?: Array<{ service?: { name?: string; type?: string; isActive?: boolean } }> })?.items || [];
+  return items.some((row) => {
+    const svc = row.service;
+    if (!svc || typeof svc !== "object") return false;
+    if (svc.type !== "common" || svc.isActive === false) return false;
+    return isWifiServiceName(svc.name);
+  });
+}
 
 const BillsPage: React.FC = () => {
   const { socket } = useSocket();
@@ -73,6 +90,7 @@ const BillsPage: React.FC = () => {
     Array<{ contractNumber?: string; studentName?: string; studentId?: string; roomFee: number }>
   >([]);
   const [roomFeePreviewLoading, setRoomFeePreviewLoading] = useState(false);
+  const [roomWifiAssigned, setRoomWifiAssigned] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(searchInput.trim()), 400);
@@ -87,7 +105,8 @@ const BillsPage: React.FC = () => {
       if (filters.room) params.room = filters.room;
       if (filters.month) params.month = filters.month;
       if (filters.year) params.year = filters.year;
-      if (filters.billType === "monthly" || filters.billType === "penalty" || filters.billType === "damage_reimbursement") {
+      const billTypes = ["monthly", "penalty", "damage_reimbursement", "transfer_supplement"] as const;
+      if (filters.billType && billTypes.includes(filters.billType as (typeof billTypes)[number])) {
         params.billType = filters.billType;
       }
       if (debouncedSearch) params.search = debouncedSearch;
@@ -117,6 +136,8 @@ const BillsPage: React.FC = () => {
   }, [socket, load]);
   const fetchRoomCosts = useCallback(async (roomId: string, month: number, year: number) => {
     try {
+      const hasWifi = await roomHasWifiServiceAssigned(roomId);
+      setRoomWifiAssigned(hasWifi);
       const costRes = await roomCostsApi.getAll({ month, year });
       const raw = costRes.data as unknown;
       const list = Array.isArray(raw) ? raw : ((raw as { roomCosts?: unknown[] })?.roomCosts ?? []);
@@ -130,7 +151,7 @@ const BillsPage: React.FC = () => {
         form.setFieldsValue({
           electricityFee: roomCost.electricityFee ?? 0,
           waterFee: roomCost.waterFee ?? 0,
-          sharedCommonFee: roomCost.wifiMonthlyFee ?? 0,
+          sharedCommonFee: hasWifi ? (roomCost.wifiMonthlyFee ?? 0) : 0,
         });
         return;
       }
@@ -152,6 +173,7 @@ const BillsPage: React.FC = () => {
       });
     } catch (err) {
       console.error("Không lấy được chi phí phòng:", err);
+      setRoomWifiAssigned(false);
       form.setFieldsValue({
         electricityFee: 0,
         waterFee: 0,
@@ -213,7 +235,7 @@ const BillsPage: React.FC = () => {
     try {
       const electricityFee = (v.electricityFee as number) ?? 0;
       const waterFee = (v.waterFee as number) ?? 0;
-      const sharedCommonFee = (v.sharedCommonFee as number) ?? 0; // Wi-Fi
+      const sharedCommonFee = roomWifiAssigned ? ((v.sharedCommonFee as number) ?? 0) : 0;
       const otherFee = (v.otherFee as number) ?? 0;
       const roomId = v.roomId as string;
       const res = await billsApi.create({
@@ -464,7 +486,22 @@ const BillsPage: React.FC = () => {
               <div>Tiền phòng: <strong>{formatMoney(r.roomFee)}</strong></div>
               <div>Điện: <strong>{formatMoney(r.electricityFee)}</strong></div>
               <div>Nước: <strong>{formatMoney(r.waterFee)}</strong></div>
-              <div>Wi‑Fi: <strong>{formatMoney(r.sharedCommonFee)}</strong></div>
+              {(r.commonServiceBreakdown?.length || 0) > 0 ? (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontWeight: 600 }}>DV phòng chung</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                    {(r.commonServiceBreakdown || []).map((it, idx) => (
+                      <li key={`${it.service || it.name || "common"}-${idx}`}>
+                        {it.name || "Dịch vụ"}: <strong>{formatMoney(it.totalAmount)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : r.sharedCommonFee ? (
+                <div>DV phòng chung: <strong>{formatMoney(r.sharedCommonFee)}</strong></div>
+              ) : (
+                <div>DV phòng chung: —</div>
+              )}
               {r.otherFee ? <div>Phí khác: <strong>{formatMoney(r.otherFee)}</strong></div> : <div>Phí khác: —</div>}
               {(r.personalServiceBreakdown || []).length ? (
                 <div style={{ marginTop: 8 }}>
@@ -594,6 +631,7 @@ const BillsPage: React.FC = () => {
           onPageReset={() => setPage(1)}
           onClearFilters={() => {
             setSearchInput("");
+            setFilters({ month: currentMonth, year: currentYear });
             setPage(1);
           }}
           onGenMonthChange={setGenMonth}
@@ -713,14 +751,23 @@ const BillsPage: React.FC = () => {
           </Form.Item>
           <Form.Item name="electricityFee" label="Tiền điện (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="waterFee" label="Tiền nước (đ)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-          <Form.Item
-            name="sharedCommonFee"
-            label="Tiền Wi‑Fi — tổng gói phòng / tháng (đ)"
-            extra="Nhập tổng tiền Wi‑Fi của cả phòng (vd 200.000đ). Mỗi sinh viên trả = số này ÷ số slot (capacity). Để 0 thì chỉ dùng các dịch vụ chung trong danh mục Dịch vụ."
-            initialValue={0}
-          >
-            <InputNumber min={0} style={{ width: "100%" }} />
-          </Form.Item>
+          {roomWifiAssigned ? (
+            <Form.Item
+              name="sharedCommonFee"
+              label="Tiền Wi‑Fi — tổng gói phòng / tháng (đ)"
+              extra="Chỉ hiện khi phòng đã gán dịch vụ Wi‑Fi. Mỗi SV trả = tổng gói ÷ số slot (capacity)."
+              initialValue={0}
+            >
+              <InputNumber min={0} style={{ width: "100%" }} />
+            </Form.Item>
+          ) : (
+            <Form.Item
+              label="Tiền Wi‑Fi"
+              extra="Phòng chưa gán dịch vụ Wi‑Fi — không tính phí Wi‑Fi trên hóa đơn."
+            >
+              <InputNumber disabled value={0} style={{ width: "100%" }} />
+            </Form.Item>
+          )}
           <Form.Item name="otherFee" label="Phí khác (gửi xe...)" initialValue={0}><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
           <Form.Item name="dueDate" label="Hạn thanh toán"><Input type="date" /></Form.Item>
           <Form.Item>
@@ -851,7 +898,20 @@ const BillsPage: React.FC = () => {
                 <p><strong>Tiền phòng:</strong> {formatMoney(detailModal.roomFee)}</p>
                 <p><strong>Tiền điện:</strong> {formatMoney(detailModal.electricityFee)}</p>
                 <p><strong>Tiền nước:</strong> {formatMoney(detailModal.waterFee)}</p>
-                {detailModal.sharedCommonFee ? <p><strong>Wifi:</strong> {formatMoney(detailModal.sharedCommonFee)}</p> : null}
+                {(detailModal.commonServiceBreakdown?.length || 0) > 0 ? (
+                  <div style={{ marginTop: 4 }}>
+                    <strong>Dịch vụ phòng chung:</strong>
+                    <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                      {(detailModal.commonServiceBreakdown ?? []).map((it, idx) => (
+                        <li key={`${it.service || it.name || "common"}-${idx}`}>
+                          {it.name || "Dịch vụ"}: <strong>{formatMoney(it.totalAmount)}</strong>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : detailModal.sharedCommonFee ? (
+                  <p><strong>Dịch vụ phòng chung:</strong> {formatMoney(detailModal.sharedCommonFee)}</p>
+                ) : null}
                 {detailModal.otherFee ? <p><strong>Phí khác:</strong> {formatMoney(detailModal.otherFee)}</p> : null}
                 {detailModal.personalServiceFee ? <p><strong>Dịch vụ cá nhân:</strong> {formatMoney(detailModal.personalServiceFee)}</p> : null}
                 {(detailModal.personalServiceBreakdown?.length || 0) > 0 && (

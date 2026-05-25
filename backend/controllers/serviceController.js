@@ -9,9 +9,16 @@ const {
   getStudentServicePeriodLockStatus,
   assertStudentServicePeriodEditable,
 } = require("../services/serviceRegistrationLockService");
+const { loadMeterServicesAssignedToRoom } = require("../services/roomUtilityBilling");
 
 function isAdmin(user) {
   return user?.role === "admin" || user?.role === "manager";
+}
+
+/** Sinh viên: role "user" hoặc "student" (tương thích requireRole). */
+function isStudentUser(user) {
+  const role = String(user?.role || "");
+  return role === "user" || role === "student";
 }
 
 function escapeRegex(s) {
@@ -212,9 +219,28 @@ exports.toggleService = async (req, res) => {
   }
 };
 
+/** SV: dịch vụ điện/nước đã gán cho phòng đang ở (để đăng ký sử dụng). */
+exports.getMyRoomMeterServices = async (req, res) => {
+  try {
+    if (!isStudentUser(req.user)) return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
+    const member = await Contract.findOne({
+      user: req.user._id,
+      status: { $in: ["active", "pending_payment"] },
+    }).select("room");
+    if (!member?.room) {
+      return res.json({ roomId: null, serviceIds: [] });
+    }
+    const meters = await loadMeterServicesAssignedToRoom(member.room);
+    const serviceIds = [meters.electricity?._id, meters.water?._id].filter(Boolean).map(String);
+    res.json({ roomId: String(member.room), serviceIds });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.getPeriodLockStatus = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
+    if (!isStudentUser(req.user)) return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
     const parsed = parseMonthYear(req.query.month, req.query.year);
     if (!parsed) return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
     const status = await getStudentServicePeriodLockStatus(req.user._id, parsed.month, parsed.year);
@@ -252,14 +278,16 @@ exports.getMyServiceRegistrations = async (req, res) => {
 
 exports.upsertMyServiceRegistration = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
+    if (!isStudentUser(req.user)) return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
     const { serviceId, month, year, quantity, enabled, planType } = req.body;
     if (!mongoose.isValidObjectId(String(serviceId || ""))) {
       return res.status(400).json({ message: "serviceId không hợp lệ" });
     }
     const svc = await Service.findById(serviceId);
-    if (!svc || svc.type !== "personal") {
-      return res.status(400).json({ message: "Chỉ đăng ký được dịch vụ cá nhân" });
+    if (!svc) return res.status(404).json({ message: "Không tìm thấy dịch vụ" });
+    const isMeterUtility = svc.measureUnit === "kwh" || svc.measureUnit === "m3";
+    if (svc.type !== "personal" && !isMeterUtility) {
+      return res.status(400).json({ message: "Chỉ đăng ký được dịch vụ cá nhân hoặc điện/nước theo phòng" });
     }
     if (!svc.isActive) {
       return res.status(400).json({ message: "Dịch vụ đang ngừng hoạt động" });
@@ -279,6 +307,19 @@ exports.upsertMyServiceRegistration = async (req, res) => {
       status: { $in: ["active", "pending_payment"] },
     });
     if (!member) return res.status(403).json({ message: "Bạn chưa là thành viên KTX" });
+
+    if (isMeterUtility) {
+      const assigned = await RoomService.findOne({
+        room: member.room,
+        service: serviceId,
+        isActive: { $ne: false },
+      }).lean();
+      if (!assigned) {
+        return res.status(400).json({
+          message: "Phòng của bạn chưa được gán dịch vụ điện/nước này — liên hệ quản lý KTX",
+        });
+      }
+    }
 
     const q = Math.max(0, Number(quantity ?? 1));
     const pType = planType === "monthly_package" ? "monthly_package" : "per_use";
@@ -316,7 +357,7 @@ exports.upsertMyServiceRegistration = async (req, res) => {
 
 exports.recordMyLaundryUse = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
+    if (!isStudentUser(req.user)) return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
     const { serviceId, month, year, quantity = 1, note = "" } = req.body;
     if (!mongoose.isValidObjectId(String(serviceId || ""))) {
       return res.status(400).json({ message: "serviceId không hợp lệ" });
@@ -379,7 +420,7 @@ exports.recordMyLaundryUse = async (req, res) => {
 
 exports.getMyLaundryUsageSummary = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
+    if (!isStudentUser(req.user)) return res.status(403).json({ message: "Chỉ sinh viên mới dùng được" });
     const { serviceId, month, year } = req.query;
     if (!mongoose.isValidObjectId(String(serviceId || ""))) {
       return res.status(400).json({ message: "serviceId không hợp lệ" });

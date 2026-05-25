@@ -10,7 +10,7 @@ const {
   countTakenSlots,
 } = require("../services/bedOccupancy");
 const { syncOccupancyForRooms } = require("../services/roomOccupancySync");
-const { genderAllowsStay } = require("../utils/genderPolicy");
+const { genderAllowsStay, studentMayJoinRoom, normalizeStudentGender } = require("../utils/genderPolicy");
 
 function normalizeBedStatus(s) {
   const v = String(s || "").toLowerCase().trim();
@@ -134,6 +134,21 @@ exports.assignBed = async (req, res) => {
     if (!genderAllowsStay(uGender, areaPol)) {
       return res.status(400).json({
         message: `Giới tính sinh viên không khớp chính sách khu (${areaPol === "male" ? "nam" : areaPol === "female" ? "nữ" : ""})`,
+      });
+    }
+
+    const otherBeds = await Bed.find({
+      room: roomId,
+      status: { $in: ["occupied", "reserved"] },
+      _id: { $ne: bed._id },
+    })
+      .populate("currentUser", "gender")
+      .lean();
+    const occGenders = otherBeds.map((b) => (b.currentUser && typeof b.currentUser === "object" ? b.currentUser.gender : null)).filter(Boolean);
+    const genderNorm = normalizeStudentGender(uGender) || "unknown";
+    if (!studentMayJoinRoom(areaPol, genderNorm, occGenders)) {
+      return res.status(400).json({
+        message: "Khu hỗn hợp: nam và nữ có thể ở cùng khu nhưng không được ở chung một phòng.",
       });
     }
 
@@ -275,6 +290,23 @@ exports.transferBed = async (req, res) => {
       (await Bed.findOne({ currentContract: contract._id, room: sourceRoomId }));
     if (!sourceBed || sourceBed.status !== "occupied") {
       return res.status(400).json({ message: "Sinh viên chưa có giường occupied trong phòng nguồn để chuyển" });
+    }
+
+    const otherDestBeds = await Bed.find({
+      room: destRoomId,
+      status: { $in: ["occupied", "reserved"] },
+      _id: { $ne: sourceBed._id },
+    })
+      .populate("currentUser", "gender")
+      .lean();
+    const destOccGenders = otherDestBeds
+      .map((b) => (b.currentUser && typeof b.currentUser === "object" ? b.currentUser.gender : null))
+      .filter(Boolean);
+    const transferGenderNorm = normalizeStudentGender(uGender) || "unknown";
+    if (!studentMayJoinRoom(destAreaPol, transferGenderNorm, destOccGenders)) {
+      return res.status(400).json({
+        message: "Khu hỗn hợp: nam và nữ có thể ở cùng khu nhưng không được ở chung một phòng.",
+      });
     }
 
     const targetBed = await Bed.findOne({ _id: targetBedId, room: destRoomId });

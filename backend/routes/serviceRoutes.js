@@ -11,6 +11,7 @@ router.get("/", serviceController.getServices);
 
 // Student
 router.get("/period-lock-status", requireRole("user"), serviceController.getPeriodLockStatus);
+router.get("/my-room-meters", requireRole("user"), serviceController.getMyRoomMeterServices);
 router.get("/my-registrations", requireRole("user"), serviceController.getMyServiceRegistrations);
 router.post("/my-registrations", requireRole("user"), serviceController.upsertMyServiceRegistration);
 router.get("/my-laundry-usage/summary", requireRole("user"), serviceController.getMyLaundryUsageSummary);

@@ -2,7 +2,14 @@ import type { AxiosResponse } from "axios";
 import { isAxiosError } from "axios";
 import client from "./client";
 import { authApi } from "./auth";
-import type { Area, Room, ZoneDetailResponse, DormApplication, MyContractOverview } from "../types";
+import type {
+  Area,
+  Room,
+  ZoneDetailResponse,
+  DormApplication,
+  MyContractOverview,
+  StudentPriorityType,
+} from "../types";
 
 export { client, authApi };
 
@@ -241,12 +248,34 @@ export const registrationsApi = {
   }) => client.post("/registrations", { ...data, registrationType: "transfer" }),
   cancel: (id: string) => client.put(`/registrations/${id}/cancel`),
   getTransferEligibility: () => client.get("/registrations/transfer-eligibility"),
+  getTransferCandidateRooms: () =>
+    client.get<{
+      studentGender: string;
+      currentAreaId: string | null;
+      currentRoomNumber: string | null;
+      groups: Array<{
+        areaId: string;
+        areaName: string;
+        genderPolicy: string;
+        isCurrentArea: boolean;
+        isGenderZone: boolean;
+        rooms: Array<{
+          _id: string;
+          roomNumber: string;
+          capacity: number;
+          currentOccupancy: number;
+          vacantSlots: number;
+          status?: string;
+        }>;
+      }>;
+    }>("/registrations/transfer-candidate-rooms"),
   getTransferSummary: (id: string) => client.get(`/registrations/${id}/transfer-summary`),
   confirmTransfer: (id: string) => client.post(`/registrations/${id}/confirm-transfer`),
   getAll: (params?: { status?: string; page?: number; limit?: number }) =>
     client.get("/registrations", { params }),
   approve: (id: string) => client.put(`/registrations/${id}/approve`),
   reject: (id: string, reason?: string) => client.put(`/registrations/${id}/reject`, { reason }),
+  adminDelete: (id: string) => client.delete(`/registrations/${id}`),
 };
 
 /** Thử lần lượt các đường dẫn “đơn của tôi” (alias / router khác nhau). */
@@ -284,8 +313,8 @@ export const applicationsApi = {
     enrollmentYear?: number;
     area?: string;
     priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach" | "dan_toc_thieu_so";
-    /** Lọc theo priorityType trên hồ sơ User (vd. minority = dân tộc thiểu số) */
-    userPriorityType?: "minority";
+    /** Lọc theo priorityType trên hồ sơ User (hồ sơ sinh viên) */
+    userPriorityType?: StudentPriorityType;
     days?: number;
     sortOrder?: "asc" | "desc";
     page?: number;
@@ -600,6 +629,8 @@ export const servicesApi = {
   remove: (id: string) => client.delete(`/services/${id}`),
   toggle: (id: string) => client.put(`/services/${id}/toggle`),
   getMyRegistrations: (params?: { month?: number; year?: number }) => client.get("/services/my-registrations", { params }),
+  getMyRoomMeterServices: () =>
+    client.get<{ roomId: string | null; serviceIds: string[] }>("/services/my-room-meters"),
   getPeriodLockStatus: (params: { month: number; year: number }) =>
     client.get<{
       month: number;

@@ -5,6 +5,14 @@ const { normalizePriorityFields } = require("../utils/normalizePriorityFields");
 
 const notDeleted = { isDeleted: { $ne: true } };
 
+function isStudentRole(role) {
+  return role === "user" || role === "student";
+}
+
+function studentAccountFilter() {
+  return { role: { $in: ["user", "student"] }, ...notDeleted };
+}
+
 const STUDENT_FIELDS = [
   "fullName",
   "email",
@@ -42,8 +50,18 @@ function normalizeDate(input) {
   return input ? new Date(input) : null;
 }
 
+function deriveContactAddress(updates, current) {
+  const direct = String(updates.address ?? current?.address ?? "").trim();
+  if (direct) return direct;
+  for (const key of ["addressPermanent", "addressNative", "addressTemporary"]) {
+    const v = String(updates[key] ?? current?.[key] ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
 async function buildStudentDetail(studentId) {
-  const student = await User.findOne({ _id: studentId, role: "user", ...notDeleted })
+  const student = await User.findOne({ _id: studentId, ...studentAccountFilter() })
     .select("-password")
     .lean();
   if (!student) return null;
@@ -112,7 +130,7 @@ exports.list = async (req, res) => {
 
 exports.getMe = async (req, res) => {
   try {
-    if (!req.user || req.user.role !== "user") {
+    if (!req.user || !isStudentRole(req.user.role)) {
       return res.status(403).json({ message: "Chỉ sinh viên mới truy cập hồ sơ cá nhân" });
     }
     const detail = await buildStudentDetail(req.user._id);
@@ -125,7 +143,7 @@ exports.getMe = async (req, res) => {
 
 exports.getById = async (req, res) => {
   try {
-    if (req.user.role === "user" && String(req.user._id) !== String(req.params.id)) {
+    if (isStudentRole(req.user.role) && String(req.user._id) !== String(req.params.id)) {
       return res.status(403).json({ message: "Bạn chỉ được xem hồ sơ của mình" });
     }
     const detail = await buildStudentDetail(req.params.id);
@@ -239,10 +257,10 @@ exports.updateByAdmin = async (req, res) => {
 
 exports.updateMe = async (req, res) => {
   try {
-    if (!req.user || req.user.role !== "user") {
+    if (!req.user || !isStudentRole(req.user.role)) {
       return res.status(403).json({ message: "Chỉ sinh viên mới được cập nhật hồ sơ cá nhân" });
     }
-    const current = await User.findOne({ _id: req.user._id, role: "user", ...notDeleted });
+    const current = await User.findOne({ _id: req.user._id, ...studentAccountFilter() });
     if (!current) return res.status(404).json({ message: "Không tìm thấy hồ sơ sinh viên" });
 
     // Sinh viên được tự cập nhật đầy đủ thông tin hồ sơ cá nhân (trừ quyền/hệ thống)
@@ -278,10 +296,21 @@ exports.updateMe = async (req, res) => {
     if (req.body.enrollmentDate !== undefined) updates.enrollmentDate = normalizeDate(req.body.enrollmentDate);
     normalizePriorityFields(updates);
 
+    const contactAddress = deriveContactAddress(updates, current);
+    if (contactAddress) updates.address = contactAddress;
+
+    if (updates.avatar !== undefined && String(updates.avatar).startsWith("blob:")) {
+      delete updates.avatar;
+    }
+
     await User.findByIdAndUpdate(current._id, updates, { runValidators: true });
     const detail = await buildStudentDetail(current._id);
+    if (!detail) return res.status(404).json({ message: "Không tìm thấy hồ sơ sinh viên sau khi cập nhật" });
     res.json(detail);
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(400).json({ message: "Mã sinh viên hoặc email đã được sử dụng bởi tài khoản khác" });
+    }
     res.status(500).json({ message: error.message });
   }
 };

@@ -255,9 +255,10 @@ export interface TransferFinancialSnapshot {
   supplementAmount?: number;
   walletCreditAmount?: number;
   financialAction?: "none" | "supplement" | "wallet_credit";
-  /** room_offset = đã trả HĐ tiền phòng cũ, có bù trừ; defer_room_invoice = chốt ngày ở, HĐ tháng lẻ sau */
+  /** room_offset = đã có HĐ tiền phòng admin, có thể phụ thu; defer_room_invoice = chưa có HĐ, chốt ngày ở */
   financialMode?: "room_offset" | "defer_room_invoice";
   hasPaidOldRoomBill?: boolean;
+  hasAnyOldRoomBill?: boolean;
   settlementDate?: string;
   newFirstMonthProrated?: number;
   daysNewFirstMonth?: number;
@@ -505,6 +506,12 @@ export interface Bill {
     quantity?: number;
     amount?: number;
   }>;
+  commonServiceBreakdown?: Array<{
+    service?: string;
+    name?: string;
+    unit?: string;
+    totalAmount?: number;
+  }>;
 }
 
 export interface ViolationRule {
@@ -524,7 +531,7 @@ export interface ViolationRule {
 
 export type ViolationStatus = "pending" | "resolved";
 
-export type DisciplinaryActionType = "warning" | "fine" | "expulsion";
+export type DisciplinaryActionType = "warning" | "fine" | "compensation" | "expulsion";
 
 export interface ViolationResolution {
   actionType: DisciplinaryActionType;
@@ -576,8 +583,20 @@ export interface MaintenanceReport {
   facilityLocation?: string | null;
   damagedItemLabel?: string;
   description: string;
-  /** SV: chỉ biết có hóa đơn đền bù, không thấy số tiền */
+  /** @deprecated — dùng compensationBill / requiresPayment */
   hasCompensationBill?: boolean;
+  /** Chờ admin phán quyết (pending / processing) */
+  awaitingAdminRuling?: boolean;
+  /** Ghi chú phán quyết BQL — chỉ khi đã resolved */
+  adminRulingNote?: string;
+  /** Cần thanh toán bồi thường (student_caused + đã có số tiền) */
+  requiresPayment?: boolean;
+  compensationBill?: {
+    _id: string;
+    billCode?: string;
+    total: number;
+    status: string;
+  };
   images?: string[];
   status: MaintenanceReportStatus;
   adminNote?: string;

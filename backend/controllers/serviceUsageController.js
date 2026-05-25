@@ -9,6 +9,7 @@ const {
   getRoomPeriodBillingSummary,
   enrichServiceUsageRows,
 } = require("../services/meterBillingService");
+const { loadMeterServicesAssignedToRoom } = require("../services/roomUtilityBilling");
 
 const ERR_MSG = {
   NEW_INDEX_LT_OLD: "Chỉ số mới phải lớn hơn hoặc bằng chỉ số cũ trong cùng kỳ.",
@@ -21,6 +22,7 @@ const ERR_MSG = {
 async function recalcRoomMonthlyUtilityFees(roomId, month, year, userId) {
   const m = Number(month);
   const y = Number(year);
+  const meters = await loadMeterServicesAssignedToRoom(roomId);
   const usages = await ServiceUsage.find({ room: roomId, month: m, year: y })
     .populate("service", "measureUnit")
     .lean();
@@ -28,8 +30,13 @@ async function recalcRoomMonthlyUtilityFees(roomId, month, year, userId) {
   let waterTotal = 0;
   for (const u of usages) {
     const mu = u.service?.measureUnit;
-    if (mu === "kwh") electricityTotal += Number(u.amount) || 0;
-    if (mu === "m3") waterTotal += Number(u.amount) || 0;
+    const sid = String(u.service?._id || u.service || "");
+    if (mu === "kwh" && meters.electricity && String(meters.electricity._id) === sid) {
+      electricityTotal += Number(u.amount) || 0;
+    }
+    if (mu === "m3" && meters.water && String(meters.water._id) === sid) {
+      waterTotal += Number(u.amount) || 0;
+    }
   }
   await RoomMonthlyCost.findOneAndUpdate(
     { room: roomId, month: m, year: y },

@@ -2,7 +2,12 @@ import React from "react";
 import { Button, Empty, Popconfirm, Space, Table, Tag } from "antd";
 import { EyeOutlined } from "@ant-design/icons";
 import { formatDateTimeVi } from "../../../utils/formatDateTime";
-import { damagedItemDisplay, requestCodeDisplay, STATUS_MAP } from "../../../utils/maintenanceReportDisplay";
+import {
+  canPayMaintenanceCompensation,
+  damagedItemDisplay,
+  requestCodeDisplay,
+  STATUS_MAP,
+} from "../../../utils/maintenanceReportDisplay";
 import type { MaintenanceReport, MaintenanceReportStatus, Room } from "../../../types";
 
 type Props = {
@@ -14,6 +19,8 @@ type Props = {
   onPageChange: (p: number) => void;
   onView: (r: MaintenanceReport) => void;
   onCancel: (r: MaintenanceReport) => void;
+  onPayCompensation?: (r: MaintenanceReport) => void;
+  payingId?: string | null;
 };
 
 const roomOf = (r: MaintenanceReport): Room | null =>
@@ -28,6 +35,8 @@ const MaintenanceReportStudentTable: React.FC<Props> = ({
   onPageChange,
   onView,
   onCancel,
+  onPayCompensation,
+  payingId = null,
 }) => {
   const columns = [
     {
@@ -82,13 +91,23 @@ const MaintenanceReportStudentTable: React.FC<Props> = ({
     {
       title: "Thao tác",
       key: "action",
-      width: 160,
+      width: 220,
       fixed: "right" as const,
       render: (_: unknown, r: MaintenanceReport) => (
         <Space size={4} wrap>
           <Button size="small" icon={<EyeOutlined />} onClick={() => onView(r)}>
             Chi tiết
           </Button>
+          {canPayMaintenanceCompensation(r) && onPayCompensation ? (
+            <Button
+              size="small"
+              type="primary"
+              loading={payingId === r._id}
+              onClick={() => onPayCompensation(r)}
+            >
+              VNPay
+            </Button>
+          ) : null}
           {r.status === "pending" && (
             <Popconfirm
               title="Hủy khai báo này?"

@@ -120,7 +120,8 @@ const MaintenanceReportsAdminPage: React.FC = () => {
       await maintenanceReportsAdminApi.patch(selected._id, {
         status: "resolved",
         damageCause: vals.damageCause,
-        compensationAmount: vals.damageCause === "student_caused" ? vals.compensationAmount : 0,
+        compensationAmount:
+          vals.damageCause === "student_caused" ? Math.round(Number(vals.compensationAmount) || 0) : 0,
         adminNote: vals.adminNote,
       });
       message.success(

@@ -6,12 +6,23 @@ const Room = require("../models/Room");
 const User = require("../models/User");
 const Notification = require("../models/Notification");
 const { getIO } = require("../socket");
-const { createPenaltyBill, terminateContractDiscipline } = require("../services/violationActions");
+const { terminateContractDiscipline } = require("../services/violationActions");
 const { normalizeViolationRecord, normalizeAmount } = require("../services/violationDisciplineService");
 
 function isAdmin(user) {
   return user?.role === "admin" || user?.role === "manager";
 }
+
+/** Trang «Vi phạm của tôi» — chỉ tài khoản role student (không dùng legacy user). */
+function isStudentRole(user) {
+  return String(user?.role || "") === "student";
+}
+
+exports.requireStudentAccount = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: "Vui lòng đăng nhập" });
+  if (!isStudentRole(req.user)) return res.status(403).json({ message: "Chỉ sinh viên" });
+  next();
+};
 
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -97,7 +108,8 @@ exports.getAllViolations = async (req, res) => {
       const safe = escapeRegex(q);
       const re = new RegExp(safe, "i");
       const userIds = await User.find({
-        role: "user",
+        role: { $in: ["user", "student"] },
+        isDeleted: { $ne: true },
         $or: [{ fullName: re }, { studentId: re }],
       }).distinct("_id");
       const orClauses = [{ ruleName: re }, { description: re }];
@@ -139,7 +151,7 @@ exports.getViolationById = async (req, res) => {
     if (isAdmin(req.user)) {
       return res.json(normalizeViolationRecord(doc));
     }
-    if (req.user.role === "user" || req.user.role === "student") {
+    if (isStudentRole(req.user)) {
       const ownerId = String(doc.user?._id || doc.user || "");
       if (!ownerId || ownerId !== String(req.user._id)) {
         return res.status(403).json({ message: "Không có quyền xem vi phạm này" });
@@ -236,7 +248,7 @@ exports.getStudentSummary = async (req, res) => {
 
 exports.getMyViolations = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên" });
+    if (!isStudentRole(req.user)) return res.status(403).json({ message: "Chỉ sinh viên" });
     const items = await Violation.find({ user: req.user._id })
       .populate("rule", "code name handlingAction")
       .populate("room", "roomNumber area")
@@ -251,7 +263,7 @@ exports.getMyViolations = async (req, res) => {
 
 exports.getMyDisciplineStats = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên" });
+    if (!isStudentRole(req.user)) return res.status(403).json({ message: "Chỉ sinh viên" });
     const schoolYear = String(req.query.schoolYear || "");
     const semester = String(req.query.semester || "");
     if (!schoolYear || !semester) {
@@ -340,21 +352,6 @@ exports.createViolation = async (req, res) => {
           recordedBy: req.user._id,
           status: "pending",
         });
-        const totalPay = shareFine + shareComp;
-        if (totalPay > 0) {
-          const penaltyBreakdown = [];
-          if (shareFine > 0) penaltyBreakdown.push({ label: "Phạt tiền (chia phòng)", amount: shareFine });
-          if (shareComp > 0) penaltyBreakdown.push({ label: "Bồi thường (chia phòng)", amount: shareComp });
-          await createPenaltyBill({
-            contractDoc: c,
-            violationDoc: v,
-            userId: c.user,
-            roomId,
-            totalAmount: totalPay,
-            penaltyBreakdown,
-            note: `${rule.name} — chia đều cho ${n} người trong phòng`,
-          });
-        }
         created.push(v);
       }
       return res.status(201).json({ created: created.length, violations: created, batchId });
@@ -395,22 +392,6 @@ exports.createViolation = async (req, res) => {
       recordedBy: req.user._id,
       status: "pending",
     });
-
-    const totalPay = fineAmount + compensationAmount;
-    if (totalPay > 0) {
-      const penaltyBreakdown = [];
-      if (fineAmount > 0) penaltyBreakdown.push({ label: "Phạt tiền", amount: fineAmount });
-      if (compensationAmount > 0) penaltyBreakdown.push({ label: "Bồi thường", amount: compensationAmount });
-      await createPenaltyBill({
-        contractDoc: contract,
-        violationDoc: v,
-        userId,
-        roomId,
-        totalAmount: totalPay,
-        penaltyBreakdown,
-        note: `${rule.name} — ${String(description || "").slice(0, 200)}`,
-      });
-    }
 
     if (immediateExpulsion || v.immediateExpulsion) {
       await terminateContractDiscipline(contract._id);

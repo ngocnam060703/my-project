@@ -49,6 +49,31 @@ const BillsFilterToolbar: React.FC<Props> = ({
 }) => (
   <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20, alignItems: "center" }}>
     <FilterOutlined style={{ color: "#6b7280" }} />
+    <Input
+      placeholder="Tìm theo tên hoặc MSSV"
+      style={{ width: 220 }}
+      value={searchInput}
+      allowClear
+      onChange={(e) => {
+        onSearchChange(e.target.value);
+        onPageReset();
+      }}
+    />
+    <Select
+      placeholder="Loại đơn"
+      allowClear
+      style={{ width: 160 }}
+      value={filters.billType}
+      onChange={(v) => {
+        onFiltersChange({ ...filters, billType: v });
+        onPageReset();
+      }}
+    >
+      <Select.Option value="monthly">Hóa đơn tháng</Select.Option>
+      <Select.Option value="penalty">Hóa đơn phạt VP</Select.Option>
+      <Select.Option value="damage_reimbursement">Bồi thường HH</Select.Option>
+      <Select.Option value="transfer_supplement">Phụ thu chuyển phòng</Select.Option>
+    </Select>
     <Select
       placeholder="Trạng thái"
       allowClear
@@ -62,20 +87,6 @@ const BillsFilterToolbar: React.FC<Props> = ({
       <Select.Option value="unpaid">Chưa thanh toán</Select.Option>
       <Select.Option value="paid">Đã thanh toán</Select.Option>
       <Select.Option value="overdue">Quá hạn</Select.Option>
-    </Select>
-    <Select
-      placeholder="Loại HĐ"
-      allowClear
-      style={{ width: 140 }}
-      value={filters.billType}
-      onChange={(v) => {
-        onFiltersChange({ ...filters, billType: v });
-        onPageReset();
-      }}
-    >
-      <Select.Option value="monthly">Hóa đơn tháng</Select.Option>
-      <Select.Option value="penalty">Hóa đơn phạt VP</Select.Option>
-      <Select.Option value="damage_reimbursement">Bồi thường HH</Select.Option>
     </Select>
     <InputNumber
       placeholder="Tháng"
@@ -95,16 +106,6 @@ const BillsFilterToolbar: React.FC<Props> = ({
       value={filters.year}
       onChange={(v) => {
         onFiltersChange({ ...filters, year: v || undefined });
-        onPageReset();
-      }}
-    />
-    <Input
-      placeholder="Tìm tên, MSSV hoặc mã HĐ"
-      style={{ width: 220 }}
-      value={searchInput}
-      allowClear
-      onChange={(e) => {
-        onSearchChange(e.target.value);
         onPageReset();
       }}
     />

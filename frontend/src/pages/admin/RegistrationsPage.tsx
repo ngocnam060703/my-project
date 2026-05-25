@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { useSocket } from "../../contexts/SocketContext";
 import { Table, Button, Tag, Space, message, Modal, Input, Select, Card, Row, Col, Statistic } from "antd";
-import { CheckOutlined, CloseOutlined, DownloadOutlined, FilterOutlined, EyeOutlined } from "@ant-design/icons";
+import { CheckOutlined, CloseOutlined, DeleteOutlined, DownloadOutlined, FilterOutlined, EyeOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
 import { registrationsApi, client } from "../../api";
-import type { Registration } from "../../types";
+import type { Registration, User } from "../../types";
+import { formatStudentGender } from "../../utils/genderDisplay";
 
 const statusMap: Record<string, { color: string; text: string }> = {
   pending: { color: "orange", text: "Chờ duyệt" },
@@ -18,6 +20,7 @@ const typeMap: Record<string, { color: string; text: string }> = {
 type RegistrationsPageProps = { embedded?: boolean };
 
 const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false }) => {
+  const { socket } = useSocket();
   const [data, setData] = useState<Registration[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<{ pending: number; approved: number; rejected: number }>({ pending: 0, approved: 0, rejected: 0 });
@@ -39,7 +42,7 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
     return Math.max(1, Math.min(90, diffDays));
   };
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const params: Record<string, unknown> = { page, limit: 10 };
@@ -59,9 +62,24 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, filters.status, filters.room, datePreset]);
 
-  useEffect(() => { load(); }, [page, filters.status, filters.room, datePreset]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onListChange = () => void load();
+    socket.on("registration:transfer-changed", onListChange);
+    socket.on("registration:approved", onListChange);
+    socket.on("registration:rejected", onListChange);
+    return () => {
+      socket.off("registration:transfer-changed", onListChange);
+      socket.off("registration:approved", onListChange);
+      socket.off("registration:rejected", onListChange);
+    };
+  }, [socket, load]);
 
   const handleApprove = (id: string) => {
     Modal.confirm({
@@ -76,6 +94,42 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
           load();
         } catch (err: unknown) {
           message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
+        }
+      },
+    });
+  };
+
+  const handleAdminDelete = (r: Registration) => {
+    const nc =
+      r.newContract && typeof r.newContract === "object"
+        ? (r.newContract as { contractNumber?: string }).contractNumber
+        : "";
+    Modal.confirm({
+      title: "Xóa đơn chuyển phòng?",
+      content: (
+        <div>
+          <p className="mb-2">
+            Xóa đơn này khỏi hệ thống. Sinh viên có thể gửi đơn mới sau khi xóa.
+          </p>
+          {nc ? (
+            <p className="mb-0 text-danger small">
+              Hợp đồng chuyển phòng chờ ký ({nc}) cũng sẽ bị xóa nếu chưa active.
+            </p>
+          ) : null}
+        </div>
+      ),
+      okText: "Xóa",
+      okType: "danger",
+      cancelText: "Hủy",
+      onOk: async () => {
+        try {
+          await registrationsApi.adminDelete(r._id);
+          message.success("Đã xóa đơn");
+          load();
+        } catch (err: unknown) {
+          message.error(
+            (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không xóa được đơn"
+          );
         }
       },
     });
@@ -147,6 +201,16 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
       render: (_: unknown, r: Registration) => getVal(r.user, "studentId") || "-",
     },
     {
+      title: "Giới tính",
+      key: "gender",
+      width: 88,
+      render: (_: unknown, r: Registration) => {
+        const u = r.user;
+        if (u && typeof u === "object") return formatStudentGender((u as User).gender);
+        return "—";
+      },
+    },
+    {
       title: "Phòng",
       key: "room",
       width: 80,
@@ -196,6 +260,11 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
               <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => handleApprove(r._id)}>Duyệt</Button>
               <Button type="link" danger size="small" icon={<CloseOutlined />} onClick={() => setRejectModal({ id: r._id })}>Từ chối</Button>
             </>
+          )}
+          {r.transferPhase !== "completed" && (
+            <Button type="link" danger size="small" icon={<DeleteOutlined />} onClick={() => handleAdminDelete(r)}>
+              Xóa
+            </Button>
           )}
         </Space>
       ),
@@ -328,6 +397,11 @@ const RegistrationsPage: React.FC<RegistrationsPageProps> = ({ embedded = false 
           <div style={{ lineHeight: 2 }}>
             <p><strong>Sinh viên:</strong> {getVal(detailModal.user, "fullName") || "-"}</p>
             <p><strong>MSSV:</strong> {getVal(detailModal.user, "studentId") || "-"}</p>
+            <p><strong>Giới tính:</strong>{" "}
+              {detailModal.user && typeof detailModal.user === "object"
+                ? formatStudentGender((detailModal.user as User).gender)
+                : "—"}
+            </p>
             <p><strong>Email:</strong> {getVal(detailModal.user, "email") || "-"}</p>
             <p><strong>SĐT:</strong> {getVal(detailModal.user, "phone") || "-"}</p>
             <p><strong>Phòng đăng ký:</strong> {getVal(detailModal.room, "roomNumber") || "-"}</p>

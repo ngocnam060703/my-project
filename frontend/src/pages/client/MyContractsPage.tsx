@@ -194,11 +194,13 @@ const MyContractsPage: React.FC = () => {
     socket.on("contract:renewal-created", onExt);
     socket.on("contract:renewal-activated", onExt);
     socket.on("registration:approved", onExt);
+    socket.on("registration:transfer-changed", onExt);
     return () => {
       socket.off("contract:extended", onExt);
       socket.off("contract:renewal-created", onExt);
       socket.off("contract:renewal-activated", onExt);
       socket.off("registration:approved", onExt);
+      socket.off("registration:transfer-changed", onExt);
     };
   }, [socket, authUser, load]);
 
@@ -357,7 +359,7 @@ const MyContractsPage: React.FC = () => {
         c.isTransferContract || String(c.contractNumber || "").startsWith("HD-CP");
       message.success(
         transferLike
-          ? "Đã ký hợp đồng chuyển phòng. Hợp đồng phòng mới đã có hiệu lực."
+          ? "Đã ký hợp đồng chuyển phòng. Vui lòng chờ admin xác nhận để hoàn tất chuyển phòng."
           : "Sinh viên đã ký hợp đồng. Vui lòng chờ admin xác nhận thanh toán."
       );
       setViewModalContract(null);

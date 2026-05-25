@@ -16,7 +16,32 @@ async function createDamageReimbursementBill({ reportDoc, amount, adminUserId })
   }
 
   const existing = await Bill.findOne({ maintenanceReport: reportDoc._id });
-  if (existing) return existing;
+  if (existing) {
+    let changed = false;
+    if (existing.billType !== "damage_reimbursement") {
+      existing.billType = "damage_reimbursement";
+      changed = true;
+    }
+    if (existing.total !== totalAmount) {
+      existing.total = totalAmount;
+      changed = true;
+    }
+    const breakdown = [{ label: "Bồi thường hư hỏng", amount: totalAmount }];
+    if (
+      !Array.isArray(existing.penaltyBreakdown) ||
+      existing.penaltyBreakdown.length !== 1 ||
+      existing.penaltyBreakdown[0]?.label !== breakdown[0].label ||
+      existing.penaltyBreakdown[0]?.amount !== totalAmount
+    ) {
+      existing.penaltyBreakdown = breakdown;
+      changed = true;
+    }
+    if (changed) {
+      await existing.save();
+      await assignBillCodeIfMissing(existing);
+    }
+    return existing;
+  }
 
   const userId = reportDoc.user?._id || reportDoc.user;
   const roomId = reportDoc.room?._id || reportDoc.room;

@@ -162,6 +162,10 @@ interface ProfilePayload {
   avatar?: string;
 }
 
+function isStudentRole(role?: string | null): boolean {
+  return role === "user" || role === "student";
+}
+
 const PRIORITY_OPTIONS: { label: string; value: StudentPriorityType }[] = [
   { label: "Bình thường", value: "normal" },
   { label: "Con liệt sĩ", value: "martyr_child" },
@@ -211,12 +215,14 @@ const ProfilePage: React.FC = () => {
       setProfile(p);
       syncAuthUser(p);
 
-      if (p.role === "user") {
+      if (isStudentRole(p.role)) {
         try {
           const detail = (await studentsApi.getMe()).data as StudentProfileResponse;
           activeProfile = detail.student as ProfilePayload;
           activeProfile = {
             ...activeProfile,
+            email: activeProfile.email || p.email,
+            profileComplete: p.profileComplete,
             checkInDate:
               detail.student?.checkInDate ||
               detail.currentContract?.startDate ||
@@ -309,6 +315,12 @@ const ProfilePage: React.FC = () => {
         return d.isValid() ? d.format("YYYY-MM-DD") : undefined;
       };
       const proofUrlFromFile = priorityProofFile ? URL.createObjectURL(priorityProofFile) : undefined;
+      const addressContact =
+        String(v.address || "").trim() ||
+        String(v.addressPermanent || "").trim() ||
+        String(v.addressNative || "").trim() ||
+        String(v.addressTemporary || "").trim();
+      const avatarRaw = typeof v.avatar === "string" ? v.avatar.trim() : "";
       const res = await studentsApi.updateMe({
         fullName: v.fullName as string,
         phone: v.phone as string,
@@ -319,11 +331,11 @@ const ProfilePage: React.FC = () => {
         gender: v.gender as string,
         citizenId: v.citizenId as string,
         dateOfBirth: normalizeFormDate(v.dateOfBirth),
-        address: v.address as string,
+        address: addressContact,
         faculty: v.faculty as string,
         enrollmentDate: normalizeFormDate(v.enrollmentDate),
         homeroomTeacher: v.homeroomTeacher as string,
-        avatar: v.avatar as string,
+        ...(avatarRaw && !avatarRaw.startsWith("blob:") ? { avatar: avatarRaw } : {}),
         addressNative: v.addressNative as string | undefined,
         addressPermanent: v.addressPermanent as string | undefined,
         addressTemporary: v.addressTemporary as string | undefined,
@@ -338,7 +350,14 @@ const ProfilePage: React.FC = () => {
       });
       const detail = res.data as StudentProfileResponse;
       const updated = detail.student as ProfilePayload;
-      setProfile(updated);
+      let profileComplete = false;
+      try {
+        const pres = await authApi.getProfile();
+        profileComplete = !!(pres.data as ProfilePayload).profileComplete;
+      } catch {
+        profileComplete = !!updated.profileComplete;
+      }
+      setProfile({ ...updated, profileComplete });
       setRoom((detail.currentRoom ?? null) as DashboardRoom | null);
       setDashMeta({
         studentStatus: detail.residenceStatus,
@@ -356,8 +375,11 @@ const ProfilePage: React.FC = () => {
       setEditingProfile(false);
       message.success("Đã cập nhật hồ sơ");
     } catch (e: unknown) {
+      const data = (e as { response?: { data?: { message?: string; errors?: Array<{ msg?: string }> } } })?.response
+        ?.data;
       const msg =
-        (e as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        data?.message ||
+        data?.errors?.[0]?.msg ||
         "Cập nhật thất bại";
       message.error(msg);
     } finally {
@@ -384,7 +406,7 @@ const ProfilePage: React.FC = () => {
     return <Spin size="large" style={{ display: "block", margin: "80px auto" }} />;
   }
 
-  const isStudent = profile.role === "user";
+  const isStudent = isStudentRole(profile.role);
   const complete = !!profile.profileComplete;
 
   const openStudentEdit = () => {
@@ -547,7 +569,7 @@ const ProfilePage: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} lg={12}>
-              <Form.Item label="Lớp" name="className">
+              <Form.Item label="Lớp" name="className" rules={[{ required: true, message: "Nhập lớp" }]}>
                 <Input size="large" allowClear />
               </Form.Item>
             </Col>
@@ -584,15 +606,30 @@ const ProfilePage: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} lg={12}>
-              <Form.Item label="Giới tính" name="gender">
-                <Input size="large" allowClear />
+              <Form.Item label="Giới tính" name="gender" rules={[{ required: true, message: "Nhập giới tính" }]}>
+                <Input size="large" allowClear placeholder="Nam / Nữ" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item name="phone" label="Số điện thoại" rules={[{ required: true, message: "Nhập số điện thoại" }]}>
+                <Input size="large" allowClear placeholder="VD: 0912345678" />
               </Form.Item>
             </Col>
             <Col xs={24} lg={12}>
               <Form.Item
                 name="citizenId"
                 label="CCCD/CMND"
-                rules={[{ pattern: /^\d{9,12}$/, message: "CCCD phải gồm 9-12 chữ số" }]}
+                rules={[
+                  {
+                    validator: (_, value) => {
+                      const s = String(value ?? "").trim();
+                      if (!s) return Promise.resolve();
+                      return /^\d{9,12}$/.test(s)
+                        ? Promise.resolve()
+                        : Promise.reject(new Error("CCCD phải gồm 9-12 chữ số"));
+                    },
+                  },
+                ]}
               >
                 <Input size="large" allowClear />
               </Form.Item>
@@ -603,7 +640,7 @@ const ProfilePage: React.FC = () => {
               </Form.Item>
             </Col>
             <Col xs={24} lg={12}>
-              <Form.Item name="dateOfBirth" label="Ngày sinh">
+              <Form.Item name="dateOfBirth" label="Ngày sinh" rules={[{ required: true, message: "Chọn ngày sinh" }]}>
                 <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" placeholder="Chọn ngày sinh" />
               </Form.Item>
             </Col>
@@ -627,13 +664,27 @@ const ProfilePage: React.FC = () => {
                 <Input size="large" allowClear placeholder="VD: K26" />
               </Form.Item>
             </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item name="enrollmentDate" label="Ngày nhập học">
+                <DatePicker size="large" style={{ width: "100%" }} format="DD/MM/YYYY" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Form.Item name="homeroomTeacher" label="GVCN">
+                <Input size="large" allowClear />
+              </Form.Item>
+            </Col>
             <Col xs={24}>
               <Form.Item name="addressNative" label="Quê quán">
                 <Input.TextArea rows={2} showCount maxLength={500} placeholder="VD: Xã ..., huyện ..., tỉnh ..." />
               </Form.Item>
             </Col>
             <Col xs={24} lg={12}>
-              <Form.Item name="addressPermanent" label="Thường trú">
+              <Form.Item
+                name="addressPermanent"
+                label="Thường trú"
+                rules={[{ required: true, message: "Nhập địa chỉ thường trú" }]}
+              >
                 <Input.TextArea rows={2} showCount maxLength={500} />
               </Form.Item>
             </Col>
@@ -642,6 +693,9 @@ const ProfilePage: React.FC = () => {
                 <Input.TextArea rows={2} showCount maxLength={500} />
               </Form.Item>
             </Col>
+            <Form.Item name="address" hidden>
+              <Input />
+            </Form.Item>
           </Row>
         </StudentFormBlock>
 
@@ -916,7 +970,7 @@ const ProfilePage: React.FC = () => {
           },
           {
             key: "room",
-            label: tabLabel(<HomeOutlined />, "Nơi ở hiện tại"),
+            label: tabLabel(<HomeOutlined />, "Phòng ở hiện tại"),
             children: (
               <ProfileTabPanel>
                 {room ? (

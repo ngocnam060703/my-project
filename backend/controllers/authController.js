@@ -221,7 +221,8 @@ exports.login = async (req, res) => {
 exports.getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select("-password").lean();
-    const profileComplete = req.user.role === "user" ? isProfileComplete(user) : true;
+    const isStudent = req.user.role === "user" || req.user.role === "student";
+    const profileComplete = isStudent ? isProfileComplete(user) : true;
     res.json({ ...user, profileComplete });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -264,7 +265,8 @@ exports.updateProfile = async (req, res) => {
       updates.enrollmentDate = req.body.enrollmentDate ? new Date(req.body.enrollmentDate) : null;
     }
 
-    if (current.role === "user" && req.body.studentId !== undefined) {
+    const isStudent = current.role === "user" || current.role === "student";
+    if (isStudent && req.body.studentId !== undefined) {
       updates.studentId = String(req.body.studentId || "").trim();
     }
 
@@ -275,7 +277,7 @@ exports.updateProfile = async (req, res) => {
       .select("-password")
       .lean();
 
-    const profileComplete = current.role === "user" ? isProfileComplete(user) : true;
+    const profileComplete = isStudent ? isProfileComplete(user) : true;
     res.json({ ...user, profileComplete });
   } catch (error) {
     res.status(500).json({ message: error.message });

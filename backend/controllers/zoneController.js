@@ -2,7 +2,7 @@ const { validationResult } = require("express-validator");
 const Area = require("../models/Area");
 const Room = require("../models/Room");
 const Contract = require("../models/Contract");
-const { contractHoldsRoomSlot } = require("../services/roomOccupancySync");
+const { contractIsEffectiveResident, syncRoomsOccupancyFromContracts } = require("../services/roomOccupancySync");
 const { normalizeGenderPolicy } = require("../utils/genderPolicy");
 
 const notDeleted = { isDeleted: { $ne: true } };
@@ -15,6 +15,8 @@ async function loadRoomStatsForAreas(areaDocs) {
   }
   if (!ids.length) return byArea;
 
+  const roomIds = await Room.find({ area: { $in: ids } }).distinct("_id");
+  await syncRoomsOccupancyFromContracts(roomIds);
   const rooms = await Room.find({ area: { $in: ids } }).select("area currentOccupancy capacity").lean();
   for (const r of rooms) {
     const key = String(r.area);
@@ -182,7 +184,7 @@ exports.getResidents = async (req, res) => {
 
     const contracts = await Contract.find({
       room: { $in: roomIds },
-      status: { $in: ["active", "pending_payment"] },
+      status: "active",
     })
       .populate("user", "fullName studentId email phone gender major enrollmentDate")
       .populate("room", "roomNumber floor area")
@@ -192,7 +194,7 @@ exports.getResidents = async (req, res) => {
 
     const now = new Date();
     const residents = contracts
-      .filter((c) => c.user && c.room && contractHoldsRoomSlot(c, now))
+      .filter((c) => c.user && c.room && contractIsEffectiveResident(c, now))
       .map((c) => ({
         contractId: c._id,
         status: c.status,

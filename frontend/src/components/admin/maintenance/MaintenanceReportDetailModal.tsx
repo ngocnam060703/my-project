@@ -1,9 +1,12 @@
 import React, { useEffect } from "react";
 import { Alert, Button, Form, Input, InputNumber, Modal, Radio, Space, Tag, Image } from "antd";
 import {
+  canPayMaintenanceCompensation,
   DAMAGE_CAUSE_LABEL,
   damagedItemDisplay,
   formatMoney,
+  hasAdminRuling,
+  vndAmountInputNumberProps,
   requestCodeDisplay,
   STATUS_MAP,
 } from "../../../utils/maintenanceReportDisplay";
@@ -24,7 +27,8 @@ type Props = {
   onClose: () => void;
   onSubmit?: (values: ProcessFormValues) => void;
   onCancelRequest?: (report: MaintenanceReport) => void;
-  /** SV: chỉ xem tiến độ, không thấy nguyên nhân / phí đền bù */
+  onPayCompensation?: (report: MaintenanceReport) => void;
+  payingCompensation?: boolean;
   viewerRole?: "admin" | "student";
 };
 
@@ -36,6 +40,8 @@ const MaintenanceReportDetailModal: React.FC<Props> = ({
   onClose,
   onSubmit,
   onCancelRequest,
+  onPayCompensation,
+  payingCompensation = false,
   viewerRole = "admin",
 }) => {
   const [form] = Form.useForm<ProcessFormValues>();
@@ -84,6 +90,17 @@ const MaintenanceReportDetailModal: React.FC<Props> = ({
                   style={{ marginRight: "auto" }}
                 >
                   Hủy yêu cầu
+                </Button>
+              ) : null,
+              isStudent && report && canPayMaintenanceCompensation(report) && onPayCompensation ? (
+                <Button
+                  key="vnpay"
+                  type="primary"
+                  loading={payingCompensation}
+                  onClick={() => onPayCompensation(report)}
+                  style={{ marginRight: "auto" }}
+                >
+                  Thanh toán VNPay
                 </Button>
               ) : null,
               <Button key="close" onClick={onClose}>
@@ -142,12 +159,58 @@ const MaintenanceReportDetailModal: React.FC<Props> = ({
             </div>
           )}
 
-          {isStudent && report.status === "resolved" && report.hasCompensationBill && (
+          {isStudent && (report.status === "pending" || report.status === "processing") && (
             <Alert
-              type="warning"
+              type="info"
               showIcon
-              message="Đơn đã xử lý"
-              description="Ban quản lý đã kết luận và có thể đã tạo hóa đơn liên quan. Vui lòng xem mục Hóa đơn của tôi."
+              message="Đang chờ phán quyết của Ban quản lý"
+              description="BQL sẽ kiểm tra thực tế và cập nhật nguyên nhân, ghi chú xử lý. Chưa có yêu cầu thanh toán cho đến khi có kết luận."
+            />
+          )}
+
+          {isStudent && hasAdminRuling(report) && (
+            <Alert
+              type={report.damageCause === "student_caused" ? "warning" : "success"}
+              showIcon
+              message="Phán quyết của Ban quản lý"
+              description={
+                <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                  <div>
+                    <strong>Nguyên nhân:</strong> {DAMAGE_CAUSE_LABEL[report.damageCause!]}
+                  </div>
+                  {report.adminRulingNote ? (
+                    <div>
+                      <strong>Ghi chú / lý do:</strong> {report.adminRulingNote}
+                    </div>
+                  ) : null}
+                  {report.processedAt ? (
+                    <div>
+                      <strong>Ngày xử lý:</strong> {formatDateTimeVi(report.processedAt)}
+                    </div>
+                  ) : null}
+                  {report.damageCause === "natural_wear" ? (
+                    <div>Bạn không phải bồi thường theo kết luận này.</div>
+                  ) : null}
+                  {report.damageCause === "student_caused" ? (
+                    <>
+                      <div>
+                        <strong>Phí bồi thường:</strong>{" "}
+                        {formatMoney(report.compensationAmount ?? report.compensationBill?.total)}
+                      </div>
+                      {report.compensationBill?.billCode ? (
+                        <div>
+                          <strong>Mã hóa đơn:</strong> {report.compensationBill.billCode}
+                        </div>
+                      ) : null}
+                      {report.compensationBill?.status === "paid" ? (
+                        <div>Trạng thái thanh toán: đã thanh toán.</div>
+                      ) : canPayMaintenanceCompensation(report) ? (
+                        <div>Vui lòng thanh toán qua VNPay (nút bên dưới hoặc cột Thao tác).</div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </Space>
+              }
             />
           )}
 
@@ -191,12 +254,10 @@ const MaintenanceReportDetailModal: React.FC<Props> = ({
                   ]}
                 >
                   <InputNumber
-                    min={0}
-                    step={10000}
+                    {...vndAmountInputNumberProps}
                     style={{ width: "100%" }}
                     disabled={damageCause === "natural_wear"}
-                    placeholder={damageCause === "natural_wear" ? "Khóa — hao mòn tự nhiên" : "Nhập số tiền đền bù"}
-                    formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
+                    placeholder={damageCause === "natural_wear" ? "Khóa — hao mòn tự nhiên" : "Nhập số tiền đền bù (VD: 500, 1500)"}
                   />
                 </Form.Item>
                 <Form.Item name="adminNote" label="Ghi chú BQL (tuỳ chọn)">
@@ -230,14 +291,14 @@ const MaintenanceReportDetailModal: React.FC<Props> = ({
                 </div>
               ) : null}
             </div>
-          ) : (
+          ) : isStudent && report.status === "resolved" && !report.damageCause ? (
             <Alert
               type="info"
               showIcon
-              message="Bạn chỉ xem được tiến độ xử lý"
-              description="Nguyên nhân và phí đền bù do Ban quản lý xác định sau kiểm tra — không hiển thị với sinh viên."
+              message="Đã khắc phục"
+              description="Ban quản lý đã đóng yêu cầu. Liên hệ BQL nếu cần thêm thông tin."
             />
-          )}
+          ) : null}
         </Space>
       ) : null}
     </Modal>

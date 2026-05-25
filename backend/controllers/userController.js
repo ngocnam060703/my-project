@@ -61,6 +61,8 @@ function pickProfile(body) {
 function buildListFilter(query) {
   const { role, search, status } = query;
   const filter = { ...notDeleted };
+  /** Tab «Người dùng»: không gồm SV chờ duyệt / bị từ chối — chỉ tab «Tài khoản chờ duyệt». */
+  filter.status = { $nin: ["pending", "rejected"] };
   if (role) {
     if (isStudentRole(role)) filter.role = { $in: STUDENT_ROLES };
     else filter.role = role;

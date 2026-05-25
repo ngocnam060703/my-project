@@ -69,27 +69,19 @@ const contractSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-contractSchema.pre("save", async function (next) {
-  try {
-    const { revertLockedPricingFieldsOnSave } = require("../services/contractPricing");
-    await revertLockedPricingFieldsOnSave(this);
-    next();
-  } catch (e) {
-    next(e);
-  }
+/** Mongoose 9+: middleware async — không gọi next(). */
+contractSchema.pre("save", async function () {
+  const { revertLockedPricingFieldsOnSave } = require("../services/contractPricing");
+  await revertLockedPricingFieldsOnSave(this);
 });
 
-async function guardPricingOnQueryUpdate(next) {
-  try {
-    const { assertContractPricingUpdateAllowed, pricingFieldsInUpdate } = require("../services/contractPricing");
-    const update = this.getUpdate();
-    if (!pricingFieldsInUpdate(update)?.length) return next();
-    const doc = await this.model.findOne(this.getQuery()).lean();
-    if (doc) assertContractPricingUpdateAllowed(doc, update);
-    next();
-  } catch (e) {
-    next(e);
-  }
+/** Mongoose 9+: query middleware async — không dùng tham số next. */
+async function guardPricingOnQueryUpdate() {
+  const { assertContractPricingUpdateAllowed, pricingFieldsInUpdate } = require("../services/contractPricing");
+  const update = this.getUpdate();
+  if (!pricingFieldsInUpdate(update)?.length) return;
+  const doc = await this.model.findOne(this.getQuery()).lean();
+  if (doc) assertContractPricingUpdateAllowed(doc, update);
 }
 
 contractSchema.pre("updateOne", guardPricingOnQueryUpdate);

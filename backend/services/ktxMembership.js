@@ -68,7 +68,11 @@ async function findResidenceContract(userId, { syncLifecycle = true } = {}) {
       best = c;
     }
   }
-  return bestScore > 0 ? best : null;
+  if (!best || bestScore <= 0) return null;
+
+  const { alignContractRoomWithOccupiedBed } = require("./contractResidenceSync");
+  await alignContractRoomWithOccupiedBed(best._id);
+  return Contract.findById(best._id).lean();
 }
 
 async function isKtxMember(userId, options) {

@@ -22,3 +22,11 @@ export function violationFineDisplay(v: Violation): number {
   }
   return violationRecordedFine(v);
 }
+
+/** Hiển thị cột «Bồi thường»: ưu tiên quyết định xử lý nếu đã resolved + compensation */
+export function violationCompensationDisplay(v: Violation): number {
+  if (v.status === "resolved" && v.resolution?.actionType === "compensation") {
+    return Math.max(0, Number(v.resolution.penaltyAmount ?? v.compensationAmount) || 0);
+  }
+  return violationRecordedCompensation(v);
+}

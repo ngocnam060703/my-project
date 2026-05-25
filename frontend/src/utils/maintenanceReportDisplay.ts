@@ -55,6 +55,23 @@ export const MAINTENANCE_STATUS_LABEL: Record<MaintenanceStatus, string> = {
 export const formatMoney = (v?: number | null) =>
   (v ?? 0).toLocaleString("vi-VN") + "đ";
 
+/** InputNumber VNĐ — nhập từng đồng (trăm, nghìn…), hiển thị dấu chấm phân cách nghìn. */
+export const vndAmountInputNumberProps = {
+  min: 0,
+  step: 1,
+  precision: 0,
+  controls: true,
+  formatter: (value: number | string | undefined) => {
+    if (value === undefined || value === null || value === "") return "";
+    return `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  },
+  parser: (value: string | undefined) => {
+    const digits = (value ?? "").replace(/\./g, "").replace(/[^\d]/g, "");
+    if (digits === "") return "" as unknown as number;
+    return Number(digits);
+  },
+} as const;
+
 export function requestCodeDisplay(r: MaintenanceReport): string {
   if (r.requestCode) return r.requestCode;
   const y = r.createdAt ? new Date(r.createdAt).getFullYear() : "";
@@ -71,4 +88,19 @@ export function damagedItemDisplay(r: MaintenanceReport): string {
   if (r.damagedItemLabel?.trim()) return r.damagedItemLabel.trim();
   if (r.incidentType) return incidentAreaLabel(r.incidentType);
   return "—";
+}
+
+const PAYABLE_BILL_STATUSES = new Set(["unpaid", "pending", "overdue"]);
+
+/** SV: đã có phán quyết nguyên nhân từ BQL. */
+export function hasAdminRuling(r: MaintenanceReport): boolean {
+  return r.status === "resolved" && !!r.damageCause;
+}
+
+/** SV: được thanh toán VNPay trên trang khai báo hư hỏng. */
+export function canPayMaintenanceCompensation(r: MaintenanceReport): boolean {
+  if (r.status !== "resolved" || r.damageCause !== "student_caused") return false;
+  const b = r.compensationBill;
+  if (!b?._id) return false;
+  return PAYABLE_BILL_STATUSES.has(String(b.status)) && Number(b.total) > 0;
 }

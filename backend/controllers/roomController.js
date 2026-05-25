@@ -6,6 +6,7 @@ const Bed = require("../models/Bed");
 const BedHistory = require("../models/BedHistory");
 const Bill = require("../models/Bill");
 const { syncExpiredActiveContracts, countTakenSlots } = require("../services/bedOccupancy");
+const { contractIsEffectiveResident, syncRoomsOccupancyFromContracts } = require("../services/roomOccupancySync");
 
 function deriveResidencyOperationalStatus(bed) {
   if (!bed || String(bed.status) !== "occupied") return "no_bed_assigned";
@@ -42,6 +43,8 @@ exports.getAll = async (req, res) => {
     }
     const sortField = { price: "price", capacity: "capacity", roomNumber: "roomNumber", area: "area.name" }[sortBy] || "roomNumber";
     const sort = { [sortField]: sortOrder === "desc" ? -1 : 1 };
+    const matchingRoomIds = await Room.find(filter).distinct("_id");
+    await syncRoomsOccupancyFromContracts(matchingRoomIds);
     const rooms = await Room.find(filter)
       .populate("area", "name")
       .skip((page - 1) * limit)
@@ -61,6 +64,7 @@ exports.getAll = async (req, res) => {
 
 exports.getById = async (req, res) => {
   try {
+    await syncRoomsOccupancyFromContracts([req.params.id]);
     const room = await Room.findById(req.params.id).populate("area", "name");
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
     res.json(room);
@@ -72,17 +76,20 @@ exports.getById = async (req, res) => {
 exports.getResidents = async (req, res) => {
   try {
     await syncExpiredActiveContracts();
+    await syncRoomsOccupancyFromContracts([req.params.id]);
     const room = await Room.findById(req.params.id)
       .populate("area", "name genderPolicy")
       .populate("roomLeader", "fullName studentId email phone");
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
-    const contracts = await Contract.find({
+    const now = new Date();
+    const contracts = (await Contract.find({
       room: room._id,
-      status: { $in: ["active", "pending_payment"] },
+      status: "active",
     })
       .populate("user", "fullName studentId email phone gender")
       .populate({ path: "bed", select: "code status assignedAt checkInAt equipmentStatus" })
-      .sort({ createdAt: 1 });
+      .sort({ createdAt: 1 })
+      .lean()).filter((c) => contractIsEffectiveResident(c, now));
 
     const userIds = contracts.filter((c) => c.user).map((c) => c.user._id);
     let debtMap = {};
@@ -300,8 +307,17 @@ exports.update = async (req, res) => {
     if (updateData.amenities !== undefined) {
       updateData.amenities = sanitizeAmenities(updateData.amenities);
     }
+    const priceTouched =
+      updateData.currentPrice !== undefined ||
+      updateData.price !== undefined ||
+      updateData.capacity !== undefined ||
+      updateData.maxCapacity !== undefined;
     const room = await Room.findByIdAndUpdate(req.params.id, updateData, { new: true }).populate("area", "name");
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
+    if (priceTouched) {
+      const { refreshPendingContractsInRoom } = require("../services/contractPricing");
+      await refreshPendingContractsInRoom(room._id);
+    }
     res.json(room);
   } catch (error) {
     res.status(500).json({ message: error.message });

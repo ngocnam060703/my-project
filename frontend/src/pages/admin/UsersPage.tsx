@@ -406,6 +406,12 @@ const UsersPage: React.FC<{ studentOnly?: boolean }> = ({ studentOnly }) => {
   const openUserFromQuery = searchParams.get("openUser");
 
   useEffect(() => {
+    if (searchParams.get("tab") === "pending") {
+      setActiveTab("pending");
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
     if (!openUserFromQuery?.trim()) return;
     const uid = openUserFromQuery.trim();
     let cancelled = false;

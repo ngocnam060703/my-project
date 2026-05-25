@@ -30,7 +30,7 @@ const MaintenanceReportFilterBar: React.FC<Props> = ({
   onPageReset,
   onClearFilters,
   onReload,
-  searchPlaceholder = "Tên SV, MSSV, mã yêu cầu",
+  searchPlaceholder = "Tìm theo tên hoặc MSSV",
 }) => {
   const dateValue = filters.date ? dayjs(filters.date) : null;
 
@@ -94,12 +94,16 @@ const MaintenanceReportFilterBar: React.FC<Props> = ({
           onPageReset();
         }}
       />
-      <Input
+      <Input.Search
         placeholder={searchPlaceholder}
         allowClear
-        style={{ width: 240 }}
+        style={{ width: 260 }}
         value={searchInput}
         onChange={(e) => onSearchChange(e.target.value)}
+        onSearch={(v) => {
+          onSearchChange(v);
+          onPageReset();
+        }}
       />
       <Button onClick={onClearFilters}>Xóa lọc</Button>
       <Button icon={<ReloadOutlined />} onClick={onReload}>

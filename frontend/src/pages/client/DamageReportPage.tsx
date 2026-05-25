@@ -5,7 +5,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Card, Form, Input, Modal, Select, Upload } from "antd";
 import { PlusOutlined, UploadOutlined } from "@ant-design/icons";
 import { isAxiosError } from "axios";
-import { contractsApi, maintenanceReportsApi } from "../../api";
+import { billsApi, contractsApi, maintenanceReportsApi } from "../../api";
 import MaintenanceReportStatsCards from "../../components/admin/maintenance/MaintenanceReportStatsCards";
 import MaintenanceReportFilterBar, {
   type MaintenanceFilterState,
@@ -89,6 +89,7 @@ const DamageReportPage: React.FC = () => {
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [selected, setSelected] = useState<MaintenanceReport | null>(null);
+  const [payingId, setPayingId] = useState<string | null>(null);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(searchInput.trim()), 400);
@@ -184,6 +185,30 @@ const DamageReportPage: React.FC = () => {
       message.error(
         isAxiosError(e) ? (e.response?.data as { message?: string })?.message || "Không tải được chi tiết" : "Lỗi",
       );
+    }
+  };
+
+  const payCompensation = async (r: MaintenanceReport) => {
+    const billId = r.compensationBill?._id;
+    if (!billId) {
+      message.error("Chưa có hóa đơn bồi thường. Vui lòng tải lại trang hoặc liên hệ BQL.");
+      return;
+    }
+    setPayingId(r._id);
+    try {
+      const res = await billsApi.payOnline(billId);
+      const paymentUrl = (res.data as { paymentUrl?: string } | undefined)?.paymentUrl;
+      if (!paymentUrl) {
+        message.error("Không tạo được đường dẫn thanh toán VNPay.");
+        return;
+      }
+      window.location.href = paymentUrl;
+    } catch (e) {
+      message.error(
+        isAxiosError(e) ? (e.response?.data as { message?: string })?.message || "Thanh toán thất bại" : "Lỗi",
+      );
+    } finally {
+      setPayingId(null);
     }
   };
 
@@ -329,6 +354,8 @@ const DamageReportPage: React.FC = () => {
           onPageChange={setPage}
           onView={(r) => void openView(r)}
           onCancel={(r) => void cancelReport(r)}
+          onPayCompensation={(r) => void payCompensation(r)}
+          payingId={payingId}
         />
       </Card>
 
@@ -412,8 +439,8 @@ const DamageReportPage: React.FC = () => {
                 <div>
                   <UploadOutlined />
                   <div style={{ marginTop: 8 }}>Tải ảnh</div>
-                </div>
-              )}
+        </div>
+      )}
             </Upload>
           </Form.Item>
         </Form>
@@ -429,6 +456,8 @@ const DamageReportPage: React.FC = () => {
           setSelected(null);
         }}
         onCancelRequest={(r) => void cancelReport(r)}
+        onPayCompensation={(r) => void payCompensation(r)}
+        payingCompensation={!!selected && payingId === selected._id}
         viewerRole="student"
       />
     </div>

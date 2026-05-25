@@ -112,7 +112,7 @@ app.use("/api/room-services", roomServiceRoutes);
 app.use("/api/service-usage", serviceUsageRoutes);
 app.use("/api/room-costs", roomCostRoutes);
 /** Alias REST: danh sách vi phạm của sinh viên */
-app.get("/api/my-violations", auth, requireRole("user"), violationController.getMyViolations);
+app.get("/api/my-violations", auth, violationController.requireStudentAccount, violationController.getMyViolations);
 app.use("/api/violations", violationRoutes);
 /** Khai báo hư hỏng / sự cố phòng — REST theo spec (đăng ký lặp trên students — xem studentRoutes) */
 app.get("/api/my-reports", auth, requireRole("user"), maintenanceReportController.listMine);
@@ -152,6 +152,32 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 const httpServer = http.createServer(app);
+
+/** Client đóng tab / reload — tránh crash Node với ECONNRESET (Windows). */
+httpServer.on("connection", (socket) => {
+  socket.on("error", (err) => {
+    if (err?.code === "ECONNRESET" || err?.code === "EPIPE") {
+      socket.destroy();
+      return;
+    }
+    console.warn("HTTP socket error:", err?.message || err);
+  });
+});
+
+httpServer.on("clientError", (err, socket) => {
+  if (err?.code === "ECONNRESET" || err?.code === "EPIPE") {
+    if (socket && !socket.destroyed) socket.destroy();
+    return;
+  }
+  console.warn("HTTP clientError:", err?.message || err);
+  if (socket && !socket.destroyed) socket.destroy();
+});
+
+httpServer.on("error", (err) => {
+  if (err?.code === "ECONNRESET" || err?.code === "EPIPE") return;
+  console.error("HTTP server error:", err);
+});
+
 initSocket(httpServer);
 
 async function start() {

@@ -41,9 +41,12 @@ type Service = {
   type: "common" | "personal";
   price: number;
   unit: "monthly" | "once";
+  measureUnit?: "month" | "kwh" | "m3";
   description?: string;
   isActive: boolean;
 };
+
+const isMeterService = (s: Service) => s.measureUnit === "kwh" || s.measureUnit === "m3";
 
 type Registration = {
   _id: string;
@@ -83,6 +86,8 @@ const ServicesPage: React.FC = () => {
   const [saving, setSaving] = useState<string | null>(null);
   const [periodLocked, setPeriodLocked] = useState(false);
   const [lockBannerMessage, setLockBannerMessage] = useState<string | null>(null);
+  /** DV điện/nước đã gán cho phòng SV — chỉ các DV này mới đăng ký sử dụng được. */
+  const [roomMeterServiceIds, setRoomMeterServiceIds] = useState<Set<string>>(new Set());
 
   const parseRegistrationsPayload = (data: unknown): Registration[] => {
     if (Array.isArray(data)) return data as Registration[];
@@ -95,13 +100,16 @@ const ServicesPage: React.FC = () => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [sRes, rRes, lockRes, hRes] = await Promise.all([
+      const [sRes, rRes, lockRes, hRes, meterRes] = await Promise.all([
         servicesApi.getAll({ activeOnly: "true" }),
         servicesApi.getMyRegistrations({ month, year }),
         servicesApi.getPeriodLockStatus({ month, year }),
         servicesApi.getMyRegistrations(),
+        servicesApi.getMyRoomMeterServices().catch(() => ({ data: { roomId: null, serviceIds: [] as string[] } })),
       ]);
       setServices(sRes.data || []);
+      const meterIds = meterRes.data?.serviceIds || [];
+      setRoomMeterServiceIds(new Set(meterIds.map(String)));
       const regPayload = rRes.data;
       setRegs(parseRegistrationsPayload(regPayload));
       const lockFromRegs =
@@ -140,6 +148,14 @@ const ServicesPage: React.FC = () => {
   }, [regs]);
 
   const common = useMemo(() => services.filter((s) => s.type === "common"), [services]);
+  const commonMeters = useMemo(
+    () => common.filter((s) => isMeterService(s) && roomMeterServiceIds.has(s._id)),
+    [common, roomMeterServiceIds],
+  );
+  const commonFixed = useMemo(
+    () => common.filter((s) => !isMeterService(s) || !roomMeterServiceIds.has(s._id)),
+    [common, roomMeterServiceIds],
+  );
   const personal = useMemo(() => services.filter((s) => s.type === "personal"), [services]);
 
   const registerPersonal = async (s: Service, quantity?: number, enabled?: boolean) => {
@@ -291,11 +307,51 @@ const ServicesPage: React.FC = () => {
               </Title>
               <Badge count={common.length} style={{ backgroundColor: "#1677ff" }} />
             </Space>
-            {common.length === 0 ? (
+            {commonMeters.length > 0 && (
+              <>
+                <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                  Bật đăng ký nếu bạn <strong>sử dụng</strong> điện/nước phòng trong kỳ — chỉ SV đăng ký mới bị tính trên hóa đơn.
+                </Paragraph>
+                <Row gutter={[16, 16]} style={{ marginBottom: commonFixed.length ? 16 : 0 }}>
+                  {commonMeters.map((s) => {
+                    const reg = regByService[s._id];
+                    const on = reg?.enabled ?? false;
+                    return (
+                      <Col xs={24} sm={12} lg={8} key={s._id}>
+                        <Card size="small" style={cardShell("#0891b2")} styles={{ body: { minHeight: 160 } }}>
+                          <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+                            <Tag color="cyan">Điện / nước phòng</Tag>
+                            <Text strong style={{ fontSize: 16 }}>
+                              {s.name}
+                            </Text>
+                            <Text type="secondary" style={{ fontSize: 13 }}>
+                              Theo chỉ số phòng — chia cho SV đã bật đăng ký
+                            </Text>
+                            <Text strong style={{ fontSize: 16, color: "#0891b2" }}>
+                              {formatMoney(s.price)}
+                              <Text type="secondary"> / {s.measureUnit === "m3" ? "m³" : "kWh"}</Text>
+                            </Text>
+                            <Switch
+                              checked={on}
+                              loading={saving === s._id}
+                              disabled={periodLocked}
+                              onChange={(checked) => void registerPersonal(s, 1, checked)}
+                              checkedChildren="Đăng ký"
+                              unCheckedChildren="Không dùng"
+                            />
+                          </Space>
+                        </Card>
+                      </Col>
+                    );
+                  })}
+                </Row>
+              </>
+            )}
+            {commonFixed.length === 0 && commonMeters.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dịch vụ chung" />
-            ) : (
+            ) : commonFixed.length > 0 ? (
               <Row gutter={[16, 16]}>
-                {common.map((s) => (
+                {commonFixed.map((s) => (
                   <Col xs={24} sm={12} lg={8} key={s._id}>
                     <Card size="small" style={cardShell("#1677ff")} styles={{ body: { minHeight: 140 } }}>
                       <Space orientation="vertical" size={8} style={{ width: "100%" }}>
@@ -320,7 +376,7 @@ const ServicesPage: React.FC = () => {
                   </Col>
                 ))}
               </Row>
-            )}
+            ) : null}
           </div>
 
           <div>

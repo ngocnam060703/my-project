@@ -15,8 +15,17 @@ const {
   assignRoomWithRetry,
   areaAllowsGender,
   findCandidateRooms,
-  tryIncrementRoomOccupancy,
+  tryAssignRoomForApplication,
+  loadOccupantGendersByRoom,
+  countRoomSlotHoldersByRoom,
+  roomFitsStudentGender,
+  buildAreaVacancyStats,
 } = require("../services/applicationRoomAssignment");
+
+function isStudentAccount(user) {
+  const role = String(user?.role || "");
+  return role === "user" || role === "student";
+}
 
 function inferSemesterSchoolYearFromDate(date = new Date()) {
   const d = new Date(date);
@@ -82,9 +91,18 @@ exports.list = async (req, res) => {
     }
 
     const priorityCat = priorityCategory ? String(priorityCategory) : "";
+    const userPriRaw = String(userPriorityType || "").trim();
     const filterByMinorityProfile =
-      priorityCat === "dan_toc_thieu_so" || String(userPriorityType || "").trim() === "minority";
-    if (priorityCat && ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"].includes(priorityCat)) {
+      priorityCat === "dan_toc_thieu_so" || userPriRaw === "minority";
+    const USER_PRIORITY_TYPES = new Set([
+      "normal",
+      "martyr_child",
+      "invalid_child",
+      "minority",
+      "disabled",
+    ]);
+    const filterByUserPriority = USER_PRIORITY_TYPES.has(userPriRaw);
+    if (priorityCat && ["none", "ho_ngheo", "con_thuong_binh", "chinh_sach"].includes(priorityCat) && !filterByUserPriority) {
       filter.priorityCategory = priorityCat;
     }
 
@@ -116,7 +134,9 @@ exports.list = async (req, res) => {
       }
     }
     const userAnd = [...and];
-    if (filterByMinorityProfile) {
+    if (filterByUserPriority) {
+      userAnd.push({ priorityType: userPriRaw });
+    } else if (filterByMinorityProfile) {
       userAnd.push({ priorityType: "minority" });
     }
     if (userAnd.length > 0) {
@@ -157,7 +177,7 @@ exports.list = async (req, res) => {
     if (!isManager) {
       const skip = (pageNum - 1) * lim;
       const rows = await Application.find(filter)
-        .populate("user", "fullName email phone studentId gender")
+        .populate("user", "fullName email phone studentId gender priorityType priorityProofUrl")
         .populate("preferenceArea", "name genderPolicy")
         .populate({ path: "assignedRoom", select: "roomNumber capacity currentOccupancy status", populate: { path: "area", select: "name" } })
         .populate("reviewedBy", "fullName")
@@ -185,7 +205,7 @@ exports.list = async (req, res) => {
     const roomIdSet = new Set(roomInArea.map((r) => String(r._id)));
 
     const all = await Application.find(filter)
-      .populate("user", "fullName email phone studentId gender")
+      .populate("user", "fullName email phone studentId gender priorityType priorityProofUrl")
       .populate("preferenceArea", "name genderPolicy")
       .populate({ path: "assignedRoom", select: "roomNumber area capacity currentOccupancy status", populate: { path: "area", select: "name" } })
       .populate("reviewedBy", "fullName")
@@ -238,14 +258,14 @@ exports.list = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const app = await Application.findById(req.params.id)
-      .populate("user", "fullName email phone studentId gender className major faculty address")
+      .populate("user", "fullName email phone studentId gender priorityType priorityProofUrl className major faculty address")
       .populate("preferenceArea", "name genderPolicy description")
       .populate({ path: "assignedRoom", select: "roomNumber floor capacity currentOccupancy price status", populate: { path: "area", select: "name genderPolicy" } })
       .populate("reviewedBy", "fullName email")
       .populate("linkedContract", "contractNumber status startDate endDate");
     if (!app) return res.status(404).json({ message: "Không tìm thấy đơn" });
 
-    if (req.user.role === "user" && String(app.user._id) !== String(req.user._id)) {
+    if (isStudentAccount(req.user) && String(app.user._id) !== String(req.user._id)) {
       return res.status(403).json({ message: "Không có quyền xem đơn này" });
     }
     if (req.user.role === "manager" && req.user.managedArea) {
@@ -270,7 +290,7 @@ exports.getById = async (req, res) => {
 /** Sinh viên gửi đơn — trạng thái Pending, chưa có phòng */
 exports.create = async (req, res) => {
   try {
-    if (req.user.role !== "user") {
+    if (!isStudentAccount(req.user)) {
       return res.status(403).json({ message: "Chỉ tài khoản sinh viên được gửi đơn" });
     }
     const pending = await Application.findOne({ user: req.user._id, status: "pending" });
@@ -365,9 +385,31 @@ exports.getSuggestedRoom = async (req, res) => {
       return res.status(400).json({ message: "Chỉ gợi ý cho đơn đang chờ duyệt" });
     }
     const room = await pickBestRoomForApplication(app, null);
-    if (!room) return res.status(404).json({ message: "Không còn phòng phù hợp để gợi ý" });
+    if (!room) {
+      return res.status(404).json({
+        message:
+          "Chưa có phòng phù hợp. Nam và nữ không ở chung phòng — cần phòng trống hoặc phòng đang có sinh viên cùng giới tính.",
+      });
+    }
+    const heldMap = await countRoomSlotHoldersByRoom([room._id], null);
+    const held = heldMap.get(String(room._id)) ?? Number(room.currentOccupancy || 0);
+    const cap = Number(room.capacity) || 0;
     const full = await Room.findById(room._id).populate("area", "name genderPolicy").lean();
-    res.json({ room: full, rules: ["Cùng giới tính theo khu", "Còn chỗ", "Ưu tiên khu nguyện vọng", "Ưu tiên phòng gần đầy"] });
+    if (full) {
+      full.currentOccupancy = held;
+      if (cap > 0) full.status = held >= cap ? "full" : full.status === "maintenance" ? "maintenance" : "available";
+    }
+    res.json({
+      room: full,
+      vacantSlots: cap > 0 ? Math.max(0, cap - held) : 0,
+      rules: [
+        "Đúng khu theo giới tính (nam/nữ/hỗn hợp)",
+        "Khu hỗn hợp: không xếp nam và nữ chung một phòng",
+        "Còn chỗ",
+        "Ưu tiên khu nguyện vọng",
+        "Ưu tiên phòng gần đầy",
+      ],
+    });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -395,15 +437,29 @@ exports.getCandidateRooms = async (req, res) => {
     const managed = req.user.role === "manager" ? req.user.managedArea : null;
     const filtered = managed ? rooms.filter((r) => String(r.area?._id || r.area) === String(managed)) : rooms;
 
-    res.json({
-      rooms: filtered.map((r) => ({
+    const payload = filtered.map((r) => {
+      const held = Number(r.currentOccupancy || 0);
+      const cap = Number(r.capacity) || 0;
+      return {
         _id: r._id,
         roomNumber: r.roomNumber,
         capacity: r.capacity,
-        currentOccupancy: r.currentOccupancy,
-        status: r.status,
+        currentOccupancy: held,
+        vacantSlots: cap > 0 ? Math.max(0, cap - held) : 0,
+        status: cap > 0 && held >= cap ? "full" : r.status === "maintenance" ? "maintenance" : "available",
         area: r.area,
-      })),
+      };
+    });
+    const areaStats = buildAreaVacancyStats(filtered);
+    res.json({
+      rooms: payload,
+      areaStats,
+      ...(payload.length === 0
+        ? {
+            message:
+              "Chưa có phòng phù hợp. Nam và nữ không ở chung phòng — cần phòng trống hoặc phòng đang có sinh viên cùng giới tính.",
+          }
+        : {}),
     });
   } catch (e) {
     res.status(500).json({ message: e.message });
@@ -465,14 +521,28 @@ exports.approve = async (req, res) => {
       if (!areaAllowsGender(areaDoc, genderNorm)) {
         return res.status(400).json({ message: "Phòng không phù hợp theo giới tính / quy định khu" });
       }
-      const updated = await tryIncrementRoomOccupancy(roomDoc._id, null);
-      if (!updated) return res.status(400).json({ message: "Phòng đã đầy hoặc không còn trống" });
+      const occMap = await loadOccupantGendersByRoom([roomDoc._id], null);
+      const occ = occMap.get(String(roomDoc._id)) || [];
+      if (!roomFitsStudentGender(areaDoc, genderNorm, occ)) {
+        return res.status(400).json({
+          message:
+            "Phòng không phù hợp: nam và nữ không được ở chung phòng (khu hỗn hợp chỉ xếp cùng giới tính trong một phòng).",
+        });
+      }
+      const updated = await tryAssignRoomForApplication(roomDoc._id, genderNorm, null);
+      if (!updated) {
+        return res.status(400).json({
+          message:
+            "Phòng không còn phù hợp hoặc đã đầy. Nam và nữ không ở chung phòng — chọn phòng trống hoặc phòng cùng giới tính.",
+        });
+      }
       room = updated;
     } else {
       const { error, room: autoRoom } = await assignRoomWithRetry(app, null);
       if (error === "NO_ROOM" || !autoRoom) {
         return res.status(400).json({
-          message: "Không còn phòng phù hợp (giới tính / khu / chỗ trống). Vui lòng điều chỉnh khu hoặc sức chứa.",
+          message:
+            "Chưa có phòng phù hợp. Nam và nữ không ở chung phòng — cần phòng trống hoặc phòng đang có sinh viên cùng giới tính. Vui lòng thêm phòng hoặc chọn phòng thủ công.",
         });
       }
       room = autoRoom;
@@ -487,8 +557,10 @@ exports.approve = async (req, res) => {
 
     const startDate = app.startDate ? new Date(app.startDate) : new Date();
     const appUser = await User.findById(app.user).select("priorityType").lean();
+    const roomForPricing = await Room.findById(room._id).lean();
+    if (!roomForPricing) return res.status(404).json({ message: "Không tìm thấy phòng để tạo hợp đồng" });
     const { buildContractPricingFields } = require("../services/contractPricing");
-    const pricing = buildContractPricingFields({ roomDoc: room, userDoc: appUser });
+    const pricing = buildContractPricingFields({ roomDoc: roomForPricing, userDoc: appUser });
     const c0 = (
       await Contract.create([
         {
@@ -593,7 +665,7 @@ exports.listMine = async (req, res) => {
  */
 exports.cancelMine = async (req, res) => {
   try {
-    if (req.user.role !== "user") {
+    if (!isStudentAccount(req.user)) {
       return res.status(403).json({ message: "Chỉ tài khoản sinh viên được hủy đơn qua API này" });
     }
     const id = String(req.params.id || "");

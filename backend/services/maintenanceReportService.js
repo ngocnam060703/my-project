@@ -92,14 +92,14 @@ async function notifyStudentResolved({ studentId, roomNumber, resolutionType, co
   const isComp = resolutionType === "compensation";
   const title = isComp ? "Khai báo hư hỏng — bồi thường" : "Khai báo hư hỏng đã xử lý";
   const message = isComp
-    ? `Yêu cầu phòng ${roomNumber || ""} đã xử lý. Bạn cần bồi thường ${Math.round(compensationAmount || 0).toLocaleString("vi-VN")}đ (xem Hóa đơn).`
-    : `Yêu cầu sửa chữa phòng ${roomNumber || ""} đã được xử lý (yêu cầu bảo trì).`;
+    ? `Yêu cầu phòng ${roomNumber || ""} đã có phán quyết: sinh viên làm hỏng — bồi thường ${Math.round(compensationAmount || 0).toLocaleString("vi-VN")}đ. Xem chi tiết tại Khai báo hư hỏng.`
+    : `Yêu cầu phòng ${roomNumber || ""} đã xử lý: hao mòn tự nhiên / bảo trì — bạn không phải bồi thường.`;
   await Notification.create({
     user: studentId,
     title,
     message,
     type: "general",
-    link: isComp ? "/student/my-bills" : "/student/damage-report",
+    link: "/student/damage-report",
   });
   io.emit("notification:new", { userId: String(studentId), title, message, link: "/student/damage-report" });
 }
@@ -118,9 +118,42 @@ const STUDENT_HIDDEN_FIELDS = [
 function toStudentMaintenanceDto(doc) {
   const o = doc && typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
   for (const k of STUDENT_HIDDEN_FIELDS) delete o[k];
-  if (doc?.status === "resolved" && doc?.resolutionType === "compensation" && doc?.bill) {
-    o.hasCompensationBill = true;
+
+  const status = String(doc?.status || "");
+  if (status === "pending" || status === "processing") {
+    o.awaitingAdminRuling = true;
+    return o;
   }
+
+  if (status !== "resolved") return o;
+
+  const cause = String(doc?.damageCause || "");
+  o.damageCause = cause;
+  o.adminRulingNote = String(doc?.adminNote || "").trim();
+  o.processedAt = doc?.processedAt || null;
+
+  if (cause === "natural_wear") {
+    o.compensationAmount = 0;
+    o.requiresPayment = false;
+    return o;
+  }
+
+  if (cause === "student_caused") {
+    o.compensationAmount = Math.round(Number(doc?.compensationAmount) || 0);
+    o.requiresPayment = o.compensationAmount > 0;
+    const bill = doc?.bill;
+    if (bill && typeof bill === "object" && bill._id) {
+      o.compensationBill = {
+        _id: String(bill._id),
+        billCode: bill.billCode || "",
+        total: Math.round(Number(bill.total) || o.compensationAmount),
+        status: String(bill.status || "unpaid"),
+      };
+    } else if (bill) {
+      o.compensationBill = { _id: String(bill), billCode: "", total: o.compensationAmount, status: "unpaid" };
+    }
+  }
+
   return o;
 }
 
@@ -187,6 +220,7 @@ async function buildAdminListFilter(req, query) {
     const users = await User.find({
       $or: [{ fullName: rx }, { studentId: rx }],
       role: { $in: ["user", "student"] },
+      isDeleted: { $ne: true },
     }).select("_id");
     const or = [{ requestCode: rx }, { description: rx }];
     if (users.length) or.push({ user: { $in: users.map((u) => u._id) } });
@@ -270,6 +304,7 @@ async function listMine(userId) {
     .populate("room", "roomNumber area")
     .populate("room.area", "name")
     .populate("facility", "name code")
+    .populate("bill", "billCode total status billType")
     .sort({ createdAt: -1 });
   return items.map((doc) => toStudentMaintenanceDto(doc));
 }

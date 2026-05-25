@@ -89,11 +89,12 @@ exports.getAll = async (req, res) => {
       filter.room = { $in: rooms.map((r) => r._id) };
     }
     const registrations = await Registration.find(filter)
-      .populate("user", "fullName email phone studentId")
+      .populate("user", "fullName email phone studentId gender")
       .populate({ path: "room", populate: { path: "area", select: "name" } })
       .populate({ path: "fromRoom", populate: { path: "area", select: "name" } })
       .populate({ path: "currentContract", select: "contractNumber status registration", populate: { path: "registration", select: "semester schoolYear" } })
       .populate("reviewedBy", "fullName")
+      .populate("newContract", "contractNumber status")
       .skip((page - 1) * limit)
       .limit(parseInt(limit))
       .sort({ createdAt: -1 });
@@ -116,7 +117,8 @@ exports.getAll = async (req, res) => {
 exports.getMyRegistrations = async (req, res) => {
   try {
     const registrations = await Registration.find({ user: req.user._id, registrationType: "transfer" })
-      .populate({ path: "room", populate: { path: "area", select: "name" } })
+      .populate("user", "gender")
+      .populate({ path: "room", populate: { path: "area", select: "name genderPolicy" } })
       .populate({ path: "fromRoom", populate: { path: "area", select: "name" } })
       .populate("newContract", "contractNumber status")
       .populate({ path: "currentContract", select: "contractNumber status registration", populate: { path: "registration", select: "semester schoolYear" } })
@@ -139,11 +141,18 @@ exports.create = async (req, res) => {
     if (existing) return res.status(400).json({ message: "Bạn đã có đơn đăng ký đang chờ duyệt" });
     const { findResidenceContract, canRequestRoomTransfer } = require("../services/ktxMembership");
     const residenceForDorm = await findResidenceContract(req.user._id);
-    const activeContract = residenceForDorm
+    let activeContract = residenceForDorm
       ? await Contract.findById(residenceForDorm._id)
           .populate({ path: "room", select: "roomNumber area", populate: { path: "area", select: "name" } })
           .populate("registration", "semester schoolYear")
       : null;
+    if (activeContract) {
+      const { alignContractRoomWithOccupiedBed } = require("../services/contractResidenceSync");
+      await alignContractRoomWithOccupiedBed(activeContract);
+      activeContract = await Contract.findById(activeContract._id)
+        .populate({ path: "room", select: "roomNumber area", populate: { path: "area", select: "name" } })
+        .populate("registration", "semester schoolYear");
+    }
     if (registrationType === "dorm") {
       return res.status(400).json({
         message:
@@ -151,7 +160,7 @@ exports.create = async (req, res) => {
       });
     }
 
-    const roomDoc = await Room.findById(room).populate("area", "name");
+    const roomDoc = await Room.findById(room).populate("area", "name genderPolicy");
     if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng" });
     if (registrationType === "transfer") {
       const canTransfer = await canRequestRoomTransfer(req.user._id);
@@ -168,8 +177,16 @@ exports.create = async (req, res) => {
       if (String(currentRoom._id) === String(roomDoc._id)) {
         return res.status(400).json({ message: "Bạn đang ở phòng này rồi" });
       }
-      if (String(currentRoom.area?._id || currentRoom.area) !== String(roomDoc.area?._id || roomDoc.area)) {
-        return res.status(400).json({ message: "Chỉ được đăng ký chuyển phòng trong cùng khu" });
+      const { tryAssignRoomForApplication, normalizeGender } = require("../services/applicationRoomAssignment");
+      const { normalizeStudentGender } = require("../utils/genderPolicy");
+      const genderNorm =
+        normalizeGender(req.user.gender) || normalizeStudentGender(req.user.gender) || "unknown";
+      const mayJoin = await tryAssignRoomForApplication(roomDoc._id, genderNorm);
+      if (!mayJoin) {
+        return res.status(400).json({
+          message:
+            "Phòng đích không phù hợp: chỉ chuyển vào phòng có bạn cùng giới tính đang ở và khu cho phép giới tính của bạn",
+        });
       }
       if (roomDoc.status === "maintenance") {
         return res.status(400).json({ message: "Phòng đang bảo trì, không thể đăng ký chuyển đến" });
@@ -318,8 +335,10 @@ exports.approve = async (req, res) => {
     });
 
     const appUser = await User.findById(reg.user._id).select("priorityType").lean();
+    const roomForPricing = await Room.findById(reg.room._id).lean();
+    if (!roomForPricing) return res.status(404).json({ message: "Không tìm thấy phòng để tạo hợp đồng" });
     const { buildContractPricingFields } = require("../services/contractPricing");
-    const pricing = buildContractPricingFields({ roomDoc: room, userDoc: appUser });
+    const pricing = buildContractPricingFields({ roomDoc: roomForPricing, userDoc: appUser });
     const contract = await Contract.create({
       registration: reg._id,
       user: reg.user._id,
@@ -360,6 +379,14 @@ exports.reject = async (req, res) => {
         link: "/student/my-registrations",
       });
     }
+    if (reg.registrationType === "transfer") {
+      const { emitTransferRegistrationChanged } = require("../services/roomTransferService");
+      emitTransferRegistrationChanged({
+        userId: regBefore?.user,
+        registrationId: reg._id,
+        action: "rejected",
+      });
+    }
     res.json(reg);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -369,6 +396,20 @@ exports.reject = async (req, res) => {
 exports.getTransferEligibility = async (req, res) => {
   try {
     const data = await getTransferEligibilityForStudent(req.user._id);
+    res.json(data);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message });
+  }
+};
+
+exports.getTransferCandidateRooms = async (req, res) => {
+  try {
+    const role = String(req.user.role || "");
+    if (role !== "user" && role !== "student") {
+      return res.status(403).json({ message: "Chỉ sinh viên mới xem được danh sách phòng chuyển" });
+    }
+    const { listTransferCandidateRoomGroups } = require("../services/roomTransferService");
+    const data = await listTransferCandidateRoomGroups(req.user._id);
     res.json(data);
   } catch (error) {
     res.status(error.statusCode || 500).json({ message: error.message });
@@ -406,9 +447,27 @@ exports.cancel = async (req, res) => {
     if (reg.status !== "pending") {
       return res.status(400).json({ message: "Chỉ có thể hủy đơn đang chờ duyệt" });
     }
+    const isTransfer = reg.registrationType === "transfer";
+    const studentId = reg.user;
+    const regId = reg._id;
     await Registration.findByIdAndDelete(req.params.id);
+    if (isTransfer) {
+      const { emitTransferRegistrationChanged } = require("../services/roomTransferService");
+      emitTransferRegistrationChanged({ userId: studentId, registrationId: regId, action: "cancelled" });
+    }
     res.json({ message: "Đã hủy đơn đăng ký" });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+/** Admin/manager: xóa đơn chuyển phòng (kèm HĐ CP chưa active nếu có). */
+exports.adminDeleteTransfer = async (req, res) => {
+  try {
+    const { adminRemoveTransferRegistration } = require("../services/roomTransferService");
+    const result = await adminRemoveTransferRegistration(req.params.id, req.user._id);
+    res.json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message });
   }
 };

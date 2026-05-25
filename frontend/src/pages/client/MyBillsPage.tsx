@@ -138,23 +138,23 @@ const MyBillsPage: React.FC = () => {
     const hasVnpCallback = vnpay !== null || responseCode !== null;
 
     if (hasVnpCallback) {
-      if (success) {
-        message.success({
-          content: "Thanh toán thành công!",
-          icon: <CheckCircleFilled style={{ color: "#16a34a" }} />,
-        });
+    if (success) {
+      message.success({
+        content: "Thanh toán thành công!",
+        icon: <CheckCircleFilled style={{ color: "#16a34a" }} />,
+      });
         void load();
-      } else if (cancel) {
-        message.warning({
-          content: "Đã hủy giao dịch thanh toán",
-          icon: <CloseCircleFilled style={{ color: "#f97316" }} />,
-        });
-      }
-      navigate("/student/my-bills", { replace: true });
+    } else if (cancel) {
+      message.warning({
+        content: "Đã hủy giao dịch thanh toán",
+        icon: <CloseCircleFilled style={{ color: "#f97316" }} />,
+      });
+    }
+    navigate("/student/my-bills", { replace: true });
     }
 
     if (billId && !openedFromQueryRef.current && allBills.length > 0) {
-      openedFromQueryRef.current = true;
+    openedFromQueryRef.current = true;
       const hit = allBills.find((b) => String(b._id) === billId);
       if (hit) setDetailModal(hit);
       else {
@@ -163,7 +163,7 @@ const MyBillsPage: React.FC = () => {
           .then((res) => setDetailModal(res.data as Bill))
           .catch(() => message.error("Không tải được chi tiết hóa đơn"));
       }
-      navigate("/student/my-bills", { replace: true });
+    navigate("/student/my-bills", { replace: true });
     }
   }, [searchParams, message, navigate, load, allBills]);
 
@@ -641,7 +641,7 @@ const MyBillsPage: React.FC = () => {
                         <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
                       ))}
                     </ul>
-                  </div>
+        </div>
                 )}
                 {detailModal.note ? (
                   <p style={{ color: "#6b7280" }}>
@@ -685,8 +685,8 @@ const MyBillsPage: React.FC = () => {
               <strong>Trạng thái:</strong>{" "}
               <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag>
             </p>
-          </div>
-        )}
+      </div>
+      )}
       </Modal>
     </div>
   );

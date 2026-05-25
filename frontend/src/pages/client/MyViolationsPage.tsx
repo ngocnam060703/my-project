@@ -1,380 +1,537 @@
+/**
+ * Sinh viên — vi phạm của tôi (UI đồng bộ tab «Danh sách đã ghi» trang admin).
+ */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Col,
+  Descriptions,
+  Empty,
+  Image,
+  Input,
+  Modal,
+  Row,
+  Select,
+  Space,
+  Statistic,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
+import {
+  WarningOutlined,
+  ReloadOutlined,
+  EyeOutlined,
+  DollarOutlined,
+  FilterOutlined,
+} from "@ant-design/icons";
+import { isAxiosError } from "axios";
 import { billsApi, violationsApi } from "../../api";
-import { apiErrorMessage } from "../../utils/apiErrorMessage";
+import {
+  violationFineDisplay,
+  violationRecordedCompensation,
+  violationCompensationDisplay,
+  violationRecordedFine,
+  violationRecordedTotal,
+} from "../../utils/violationDisplay";
+import type { Violation } from "../../types";
 
-export type ViolationStatus = "unpaid" | "paid" | "resolved";
+const LIMIT = 10;
 
-export interface Violation {
-  id: string;
-  recordedAt: string;
-  violationName: string;
-  penaltyText: string;
-  isFinancialPenalty: boolean;
-  status: ViolationStatus;
-  billId: string | null;
-}
-
-type ApiViolation = {
-  _id?: string;
-  createdAt?: string;
-  ruleName?: string;
-  rule?: { name?: string } | string;
-  fineAmount?: number;
-  compensationAmount?: number;
-  bill?: string | { _id?: string };
-  status?: string;
-  points?: number;
-  schoolYear?: string;
-  semester?: string;
-  description?: string;
+const severityVi: Record<string, string> = {
+  light: "Nhẹ",
+  medium: "Trung bình",
+  heavy: "Nặng",
 };
 
-type BillLookup = { _id?: string; status?: string; violation?: string | { _id?: string } };
-
-type ViewViolation = Violation & {
-  points: number;
-  schoolYear: string;
-  semester: string;
-  description: string;
+const actionTypeVi: Record<string, string> = {
+  warning: "Cảnh cáo / nhắc nhở",
+  fine: "Phạt tiền",
+  compensation: "Bồi thường",
+  expulsion: "Buộc rời KTX",
 };
 
-function formatDateTime(value: string): string {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("vi-VN", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function defaultSchoolYear(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = d.getMonth() + 1;
+  return m >= 8 ? `${y}-${y + 1}` : `${y - 1}-${y}`;
 }
 
-function normalizeBillId(input: ApiViolation["bill"]): string | null {
-  if (!input) return null;
-  if (typeof input === "string") return input;
-  return input._id ? String(input._id) : null;
+function isViolationPending(r: Violation) {
+  return !r.status || r.status === "pending";
 }
 
-function buildPenaltyText(fine: number, compensation: number): string {
-  const total = Math.max(0, fine || 0) + Math.max(0, compensation || 0);
-  if (total <= 0) return "Nhắc nhở / xử lý nội quy";
-  return `Phạt ${total.toLocaleString("vi-VN")}đ`;
+function billIdOf(r: Violation): string | null {
+  if (!r.bill) return null;
+  if (typeof r.bill === "string") return r.bill;
+  return r.bill._id ? String(r.bill._id) : null;
 }
 
-function mapViolation(row: ApiViolation, billStatusMap: Map<string, string>): ViewViolation {
-  const id = String(row._id || "");
-  const billId = normalizeBillId(row.bill);
-  const fine = Number(row.fineAmount || 0);
-  const compensation = Number(row.compensationAmount || 0);
-  const isFinancialPenalty = fine + compensation > 0 || !!billId;
-
-  let status: ViolationStatus = "resolved";
-  if (isFinancialPenalty) {
-    const billStatus = billId ? billStatusMap.get(billId) : undefined;
-    status = billStatus === "paid" ? "paid" : "unpaid";
+function paymentStatusTag(r: Violation, billPaid: boolean) {
+  if (isViolationPending(r)) {
+    return <Tag color="orange">Chờ xử lý</Tag>;
   }
-
-  return {
-    id,
-    recordedAt: String(row.createdAt || ""),
-    violationName:
-      String(row.ruleName || (typeof row.rule === "object" && row.rule ? row.rule.name : "") || "Vi phạm nội quy"),
-    penaltyText: buildPenaltyText(fine, compensation),
-    isFinancialPenalty,
-    status,
-    billId,
-    points: Number(row.points || 0),
-    schoolYear: String(row.schoolYear || "Không xác định"),
-    semester: String(row.semester || "Không xác định"),
-    description: String(row.description || ""),
-  };
+  const total = violationRecordedTotal(r);
+  const bid = billIdOf(r);
+  if (total > 0 && bid) {
+    return billPaid ? <Tag color="green">Đã đóng phạt</Tag> : <Tag color="volcano">Chờ thanh toán</Tag>;
+  }
+  return <Tag color="green">Đã xử lý</Tag>;
 }
 
-const FilterBar: React.FC<{
-  schoolYears: string[];
-  semesters: string[];
-  selectedYear: string;
-  selectedSemester: string;
-  onYearChange: (value: string) => void;
-  onSemesterChange: (value: string) => void;
-}> = ({ schoolYears, semesters, selectedYear, selectedSemester, onYearChange, onSemesterChange }) => (
-  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-      <label className="space-y-1">
-        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Năm học</span>
-        <select
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-emerald-500 focus:ring-2"
-          value={selectedYear}
-          onChange={(e) => onYearChange(e.target.value)}
-        >
-          {schoolYears.map((year) => (
-            <option key={year} value={year}>
-              {year}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="space-y-1">
-        <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Học kỳ</span>
-        <select
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none ring-emerald-500 focus:ring-2"
-          value={selectedSemester}
-          onChange={(e) => onSemesterChange(e.target.value)}
-        >
-          {semesters.map((semester) => (
-            <option key={semester} value={semester}>
-              {semester}
-            </option>
-          ))}
-        </select>
-      </label>
-    </div>
-  </div>
-);
-
-const SummaryCards: React.FC<{
-  pendingCount: number;
-  totalCount: number;
-  totalPoints: number;
-}> = ({ pendingCount, totalCount, totalPoints }) => (
-  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-      <p className="text-xs uppercase tracking-wide text-amber-700">Vi phạm chờ xử lý</p>
-      <p className="mt-1 text-2xl font-bold text-amber-700">{pendingCount}</p>
-    </div>
-    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-      <p className="text-xs uppercase tracking-wide text-slate-500">Tổng vi phạm đã ghi</p>
-      <p className="mt-1 text-2xl font-bold text-slate-900">{totalCount}</p>
-    </div>
-    <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
-      <p className="text-xs uppercase tracking-wide text-indigo-700">Điểm kỷ luật tích lũy</p>
-      <p className="mt-1 text-2xl font-bold text-indigo-700">{totalPoints}</p>
-    </div>
-  </div>
-);
-
-const StatusBadge: React.FC<{ row: Violation }> = ({ row }) => {
-  if (!row.isFinancialPenalty) {
-    return <span className="inline-flex rounded-full bg-sky-100 px-2 py-1 text-xs font-medium text-sky-700">Đã xử lý</span>;
-  }
-  if (row.status === "paid") {
-    return <span className="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Đã đóng phạt</span>;
-  }
-  return <span className="inline-flex rounded-full bg-orange-100 px-2 py-1 text-xs font-medium text-orange-700">Chờ thanh toán</span>;
-};
-
-const ViolationsTable: React.FC<{
-  rows: ViewViolation[];
-  onView: (row: ViewViolation) => void;
-  onPay: (row: ViewViolation) => void;
-}> = ({ rows, onView, onPay }) => (
-  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-sm">
-        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-          <tr>
-            <th className="px-4 py-3">STT</th>
-            <th className="px-4 py-3">Ngày ghi nhận</th>
-            <th className="px-4 py-3">Loại vi phạm</th>
-            <th className="px-4 py-3">Hình thức xử lý</th>
-            <th className="px-4 py-3">Trạng thái</th>
-            <th className="px-4 py-3 text-right">Thao tác</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={row.id} className="border-t border-slate-100 text-slate-700">
-              <td className="px-4 py-3">{index + 1}</td>
-              <td className="px-4 py-3">{formatDateTime(row.recordedAt)}</td>
-              <td className="px-4 py-3 font-medium text-slate-900">{row.violationName}</td>
-              <td className="px-4 py-3">{row.penaltyText}</td>
-              <td className="px-4 py-3">
-                <StatusBadge row={row} />
-              </td>
-              <td className="px-4 py-3">
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onView(row)}
-                    className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Xem
-                  </button>
-                  {row.status === "unpaid" && row.billId && (
-                    <button
-                      type="button"
-                      onClick={() => onPay(row)}
-                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
-                    >
-                      Thanh toán
-                    </button>
-                  )}
-                </div>
-              </td>
-            </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
-                Không có dữ liệu vi phạm theo bộ lọc đã chọn.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  </div>
-);
-
-const ViolationDetailModal: React.FC<{
-  row: ViewViolation | null;
-  open: boolean;
-  onClose: () => void;
-}> = ({ row, open, onClose }) => {
-  if (!open || !row) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-      <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <h3 className="text-lg font-semibold text-slate-900">Chi tiết vi phạm</h3>
-          <button type="button" className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50" onClick={onClose}>
-            Đóng
-          </button>
-        </div>
-        <div className="space-y-3 px-6 py-5 text-sm text-slate-700">
-          <InfoLine label="Ngày ghi nhận" value={formatDateTime(row.recordedAt)} />
-          <InfoLine label="Loại vi phạm" value={row.violationName} />
-          <InfoLine label="Hình thức xử lý" value={row.penaltyText} />
-          <InfoLine label="Trạng thái" value={row.status === "paid" ? "Đã đóng phạt" : row.status === "unpaid" ? "Chờ thanh toán" : "Đã xử lý"} />
-          <InfoLine label="Năm học / Học kỳ" value={`${row.schoolYear} / ${row.semester}`} />
-          <InfoLine label="Điểm kỷ luật" value={String(row.points)} />
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">Mô tả</p>
-            <p>{row.description || "—"}</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const InfoLine: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="rounded-xl border border-slate-200 p-3">
-    <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-    <p className="mt-1 font-medium text-slate-900">{value || "—"}</p>
-  </div>
-);
+type BillLookup = { _id?: string; status?: string };
 
 const MyViolationsPage: React.FC = () => {
+  const { message } = App.useApp();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [rows, setRows] = useState<ViewViolation[]>([]);
-  const [selectedYear, setSelectedYear] = useState("Tất cả");
-  const [selectedSemester, setSelectedSemester] = useState("Tất cả");
-  const [detailRow, setDetailRow] = useState<ViewViolation | null>(null);
+  const [rows, setRows] = useState<Violation[]>([]);
+  const [billPaidMap, setBillPaidMap] = useState<Map<string, boolean>>(new Map());
+  const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
+  const [semester, setSemester] = useState("HK1");
+  const [searchInput, setSearchInput] = useState("");
+  const [page, setPage] = useState(1);
+  const [detail, setDetail] = useState<Violation | null>(null);
+  const [statsPoints, setStatsPoints] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
-      let violationsRaw: ApiViolation[] = [];
+      let violationsRaw: Violation[] = [];
       try {
         const res = await violationsApi.getMyViolations();
-        violationsRaw = Array.isArray(res.data) ? (res.data as ApiViolation[]) : [];
+        violationsRaw = Array.isArray(res.data) ? res.data : [];
       } catch {
         const res = await violationsApi.getMy();
-        violationsRaw = Array.isArray(res.data) ? (res.data as ApiViolation[]) : [];
+        violationsRaw = Array.isArray(res.data) ? res.data : [];
       }
 
       let billsRaw: BillLookup[] = [];
       try {
         const billsRes = await billsApi.getMyBills();
-        billsRaw = Array.isArray(billsRes.data) ? (billsRes.data as BillLookup[]) : [];
+        billsRaw = Array.isArray(billsRes.data) ? billsRes.data : [];
       } catch {
         const billsRes = await billsApi.getMy();
-        billsRaw = Array.isArray(billsRes.data) ? (billsRes.data as BillLookup[]) : [];
+        billsRaw = Array.isArray(billsRes.data) ? billsRes.data : [];
       }
 
-      const billStatusMap = new Map<string, string>();
-      for (const bill of billsRaw) {
-        if (bill._id) billStatusMap.set(String(bill._id), String(bill.status || ""));
+      const paid = new Map<string, boolean>();
+      for (const b of billsRaw) {
+        if (b._id) paid.set(String(b._id), String(b.status || "") === "paid");
       }
+      setBillPaidMap(paid);
 
-      const mapped = violationsRaw.map((row) => mapViolation(row, billStatusMap));
-      mapped.sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
-      setRows(mapped);
+      violationsRaw.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      setRows(violationsRaw);
     } catch (e) {
       setRows([]);
-      setError(apiErrorMessage(e, "Không tải được dữ liệu vi phạm."));
+      message.error(
+        isAxiosError(e) ? (e.response?.data as { message?: string })?.message || "Không tải được vi phạm" : "Lỗi tải dữ liệu",
+      );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [message]);
+
+  const loadStats = useCallback(async () => {
+    try {
+      const r = await violationsApi.getMyStats({ schoolYear, semester });
+      const pts = (r.data as { totalPoints?: number })?.totalPoints;
+      setStatsPoints(typeof pts === "number" ? pts : null);
+    } catch {
+      setStatsPoints(null);
+    }
+  }, [schoolYear, semester]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
 
-  const schoolYearOptions = useMemo(() => {
-    const set = new Set(rows.map((row) => row.schoolYear).filter(Boolean));
-    return ["Tất cả", ...Array.from(set)];
-  }, [rows]);
+  useEffect(() => {
+    void loadStats();
+  }, [loadStats]);
 
-  const semesterOptions = useMemo(() => {
-    const set = new Set(rows.map((row) => row.semester).filter(Boolean));
-    return ["Tất cả", ...Array.from(set)];
-  }, [rows]);
+  const filteredRows = useMemo(() => {
+    const q = searchInput.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (r.schoolYear && r.schoolYear !== schoolYear) return false;
+      if (r.semester && r.semester !== semester) return false;
+      if (!q) return true;
+      const name = String(r.ruleName || "").toLowerCase();
+      const desc = String(r.description || "").toLowerCase();
+      return name.includes(q) || desc.includes(q);
+    });
+  }, [rows, schoolYear, semester, searchInput]);
 
-  const filteredRows = useMemo(
+  const pageRows = useMemo(() => {
+    const start = (page - 1) * LIMIT;
+    return filteredRows.slice(start, start + LIMIT);
+  }, [filteredRows, page]);
+
+  const pendingPayCount = useMemo(
     () =>
-      rows.filter((row) => {
-        const yearOk = selectedYear === "Tất cả" || row.schoolYear === selectedYear;
-        const semesterOk = selectedSemester === "Tất cả" || row.semester === selectedSemester;
-        return yearOk && semesterOk;
-      }),
-    [rows, selectedYear, selectedSemester],
+      filteredRows.filter((r) => {
+        const bid = billIdOf(r);
+        return !isViolationPending(r) && violationRecordedTotal(r) > 0 && bid && !billPaidMap.get(bid);
+      }).length,
+    [filteredRows, billPaidMap],
   );
 
-  const pendingCount = useMemo(() => filteredRows.filter((row) => row.status === "unpaid").length, [filteredRows]);
-  const totalPoints = useMemo(() => filteredRows.reduce((sum, row) => sum + row.points, 0), [filteredRows]);
+  const totalPoints = useMemo(() => {
+    if (statsPoints != null) return statsPoints;
+    return filteredRows.reduce((s, r) => s + Number(r.points || 0), 0);
+  }, [filteredRows, statsPoints]);
+
+  const openPay = (r: Violation) => {
+    const bid = billIdOf(r);
+    if (!bid) return;
+    navigate(`/student/my-bills?billId=${encodeURIComponent(bid)}`);
+  };
+
+  const columns = [
+    {
+      title: "STT",
+      key: "stt",
+      width: 56,
+      render: (_: unknown, __: Violation, index: number) => (page - 1) * LIMIT + index + 1,
+    },
+    {
+      title: "Thời gian",
+      key: "t",
+      width: 160,
+      render: (_: unknown, r: Violation) =>
+        r.createdAt ? new Date(r.createdAt).toLocaleString("vi-VN") : "—",
+    },
+    {
+      title: "Vi phạm",
+      dataIndex: "ruleName",
+      ellipsis: true,
+      render: (v: string) => v || "—",
+    },
+    {
+      title: "Mức độ",
+      key: "sev",
+      width: 100,
+      render: (_: unknown, r: Violation) => <Tag>{severityVi[r.severity] || r.severity || "—"}</Tag>,
+    },
+    { title: "Điểm", dataIndex: "points", width: 64 },
+    {
+      title: "Trạng thái",
+      key: "st",
+      width: 120,
+      render: (_: unknown, r: Violation) => {
+        const bid = billIdOf(r);
+        return paymentStatusTag(r, bid ? !!billPaidMap.get(bid) : false);
+      },
+    },
+    {
+      title: "Quyết định",
+      key: "res",
+      width: 140,
+      ellipsis: true,
+      render: (_: unknown, r: Violation) =>
+        r.resolution ? (
+          <span>
+            {actionTypeVi[r.resolution.actionType] || r.resolution.actionType}
+            {r.resolution.penaltyAmount ? ` · ${r.resolution.penaltyAmount.toLocaleString("vi-VN")}đ` : ""}
+          </span>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      title: "Phạt",
+      key: "fine",
+      width: 96,
+      align: "right" as const,
+      render: (_: unknown, r: Violation) => `${violationFineDisplay(r).toLocaleString("vi-VN")}đ`,
+    },
+    {
+      title: "Bồi thường",
+      key: "comp",
+      width: 96,
+      align: "right" as const,
+      render: (_: unknown, r: Violation) => `${violationRecordedCompensation(r).toLocaleString("vi-VN")}đ`,
+    },
+    {
+      title: "Tổng",
+      key: "total",
+      width: 100,
+      align: "right" as const,
+      render: (_: unknown, r: Violation) => `${violationRecordedTotal(r).toLocaleString("vi-VN")}đ`,
+    },
+    {
+      title: "Thao tác",
+      key: "act",
+      width: 160,
+      fixed: "right" as const,
+      render: (_: unknown, r: Violation) => {
+        const bid = billIdOf(r);
+        const needPay = bid && violationRecordedTotal(r) > 0 && !billPaidMap.get(bid) && !isViolationPending(r);
+        return (
+          <Space size={4} wrap>
+            <Button size="small" icon={<EyeOutlined />} onClick={() => setDetail(r)}>
+              Chi tiết
+            </Button>
+            {needPay && (
+              <Button size="small" type="primary" icon={<DollarOutlined />} onClick={() => openPay(r)}>
+                Thanh toán
+              </Button>
+            )}
+          </Space>
+        );
+      },
+    },
+  ];
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 px-2 pb-8">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Vi phạm của tôi</h1>
-        <p className="text-sm text-slate-500">Theo dõi vi phạm nội quy, trạng thái xử lý và thanh toán phạt nếu có.</p>
+    <div>
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ margin: 0 }}>
+          <WarningOutlined /> Vi phạm của tôi
+        </h2>
+        <p style={{ margin: "8px 0 0", color: "#6b7280" }}>
+          Theo dõi vi phạm nội quy, điểm kỷ luật và thanh toán phạt (nếu có hóa đơn)
+        </p>
       </div>
 
-      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={8}>
+          <Card size="small" style={{ borderRadius: 12 }}>
+            <Statistic title="Ngưỡng nhắc nhở" value="1–2 điểm" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card size="small" style={{ borderRadius: 12 }}>
+            <Statistic title="Cảnh cáo / Nghiêm trọng" value="3–6 điểm" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card size="small" style={{ borderRadius: 12 }}>
+            <Statistic title="Buộc rời KTX" value="≥ 7 điểm" valueStyle={{ color: "#cf1322" }} />
+          </Card>
+        </Col>
+      </Row>
 
-      <FilterBar
-        schoolYears={schoolYearOptions}
-        semesters={semesterOptions}
-        selectedYear={selectedYear}
-        selectedSemester={selectedSemester}
-        onYearChange={setSelectedYear}
-        onSemesterChange={setSelectedSemester}
-      />
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={8}>
+          <Card
+            bordered={false}
+            style={{
+              borderRadius: 12,
+              background: "linear-gradient(135deg, #d97706 0%, #92400e 100%)",
+              color: "#fff",
+            }}
+          >
+            <Statistic
+              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Chờ thanh toán phạt</span>}
+              value={pendingPayCount}
+              suffix="lần"
+              valueStyle={{ color: "#fff" }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card
+            bordered={false}
+            style={{
+              borderRadius: 12,
+              background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)",
+              color: "#fff",
+            }}
+          >
+            <Statistic
+              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Vi phạm đã ghi (kỳ)</span>}
+              value={filteredRows.length}
+              suffix="lần"
+              valueStyle={{ color: "#fff" }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={8}>
+          <Card
+            bordered={false}
+            style={{
+              borderRadius: 12,
+              background: "linear-gradient(135deg, #4f46e5 0%, #312e81 100%)",
+              color: "#fff",
+            }}
+          >
+            <Statistic
+              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Điểm kỷ luật tích lũy</span>}
+              value={totalPoints}
+              suffix="điểm"
+              valueStyle={{ color: "#fff" }}
+            />
+          </Card>
+        </Col>
+      </Row>
 
-      <SummaryCards pendingCount={pendingCount} totalCount={filteredRows.length} totalPoints={totalPoints} />
+      <Card style={{ borderRadius: 12 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 16, alignItems: "center" }}>
+          <FilterOutlined style={{ color: "#6b7280" }} />
+          <Input
+            placeholder="Tìm theo tên vi phạm, mô tả..."
+            allowClear
+            style={{ width: 260 }}
+            value={searchInput}
+            onChange={(e) => {
+              setSearchInput(e.target.value);
+              setPage(1);
+            }}
+          />
+          <span style={{ color: "#6b7280" }}>Năm học:</span>
+          <Input
+            style={{ width: 130 }}
+            value={schoolYear}
+            onChange={(e) => {
+              setSchoolYear(e.target.value);
+              setPage(1);
+            }}
+          />
+          <span style={{ color: "#6b7280" }}>Học kỳ:</span>
+          <Select
+            style={{ width: 100 }}
+            value={semester}
+            onChange={(v) => {
+              setSemester(v);
+              setPage(1);
+            }}
+            options={[
+              { value: "HK1", label: "HK1" },
+              { value: "HK2", label: "HK2" },
+              { value: "HK3", label: "HK3" },
+            ]}
+          />
+          <Button icon={<ReloadOutlined />} onClick={() => void loadData()}>
+            Làm mới
+          </Button>
+        </div>
 
-      {loading ? (
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-10 text-center text-slate-500">Đang tải dữ liệu vi phạm…</div>
-      ) : (
-        <ViolationsTable
-          rows={filteredRows}
-          onView={(row) => setDetailRow(row)}
-          onPay={(row) => {
-            if (!row.billId) return;
-            navigate(`/student/my-bills?billId=${encodeURIComponent(row.billId)}`);
+        <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+          Tổng {filteredRows.length} bản ghi · {schoolYear} · {semester}
+        </Typography.Text>
+
+        <Table
+          rowKey="_id"
+          loading={loading}
+          columns={columns}
+          dataSource={pageRows}
+          scroll={{ x: 1200 }}
+          locale={{ emptyText: <Empty description="Chưa có vi phạm trong kỳ đã chọn" /> }}
+          pagination={{
+            current: page,
+            pageSize: LIMIT,
+            total: filteredRows.length,
+            showSizeChanger: false,
+            showTotal: (t, range) => `${range[0]}-${range[1]} / ${t} bản ghi`,
+            onChange: (p) => setPage(p),
           }}
         />
-      )}
+      </Card>
 
-      <ViolationDetailModal row={detailRow} open={!!detailRow} onClose={() => setDetailRow(null)} />
+      <Modal
+        title="Chi tiết vi phạm"
+        open={!!detail}
+        onCancel={() => setDetail(null)}
+        footer={[
+          detail && billIdOf(detail) && violationRecordedTotal(detail) > 0 && !billPaidMap.get(billIdOf(detail)!) && !isViolationPending(detail) ? (
+            <Button key="pay" type="primary" icon={<DollarOutlined />} onClick={() => openPay(detail)}>
+              Thanh toán phạt
+            </Button>
+          ) : null,
+          <Button key="close" onClick={() => setDetail(null)}>
+            Đóng
+          </Button>,
+        ].filter(Boolean)}
+        width={720}
+        destroyOnClose
+      >
+        {detail && (
+          <>
+            <Descriptions bordered size="small" column={1}>
+              <Descriptions.Item label="Thời gian">
+                {detail.createdAt ? new Date(detail.createdAt).toLocaleString("vi-VN") : "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Phòng">
+                {typeof detail.room === "object"
+                  ? `Phòng ${detail.room?.roomNumber}${typeof detail.room.area === "object" && detail.room.area?.name ? ` — ${detail.room.area.name}` : ""}`
+                  : "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Năm học / HK">
+                {detail.schoolYear} · {detail.semester}
+              </Descriptions.Item>
+              <Descriptions.Item label="Vi phạm">{detail.ruleName || "—"}</Descriptions.Item>
+              <Descriptions.Item label="Trạng thái xử lý">
+                {isViolationPending(detail) ? "Chờ xử lý" : "Đã xử lý"}
+              </Descriptions.Item>
+              {detail.resolution && (
+                <>
+                  <Descriptions.Item label="Quyết định kỷ luật">
+                    {actionTypeVi[detail.resolution.actionType] || detail.resolution.actionType}
+                  </Descriptions.Item>
+                  {(detail.resolution.penaltyAmount || 0) > 0 &&
+                    (detail.resolution.actionType === "fine" || detail.resolution.actionType === "compensation") && (
+                      <Descriptions.Item
+                        label={
+                          detail.resolution.actionType === "compensation"
+                            ? "Bồi thường (theo quyết định)"
+                            : "Tiền phạt (theo quyết định)"
+                        }
+                      >
+                        {detail.resolution.penaltyAmount!.toLocaleString("vi-VN")}đ
+                      </Descriptions.Item>
+                    )}
+                  <Descriptions.Item label="Ghi chú xử lý">{detail.resolution.note?.trim() || "—"}</Descriptions.Item>
+                </>
+              )}
+              <Descriptions.Item label="Mức độ">{severityVi[detail.severity] || detail.severity}</Descriptions.Item>
+              <Descriptions.Item label="Điểm">{detail.points}</Descriptions.Item>
+              <Descriptions.Item label="Phạt (ghi nhận)">{violationRecordedFine(detail).toLocaleString("vi-VN")}đ</Descriptions.Item>
+              <Descriptions.Item label="Bồi thường (ghi nhận)">
+                {violationRecordedCompensation(detail).toLocaleString("vi-VN")}đ
+              </Descriptions.Item>
+              <Descriptions.Item label="Tổng ghi nhận">{violationRecordedTotal(detail).toLocaleString("vi-VN")}đ</Descriptions.Item>
+              <Descriptions.Item label="Thanh toán">
+                {(() => {
+                  const bid = billIdOf(detail);
+                  if (isViolationPending(detail)) return "Chưa có — đang chờ BQL xử lý";
+                  if (violationRecordedTotal(detail) <= 0) return "Không phát sinh tiền phạt";
+                  if (!bid) return "—";
+                  return billPaidMap.get(bid) ? "Đã thanh toán" : "Chưa thanh toán — xem Hóa đơn";
+                })()}
+              </Descriptions.Item>
+              <Descriptions.Item label="Mô tả">{detail.description?.trim() || "—"}</Descriptions.Item>
+            </Descriptions>
+            {detail.images && detail.images.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <Typography.Text strong>Ảnh minh chứng</Typography.Text>
+                <Image.PreviewGroup>
+                  <Space wrap style={{ marginTop: 8 }}>
+                    {detail.images.map((src, i) => (
+                      <Image key={i} src={src} alt="" width={120} style={{ objectFit: "cover", borderRadius: 4 }} />
+                    ))}
+                  </Space>
+                </Image.PreviewGroup>
+              </div>
+            )}
+            {isViolationPending(detail) && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 16 }}
+                message="Đang chờ Ban quản lý xử lý"
+                description="Sau khi có quyết định, nếu có tiền phạt bạn sẽ thấy hóa đơn tại mục Hóa đơn của tôi."
+              />
+            )}
+          </>
+        )}
+      </Modal>
     </div>
   );
 };
