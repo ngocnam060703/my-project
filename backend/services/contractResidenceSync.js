@@ -73,6 +73,10 @@ async function alignContractRoomWithOccupiedBed(contractOrId) {
     return alignTransferContractRoomFromRegistration(contract);
   }
 
+  if (isKtxApplicationContract(contract)) {
+    return alignKtxApplicationContractRoom(contract);
+  }
+
   const { isTransferContractLike } = require("./contractPricing");
   if (
     isTransferContractLike(contract) &&
@@ -138,6 +142,27 @@ async function resolveContractRoomDocument(contractOrId) {
     if (!roomId) return null;
     return Room.findById(roomId);
   };
+
+  const entitledId = await resolveContractEntitledRoomId(contract);
+  if (entitledId) {
+    const entitledRoom = await tryRoomId(entitledId);
+    if (entitledRoom) {
+      let dirty = false;
+      if (String(contract.room?._id || contract.room || "") !== entitledId) {
+        contract.room = entitledId;
+        dirty = true;
+      }
+      if (isKtxApplicationContract(contract) && contract.bed) {
+        const bedDoc = await Bed.findById(contract.bed).select("room").lean();
+        if (!bedDoc || String(bedDoc.room) !== entitledId) {
+          contract.bed = null;
+          dirty = true;
+        }
+      }
+      if (dirty) await contract.save();
+      return { contract, roomDoc: entitledRoom };
+    }
+  }
 
   let roomDoc = await tryRoomId(contract.room?._id || contract.room);
   if (roomDoc) return { contract, roomDoc };
@@ -205,6 +230,41 @@ async function resolveContractEntitledRoomId(contract) {
   return roomDoc ? String(roomDoc._id) : null;
 }
 
+function isKtxApplicationContract(contract) {
+  if (!contract?.application) return false;
+  if (isTransferContractPendingNewRoom(contract)) return false;
+  const { isTransferContractLike } = require("./contractPricing");
+  return !(isTransferContractLike(contract) && contract.registration);
+}
+
+/** HĐ từ đơn KTX: giữ phòng admin phân; chỉ gắn giường nếu giường thuộc đúng phòng đó. */
+async function alignKtxApplicationContractRoom(contract) {
+  if (!isKtxApplicationContract(contract)) return contract;
+
+  const entitledId = await resolveContractEntitledRoomId(contract);
+  if (!entitledId) return contract;
+
+  let dirty = false;
+  if (String(contract.room?._id || contract.room || "") !== entitledId) {
+    contract.room = entitledId;
+    dirty = true;
+  }
+
+  const bed = await findOccupiedBedForContract(contract);
+  if (bed && String(bed.room) === entitledId) {
+    if (String(contract.bed || "") !== String(bed._id)) {
+      contract.bed = bed._id;
+      dirty = true;
+    }
+  } else if (contract.bed) {
+    contract.bed = null;
+    dirty = true;
+  }
+
+  if (dirty) await contract.save();
+  return contract;
+}
+
 /** Ghi contract.room = phòng hiệu lực trên HĐ. */
 async function alignContractRoomToEntitledRoom(contractOrId) {
   const contract = await resolveContractDocument(contractOrId);
@@ -247,6 +307,7 @@ async function alignAndRefreshContractListRows(contractRows) {
 
 module.exports = {
   alignContractRoomWithOccupiedBed,
+  alignKtxApplicationContractRoom,
   alignTransferContractRoomFromRegistration,
   isTransferContractPendingNewRoom,
   findOccupiedBedForContract,

@@ -54,7 +54,7 @@ exports.update = async (req, res) => {
       await ContractExtensionPeriod.updateMany({ _id: { $ne: req.params.id } }, { $set: { isActive: false } });
     }
 
-    const period = await ContractExtensionPeriod.findByIdAndUpdate(req.params.id, updates, { new: true });
+    const period = await ContractExtensionPeriod.findByIdAndUpdate(req.params.id, updates, { returnDocument: 'after' });
     if (!period) return res.status(404).json({ message: "Không tìm thấy đợt gia hạn" });
     res.json(period);
   } catch (error) {

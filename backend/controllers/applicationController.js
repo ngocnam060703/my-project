@@ -390,14 +390,15 @@ exports.getSuggestedRoom = async (req, res) => {
     if (app.status !== "pending") {
       return res.status(400).json({ message: "Chỉ gợi ý cho đơn đang chờ duyệt" });
     }
-    const room = await pickBestRoomForApplication(app, null);
+    const at = app.startDate ? new Date(app.startDate) : new Date();
+    const room = await pickBestRoomForApplication(app, null, at);
     if (!room) {
       return res.status(404).json({
         message:
           "Chưa có phòng phù hợp. Nam và nữ không ở chung phòng — cần phòng trống hoặc phòng đang có sinh viên cùng giới tính.",
       });
     }
-    const heldMap = await countEffectiveResidentsByRoom([room._id]);
+    const heldMap = await countEffectiveResidentsByRoom([room._id], at);
     const held = heldMap.get(String(room._id)) ?? Number(room.currentOccupancy || 0);
     const cap = Number(room.capacity) || 0;
     const full = await Room.findById(room._id).populate("area", "name genderPolicy").lean();
@@ -438,6 +439,8 @@ exports.getCandidateRooms = async (req, res) => {
     const rooms = await findCandidateRooms(
       { genderNorm: normalizeGender(app.genderSnapshot) || app.genderSnapshot, preferenceAreaId: app.preferenceArea || null },
       null
+      ,
+      app.startDate ? new Date(app.startDate) : new Date()
     );
 
     const managed = req.user.role === "manager" ? req.user.managedArea : null;
@@ -584,6 +587,9 @@ exports.approve = async (req, res) => {
         },
       ])
     )[0];
+
+    const { alignKtxApplicationContractRoom } = require("../services/contractResidenceSync");
+    await alignKtxApplicationContractRoom(c0);
 
     app.linkedContract = c0._id;
     if (!room.roomLeader) {

@@ -112,7 +112,7 @@ exports.update = async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(patch, "name") && patch.name === "") {
       return res.status(400).json({ message: "Tên ngành không được để trống" });
     }
-    const updated = await Major.findByIdAndUpdate(id, patch, { new: true, runValidators: true });
+    const updated = await Major.findByIdAndUpdate(id, patch, { returnDocument: 'after', runValidators: true });
     if (!updated) return res.status(404).json({ message: "Không tìm thấy ngành" });
     res.json(updated);
   } catch (e) {

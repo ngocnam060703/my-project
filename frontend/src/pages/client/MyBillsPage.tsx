@@ -648,12 +648,18 @@ const MyBillsPage: React.FC = () => {
                     <strong>Cách tính:</strong> {detailModal.note}
                   </p>
                 ) : null}
+                <p>
+                  <strong>Tổng cộng:</strong>{" "}
+                  <span style={{ fontSize: 18, color: "#0d9488" }}>{formatMoney(detailModal.total)}</span>
+                </p>
               </>
             )}
-            <p>
-              <strong>{isTransferSupplementBill(detailModal.billType) ? "Phụ thu còn lại:" : "Tổng cộng:"}</strong>{" "}
-              <span style={{ fontSize: 18, color: "#0d9488" }}>{formatMoney(detailModal.total)}</span>
-            </p>
+            {isSpecialBill(detailModal.billType) ? (
+              <p>
+                <strong>{isTransferSupplementBill(detailModal.billType) ? "Phụ thu còn lại:" : "Tổng cộng:"}</strong>{" "}
+                <span style={{ fontSize: 18, color: "#0d9488" }}>{formatMoney(detailModal.total)}</span>
+              </p>
+            ) : null}
             <hr style={{ margin: "12px 0" }} />
             <p>
               <strong>Hạn thanh toán:</strong> {new Date(detailModal.dueDate).toLocaleDateString("vi-VN")}

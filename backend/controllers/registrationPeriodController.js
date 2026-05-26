@@ -61,7 +61,7 @@ exports.update = async (req, res) => {
       await RegistrationPeriod.updateMany({ _id: { $ne: req.params.id } }, { $set: { isActive: false } });
     }
 
-    const period = await RegistrationPeriod.findByIdAndUpdate(req.params.id, updates, { new: true });
+    const period = await RegistrationPeriod.findByIdAndUpdate(req.params.id, updates, { returnDocument: 'after' });
     if (!period) return res.status(404).json({ message: "Không tìm thấy đợt đăng ký" });
     res.json(period);
   } catch (error) {

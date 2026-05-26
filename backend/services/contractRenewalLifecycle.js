@@ -43,7 +43,7 @@ async function processRenewalHandovers(now = new Date()) {
           paymentConfirmedAt: now,
         },
       },
-      { new: true }
+      { returnDocument: 'after' }
     );
     if (!updated) continue;
     handovers += 1;

@@ -20,7 +20,7 @@ exports.markRead = async (req, res) => {
     const notif = await Notification.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       { isRead: true, readAt: new Date() },
-      { new: true }
+      { returnDocument: 'after' }
     );
     if (!notif) return res.status(404).json({ message: "Không tìm thấy thông báo" });
     res.json(notif);

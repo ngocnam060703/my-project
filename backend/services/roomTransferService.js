@@ -28,6 +28,7 @@ const {
 } = require("./contractPricing");
 const { assignBillCodeIfMissing } = require("./billCodeGenerator");
 const { creditUserWallet } = require("./walletCreditService");
+const { reconcileOldRoomMonthlyBillAfterTransfer } = require("./monthlyBillTransferSync");
 const {
   findCandidateRooms,
   tryAssignRoomForApplication,
@@ -589,6 +590,11 @@ async function completeRoomTransferSettlement(reg, newContract, { performedBy })
     }
 
     /** Không tự tạo/cập nhật HĐ monthly — admin tạo hóa đơn tháng thủ công. Chỉ transfer_supplement được auto. */
+    await reconcileOldRoomMonthlyBillAfterTransfer({
+      oldContract,
+      financialSnapshot,
+      performedBy: performedBy || studentUserId,
+    });
 
     const upcomingId = financialSnapshot.upcomingRenewal?.contractId;
     let upcomingContract = upcomingId

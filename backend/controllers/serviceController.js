@@ -169,7 +169,7 @@ exports.updateService = async (req, res) => {
         return res.status(400).json({ message: "includedUsesPerMonth phải lớn hơn 0 cho dịch vụ hybrid" });
       }
     }
-    const doc = await Service.findByIdAndUpdate(id, data, { new: true, runValidators: true });
+    const doc = await Service.findByIdAndUpdate(id, data, { returnDocument: 'after', runValidators: true });
     if (!doc) return res.status(404).json({ message: "Không tìm thấy dịch vụ" });
     res.json(doc);
   } catch (error) {
@@ -345,7 +345,7 @@ exports.upsertMyServiceRegistration = async (req, res) => {
           svc.billingModel === "hybrid" && pType === "monthly_package" ? Number(svc.price || 0) : 0,
         enabled: svc.billingModel === "hybrid" ? enabled !== false : svc.unit === "monthly" ? enabled !== false : q > 0,
       },
-      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true, runValidators: true }
     ).populate("service");
 
     res.json(doc);

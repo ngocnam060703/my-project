@@ -28,7 +28,22 @@ async function applyWalletCreditToBillTotal(userId, total) {
   return { total: newTotal, walletApplied };
 }
 
+/** Cập nhật HĐ: hoàn ví cũ trước, rồi khấu trừ lại theo tổng mới — tránh trừ ví 2 lần. */
+async function reapplyWalletCreditToBill(userId, bill, grossTotal) {
+  const gross = Math.max(0, Math.round(Number(grossTotal) || 0));
+  const prevApplied = Math.max(0, Math.round(Number(bill.walletCreditApplied) || 0));
+  if (prevApplied > 0) {
+    await creditUserWallet(userId, prevApplied, "Hoàn khấu trừ ví — cập nhật hóa đơn tháng");
+    bill.walletCreditApplied = 0;
+  }
+  const adj = await applyWalletCreditToBillTotal(userId, gross);
+  bill.walletCreditApplied = adj.walletApplied;
+  bill.total = adj.total;
+  return adj;
+}
+
 module.exports = {
   creditUserWallet,
   applyWalletCreditToBillTotal,
+  reapplyWalletCreditToBill,
 };

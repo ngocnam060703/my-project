@@ -494,6 +494,7 @@ export interface Bill {
   personalServiceFee?: number;
   occupants?: number;
   total: number;
+  walletCreditApplied?: number;
   /** Alias backend trả về ở GET /bills/:id */
   amount?: number;
   status: "unpaid" | "pending" | "paid" | "overdue" | string;

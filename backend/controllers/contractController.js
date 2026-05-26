@@ -101,6 +101,12 @@ async function loadRoomContextMapsForContracts(rows) {
 
 function resolveRoomLeanForContractRow(c, ctx) {
   const { roomById, regRoomByRegId, appRoomByAppId } = ctx;
+
+  if (c.application) {
+    const assigned = appRoomByAppId.get(String(c.application?._id || c.application));
+    if (assigned && roomById.has(String(assigned))) return roomById.get(String(assigned));
+  }
+
   if (hasPopulatedRoom(c)) return c.room;
 
   const directId = contractRoomRefId(c);

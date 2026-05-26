@@ -175,7 +175,7 @@ function compareRooms(a, b, preferenceAreaId, slotHolders) {
 /**
  * Lấy danh sách phòng ứng viên: đúng khu + đúng giới trong phòng (khu mixed), còn chỗ, không bảo trì.
  */
-async function findCandidateRooms({ genderNorm, preferenceAreaId }, session = null) {
+async function findCandidateRooms({ genderNorm, preferenceAreaId }, session = null, at = new Date()) {
   const areas = await withSession(
     Area.find({ isDeleted: { $ne: true }, isActive: { $ne: false } }),
     session
@@ -192,7 +192,7 @@ async function findCandidateRooms({ genderNorm, preferenceAreaId }, session = nu
   ).lean();
 
   const roomIds = rooms.map((r) => r._id);
-  const slotHolders = roomIds.length ? await countEffectiveResidentsByRoom(roomIds) : new Map();
+  const slotHolders = roomIds.length ? await countEffectiveResidentsByRoom(roomIds, at) : new Map();
   const [occupantByRoom] = await Promise.all([
     loadOccupantGendersByRoom(roomIds, session),
   ]);
@@ -214,12 +214,12 @@ async function findCandidateRooms({ genderNorm, preferenceAreaId }, session = nu
     });
 }
 
-async function pickBestRoomForApplication(applicationLike, session = null) {
+async function pickBestRoomForApplication(applicationLike, session = null, at = new Date()) {
   const genderNorm = normalizeGender(applicationLike.genderSnapshot) || applicationLike.genderSnapshot;
   const pref = applicationLike.preferenceArea || null;
-  const candidates = await findCandidateRooms({ genderNorm, preferenceAreaId: pref }, session);
+  const candidates = await findCandidateRooms({ genderNorm, preferenceAreaId: pref }, session, at);
   if (!candidates.length) return null;
-  const slotHolders = await countRoomSlotHoldersByRoom(candidates.map((c) => c._id), session);
+  const slotHolders = await countEffectiveResidentsByRoom(candidates.map((c) => c._id), at);
   candidates.sort((a, b) => compareRooms(a, b, pref, slotHolders));
   return candidates[0];
 }

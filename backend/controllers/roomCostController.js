@@ -49,7 +49,7 @@ exports.upsertRoomCost = async (req, res) => {
         note: note ? String(note) : "",
         enteredBy: req.user._id,
       },
-      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true, runValidators: true }
     ).populate({ path: "room", select: "roomNumber area currentOccupancy", populate: { path: "area", select: "name" } });
 
     res.json(doc);

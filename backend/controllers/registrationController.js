@@ -365,7 +365,7 @@ exports.reject = async (req, res) => {
     const reg = await Registration.findByIdAndUpdate(
       req.params.id,
       { status: "rejected", reviewedBy: req.user._id, reviewedAt: new Date(), rejectionReason: reason },
-      { new: true }
+      { returnDocument: 'after' }
     );
     if (!reg) return res.status(404).json({ message: "Không tìm thấy đơn đăng ký" });
     const io = getIO();

@@ -104,7 +104,7 @@ exports.updateFacility = async (req, res) => {
     });
     if (req.body.code !== undefined) data.code = String(req.body.code).trim().toUpperCase();
     if (req.body.quantityTotal !== undefined) data.quantityTotal = Number(req.body.quantityTotal);
-    const facility = await Facility.findByIdAndUpdate(id, data, { new: true, runValidators: true });
+    const facility = await Facility.findByIdAndUpdate(id, data, { returnDocument: 'after', runValidators: true });
     if (!facility) return res.status(404).json({ message: "Không tìm thấy CSVC" });
     res.json(facility);
   } catch (error) {
@@ -153,7 +153,7 @@ exports.assignFacilityLocation = async (req, res) => {
     const doc = await FacilityLocation.findOneAndUpdate(
       { facility: facilityId, room: roomId },
       { facility: facilityId, room: roomId, area, floor: Number(floor || room.floor || 1), quantity: Number(quantity) },
-      { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true, runValidators: true }
     )
       .populate("facility", "name code category status")
       .populate("room", "roomNumber floor")
@@ -205,7 +205,7 @@ exports.updateFacilityLocation = async (req, res) => {
     const doc = await FacilityLocation.findByIdAndUpdate(
       id,
       { quantity },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     )
       .populate("facility", "name code category status")
       .populate({ path: "room", select: "roomNumber floor area", populate: { path: "area", select: "name" } })

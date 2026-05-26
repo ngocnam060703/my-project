@@ -156,7 +156,7 @@ async function run() {
     await ViolationRule.findOneAndUpdate(
       { code: r.code },
       { $set: r },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
     );
   }
   console.log("Seeded ViolationRule:", RULES.length);

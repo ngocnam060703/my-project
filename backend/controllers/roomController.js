@@ -287,7 +287,7 @@ exports.update = async (req, res) => {
       updateData.price !== undefined ||
       updateData.capacity !== undefined ||
       updateData.maxCapacity !== undefined;
-    const room = await Room.findByIdAndUpdate(req.params.id, updateData, { new: true }).populate("area", "name");
+    const room = await Room.findByIdAndUpdate(req.params.id, updateData, { returnDocument: 'after' }).populate("area", "name");
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
     if (priceTouched) {
       const { refreshPendingContractsInRoom } = require("../services/contractPricing");

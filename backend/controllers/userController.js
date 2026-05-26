@@ -613,7 +613,7 @@ exports.update = async (req, res) => {
       if (err) return res.status(400).json({ message: err });
     }
 
-    const user = await User.findByIdAndUpdate(req.params.id, updateData, { new: true, runValidators: true })
+    const user = await User.findByIdAndUpdate(req.params.id, updateData, { returnDocument: 'after', runValidators: true })
       .select("-password")
       .lean();
     if (!user) return res.status(404).json({ message: "Không tìm thấy người dùng" });
@@ -654,7 +654,7 @@ exports.lockUser = async (req, res) => {
       return res.status(403).json({ message: "Chỉ quản trị cấp cao mới được khóa tài khoản quản trị cấp cao" });
     }
 
-    const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true }).select("-password").lean();
+    const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { returnDocument: 'after' }).select("-password").lean();
     res.json(user);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -670,7 +670,7 @@ exports.unlockUser = async (req, res) => {
       return res.status(403).json({ message: "Chỉ quản trị cấp cao mới được mở khóa tài khoản quản trị cấp cao" });
     }
 
-    const user = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { new: true }).select("-password").lean();
+    const user = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { returnDocument: 'after' }).select("-password").lean();
     res.json(user);
   } catch (error) {
     res.status(500).json({ message: error.message });

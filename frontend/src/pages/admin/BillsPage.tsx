@@ -951,6 +951,9 @@ const BillsPage: React.FC = () => {
                 <p><strong>Tiền điện:</strong> {formatMoney(detailModal.electricityFee)}</p>
                 <p><strong>Tiền nước:</strong> {formatMoney(detailModal.waterFee)}</p>
                 {detailModal.otherFee ? <p><strong>Phí khác:</strong> {formatMoney(detailModal.otherFee)}</p> : null}
+                {detailModal.sharedCommonFee ? (
+                  <p><strong>DV phòng chung (Wi‑Fi…):</strong> {formatMoney(detailModal.sharedCommonFee)}</p>
+                ) : null}
                 {detailModal.personalServiceFee ? <p><strong>Dịch vụ cá nhân:</strong> {formatMoney(detailModal.personalServiceFee)}</p> : null}
                 {(detailModal.personalServiceBreakdown?.length || 0) > 0 && (
                   <div style={{ marginTop: 8 }}>
@@ -963,18 +966,24 @@ const BillsPage: React.FC = () => {
                   </div>
                 )}
                 {detailModal.note ? <p style={{ color: "#6b7280" }}><strong>Cách tính:</strong> {detailModal.note}</p> : null}
+                <p>
+                  <strong>Tổng cộng:</strong>{" "}
+                  <span style={{ fontSize: 18, color: "#0d9488" }}>{formatMoney(detailModal.total)}</span>
+                </p>
               </>
             )}
-            <p>
-              <strong>{isTransferSupplementBill(detailModal.billType) ? "Phụ thu còn lại:" : "Tổng cộng:"}</strong>{" "}
-              <span style={{ fontSize: 18, color: "#0d9488" }}>
-                {formatMoney(
-                  isTransferSupplementBill(detailModal.billType)
-                    ? transferSupplementDisplayTotal(detailModal)
-                    : detailModal.total,
-                )}
-              </span>
-            </p>
+            {isSpecialBill(detailModal.billType) ? (
+              <p>
+                <strong>{isTransferSupplementBill(detailModal.billType) ? "Phụ thu còn lại:" : "Tổng cộng:"}</strong>{" "}
+                <span style={{ fontSize: 18, color: "#0d9488" }}>
+                  {formatMoney(
+                    isTransferSupplementBill(detailModal.billType)
+                      ? transferSupplementDisplayTotal(detailModal)
+                      : detailModal.total,
+                  )}
+                </span>
+              </p>
+            ) : null}
             <hr style={{ margin: "12px 0" }} />
             <p><strong>Hạn thanh toán:</strong> {new Date(detailModal.dueDate).toLocaleDateString("vi-VN")}</p>
             <p><strong>Ngày tạo:</strong> {formatDateTimeVi(detailModal.createdAt)}</p>

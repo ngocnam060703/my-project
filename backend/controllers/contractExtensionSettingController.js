@@ -21,7 +21,7 @@ exports.setContractExtensionSetting = async (req, res) => {
     const doc = await ContractExtensionSetting.findOneAndUpdate(
       { key: SETTING_KEY },
       { $set: { enable_contract_extension } },
-      { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true, runValidators: true },
     );
 
     res.json({ enable_contract_extension: doc.enable_contract_extension });

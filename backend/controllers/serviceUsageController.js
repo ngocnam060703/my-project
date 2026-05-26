@@ -49,7 +49,7 @@ async function recalcRoomMonthlyUtilityFees(roomId, month, year, userId) {
       },
       $setOnInsert: { room: roomId, month: m, year: y },
     },
-    { upsert: true, new: true, runValidators: true }
+    { upsert: true, returnDocument: 'after', runValidators: true }
   );
 }
 
