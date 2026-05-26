@@ -1,7 +1,10 @@
 const mongoose = require("mongoose");
 const Room = require("../models/Room");
 const Contract = require("../models/Contract");
+const Application = require("../models/Application");
+const Registration = require("../models/Registration");
 const { isWithinStayPeriod } = require("./ktxMembership");
+const { resolveContractEntitledRoomId } = require("./contractResidenceSync");
 
 function toStartOfDay(d) {
   const x = new Date(d);
@@ -23,27 +26,82 @@ function contractHoldsRoomSlot(c, now = new Date()) {
   return toStartOfDay(c.endDate) >= toStartOfDay(now);
 }
 
-/** Đếm SV đang ở phòng theo HĐ active đang hiệu lực. */
+/**
+ * Đếm SV giữ slot phòng theo phòng hiệu lực trên HĐ (đơn chuyển / KTX / contract.room).
+ * Mỗi SV chỉ tính một phòng; đơn KTX cũ không cộng thêm sau khi đã có HĐ phòng mới.
+ */
 async function countContractOccupancyByRoom(roomIds, now = new Date()) {
   const ids = [...new Set((roomIds || []).filter((id) => id && mongoose.isValidObjectId(String(id))).map(String))];
-  const map = new Map(ids.map((id) => [id, 0]));
-  if (!ids.length) return map;
+  const userSets = new Map(ids.map((id) => [id, new Set()]));
+  if (!ids.length) return new Map();
 
   const today = toStartOfDay(now);
   const objectIds = ids.map((id) => new mongoose.Types.ObjectId(id));
-  const contracts = await Contract.find({
-    room: { $in: objectIds },
-    status: "active",
-    endDate: { $gte: today },
+
+  const approvedApps = await Application.find({
+    assignedRoom: { $in: objectIds },
+    status: "approved",
   })
-    .select("room startDate endDate status")
+    .select("_id user assignedRoom")
     .lean();
 
-  for (const c of contracts) {
-    if (!contractIsEffectiveResident(c, now)) continue;
-    const k = String(c.room);
-    map.set(k, (map.get(k) || 0) + 1);
+  const appIds = approvedApps.map((a) => a._id);
+  const userIdsFromApps = [
+    ...new Set(approvedApps.map((a) => a.user).filter(Boolean).map((u) => String(u))),
+  ];
+
+  const transferRegs = await Registration.find({
+    registrationType: "transfer",
+    room: { $in: objectIds },
+  })
+    .select("_id")
+    .lean();
+  const regIds = transferRegs.map((r) => r._id);
+
+  const orClause = [{ room: { $in: objectIds } }];
+  if (appIds.length) orClause.push({ application: { $in: appIds } });
+  if (userIdsFromApps.length) {
+    orClause.push({ user: { $in: userIdsFromApps.map((u) => new mongoose.Types.ObjectId(u)) } });
   }
+  if (regIds.length) orClause.push({ registration: { $in: regIds } });
+
+  const contracts = await Contract.find({
+    status: { $in: ["active", "pending_payment"] },
+    endDate: { $gte: today },
+    $or: orClause,
+  })
+    .select("room user startDate endDate status application registration")
+    .lean();
+
+  const usersPlaced = new Set();
+
+  for (const c of contracts) {
+    const st = String(c.status || "");
+    if (st === "active") {
+      if (!contractIsEffectiveResident(c, now)) continue;
+    } else if (!contractHoldsRoomSlot(c, now)) {
+      continue;
+    }
+    const entitled = await resolveContractEntitledRoomId(c);
+    if (!entitled || !userSets.has(entitled)) continue;
+    const uid = String(c.user || "");
+    if (!uid || usersPlaced.has(uid)) continue;
+    userSets.get(entitled).add(uid);
+    usersPlaced.add(uid);
+  }
+
+  for (const a of approvedApps) {
+    const uid = String(a.user || "");
+    if (!uid || usersPlaced.has(uid)) continue;
+    const k = String(a.assignedRoom || "");
+    if (userSets.has(k)) {
+      userSets.get(k).add(uid);
+      usersPlaced.add(uid);
+    }
+  }
+
+  const map = new Map();
+  for (const [rid, set] of userSets) map.set(rid, set.size);
   return map;
 }
 

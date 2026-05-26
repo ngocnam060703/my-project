@@ -5,6 +5,7 @@ import { authApi } from "./auth";
 import type {
   Area,
   Room,
+  User,
   ZoneDetailResponse,
   DormApplication,
   MyContractOverview,
@@ -413,6 +414,16 @@ export const billsApi = {
         roomFee: number;
       }>;
     }>("/bills/room-billing-preview", { params: { roomId } }),
+  getRoomUtilityFees: (params: { roomId: string; month: number; year: number }) =>
+    client.get<{
+      electricityFee: number;
+      waterFee: number;
+      wifiMonthlyFee: number;
+      hasElectricityReading: boolean;
+      hasWaterReading: boolean;
+      hasElectricityMeter: boolean;
+      hasWaterMeter: boolean;
+    }>("/bills/room-utility-fees", { params }),
   create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; sharedCommonFee?: number; otherFee?: number; dueDate?: string }) =>
     client.post("/bills", data),
   generate: (data: { month: number; year: number; dueDate?: string }) => client.post("/bills/generate", data),
@@ -696,6 +707,11 @@ export const violationsApi = {
   }) => client.get("/violations", { params }),
   getById: (id: string) => client.get(`/violations/${id}`),
   getStudentsSummary: (params: { schoolYear: string; semester: string }) => client.get("/violations/students-summary", { params }),
+  getRoomResidents: (roomId: string) =>
+    client.get<{ room?: { _id: string; roomNumber?: string }; residents: Array<{ user: User }>; totalResidents: number }>(
+      "/violations/room-residents",
+      { params: { roomId } }
+    ),
   create: (data: Record<string, unknown>) => client.post("/violations", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/violations/${id}`, data),
   remove: (id: string) => client.delete(`/violations/${id}`),

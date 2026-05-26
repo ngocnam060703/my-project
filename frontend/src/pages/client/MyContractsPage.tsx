@@ -63,6 +63,14 @@ function depositDisplay(c: Contract): string {
   return "Theo quy định KTX (liên hệ BQL)";
 }
 
+/** Phòng ghi trên HĐ — phòng SV ký (hoặc sẽ ký) trong hợp đồng đó. */
+function contractSignedRoomLabel(c: Contract): string {
+  const room = typeof c.room === "object" ? c.room : null;
+  if (!room) return "—";
+  const area = room.area && typeof room.area === "object" ? room.area.name : "";
+  return `${room.roomNumber}${area ? ` (${area})` : ""}`;
+}
+
 function errMsg(e: unknown): string {
   if (isAxiosError(e)) {
     const m = (e.response?.data as { message?: string } | undefined)?.message;
@@ -139,7 +147,17 @@ const MyContractsPage: React.FC = () => {
         extensionPeriodsApi.getActive().catch(() => ({ data: null })),
       ]);
       const activeRaw = activePeriodRes.data as { name?: string; startDate?: string; endDate?: string } | null;
-      setData(mergeActiveExtensionPeriod(overviewRes.data, activeRaw));
+      const overview = overviewRes.data as MyContractOverview;
+      setData(
+        mergeActiveExtensionPeriod(
+          {
+            ...overview,
+            contracts: Array.isArray(overview.contracts) ? overview.contracts : [],
+            extendRequests: Array.isArray(overview.extendRequests) ? overview.extendRequests : [],
+          },
+          activeRaw
+        )
+      );
     } catch (firstErr) {
       /** Backend cũ chưa mount GET /api/my-contract → dùng GET /contracts/my + setting gia hạn */
       try {
@@ -211,8 +229,8 @@ const MyContractsPage: React.FC = () => {
   );
   /** Thẻ HĐ: ưu tiên HĐ đang chờ ký (chuyển phòng / pending_payment). */
   const contractCard = contractAwaitingSign ?? primary;
-  /** Phòng hiển thị: khớp HĐ trên thẻ (tránh lệch khi vừa có HĐ active vừa có HĐ chờ ký). */
-  const roomDisplayContract = contractCard ?? primary;
+  /** Phòng hiển thị: ưu tiên HĐ đang hiệu lực (active), không lấy HĐ chờ ký nếu chưa có phòng. */
+  const roomDisplayContract = primary ?? contractAwaitingSign ?? null;
   const student =
     data?.student ||
     (authUser
@@ -466,21 +484,35 @@ const MyContractsPage: React.FC = () => {
                 <div className="card-header bg-white fw-semibold">Thông tin phòng</div>
                 <div className="card-body small">
                   <p className="mb-1">
-                    <strong>Phòng:</strong> {(roomDisplayContract?.room as Room)?.roomNumber || "—"}
+                    <strong>Phòng:</strong> {contractSignedRoomLabel(roomDisplayContract || ({} as Contract))}
                   </p>
                   <p className="mb-1">
                     <strong>Khu:</strong>{" "}
-                    {typeof (roomDisplayContract?.room as Room)?.area === "object" && roomDisplayContract?.room
-                      ? String(((roomDisplayContract.room as Room).area as { name?: string }).name)
-                      : "—"}
+                    {(() => {
+                      const r = roomDisplayContract?.room;
+                      if (r && typeof r === "object" && r.area && typeof r.area === "object") {
+                        return String((r.area as { name?: string }).name || "—");
+                      }
+                      return "—";
+                    })()}
                   </p>
                   <p className="mb-1">
                     <strong>Sức chứa (theo HĐ):</strong>{" "}
-                    {capacityAtSigning(roomDisplayContract!, roomDisplayContract?.room as Room)} chỗ
+                    {roomDisplayContract
+                      ? capacityAtSigning(
+                          roomDisplayContract,
+                          typeof roomDisplayContract.room === "object" ? (roomDisplayContract.room as Room) : null
+                        )
+                      : "—"}{" "}
+                    chỗ
                   </p>
                   <p className="mb-0 text-muted">
-                    Phòng hiện tại: {(roomDisplayContract?.room as Room)?.capacity ?? "—"} chỗ / đang ở{" "}
-                    {(roomDisplayContract?.room as Room)?.currentOccupancy ?? "—"}
+                    Phòng hiện tại:{" "}
+                    {roomDisplayContract?.room && typeof roomDisplayContract.room === "object"
+                      ? `${(roomDisplayContract.room as Room).capacity ?? "—"} chỗ / đang ở ${
+                          (roomDisplayContract.room as Room).currentOccupancy ?? "—"
+                        }`
+                      : "—"}
                   </p>
                 </div>
               </div>
@@ -585,7 +617,7 @@ const MyContractsPage: React.FC = () => {
             </div>
           </div>
 
-          {data && data.contracts.length > 1 && (
+          {(data?.contracts?.length ?? 0) > 1 && (
             <div className="card shadow-sm mb-4">
               <div className="card-header bg-white fw-semibold">Lịch sử hợp đồng</div>
               <div className="table-responsive">
@@ -600,12 +632,12 @@ const MyContractsPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {data!.contracts.map((c) => {
+                    {(data?.contracts ?? []).map((c) => {
                       const b = contractStatusBootstrapBadge(c.status);
                       return (
                         <tr key={c._id}>
                           <td>{c.contractNumber}</td>
-                          <td>{(c.room as Room)?.roomNumber}</td>
+                          <td>{contractSignedRoomLabel(c)}</td>
                           <td>{new Date(c.startDate).toLocaleDateString("vi-VN")}</td>
                           <td>{new Date(c.endDate).toLocaleDateString("vi-VN")}</td>
                           <td>
@@ -926,10 +958,15 @@ Hướng dẫn: ${svSigned ? "Bạn đã ký xác nhận. Vui lòng chờ admin 
 };
 
 function ExtendRow({ r }: { r: ContractExtendRequest }) {
-  const cn = typeof r.contract === "object" ? r.contract.contractNumber || r.contract._id : r.contract;
+  const cn =
+    r.contract != null && typeof r.contract === "object"
+      ? (r.contract as Contract).contractNumber || String((r.contract as Contract)._id || "—")
+      : r.contract
+        ? String(r.contract)
+        : "—";
   const newCn =
-    typeof r.newContract === "object" && r.newContract
-      ? (r.newContract as Contract).contractNumber || (r.newContract as Contract)._id
+    r.newContract != null && typeof r.newContract === "object"
+      ? (r.newContract as Contract).contractNumber || String((r.newContract as Contract)._id || "—")
       : r.newContract
         ? String(r.newContract)
         : "—";

@@ -16,6 +16,7 @@ router.get("/my", auth, requireStudentAccount, violationController.getMyViolatio
 
 /** Admin — các path tĩnh trước /:id */
 router.get("/students-summary", auth, admin, violationController.getStudentSummary);
+router.get("/room-residents", auth, admin, violationController.getRoomResidents);
 router.get("/", auth, admin, violationController.getAllViolations);
 router.post("/", auth, admin, violationController.createViolation);
 

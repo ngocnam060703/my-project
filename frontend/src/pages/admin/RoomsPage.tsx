@@ -43,6 +43,7 @@ import {
   ClockCircleOutlined,
   ToolOutlined,
   UserOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
 import { roomsApi, areasApi, facilitiesApi, bedsApi } from "../../api";
@@ -175,9 +176,31 @@ const residencyOperationalLabels: Record<string, { color: string; text: string }
   no_active_contract: { color: "default", text: "Không có HĐ hiện hành" },
   contract_no_bed: { color: "processing", text: "Đã phân phòng — chờ giường" },
   no_bed_assigned: { color: "warning", text: "Chưa phân giường" },
+  contract_pending_sign: { color: "default", text: "Chờ SV ký HĐ" },
+  signed_awaiting_admin: { color: "blue", text: "SV đã ký — chờ admin xác nhận" },
   assigned_pending_checkin: { color: "gold", text: "Đã phân giường — chờ check-in" },
   checked_in_staying: { color: "green", text: "Đang ở (đã check-in)" },
 };
+
+/** HĐ active của phòng (danh sách residents) khớp giường / SV / contractId trên bed. */
+function findActiveResidentForBed(
+  residents: ResidentRow[],
+  opts: { contractIdStr?: string; uid?: string; bedCode?: string }
+): ResidentRow | undefined {
+  const { contractIdStr, uid, bedCode } = opts;
+  if (contractIdStr) {
+    const hit = residents.find((r) => String(r.contractId) === contractIdStr);
+    if (hit) return hit;
+  }
+  if (bedCode) {
+    const hit = residents.find((r) => r.bedCode === bedCode);
+    if (hit) return hit;
+  }
+  if (uid) {
+    return residents.find((r) => String(r.user?._id || "") === uid);
+  }
+  return undefined;
+}
 
 function bedUiMeta(b: Bed): { bg: string; border: string; icon: React.ReactNode; label: string; desc: string } {
   const phase = String(b.residencyPhase || "");
@@ -201,13 +224,23 @@ function bedUiMeta(b: Bed): { bg: string; border: string; icon: React.ReactNode;
     };
   }
   if (st === "occupied") {
+    const hasHolder = !!(b.currentUser && typeof b.currentUser === "object") || !!b.currentContract;
+    if (!hasHolder) {
+      return {
+        bg: "#fef2f2",
+        border: "#ef4444",
+        icon: <WarningOutlined />,
+        label: "Slot lỗi",
+        desc: "Giường đang occupied nhưng không có HĐ/SV hợp lệ — giải phóng hoặc làm mới sơ đồ.",
+      };
+    }
     if (phase === "assigned_pending_checkin") {
       return {
         bg: "#dbeafe",
         border: "#2563eb",
         icon: <LoginOutlined />,
         label: "Đã phân giường",
-        desc: "Đã gắn HĐ nhưng chờ check-in thực tế.",
+        desc: "Đã gắn HĐ — chờ check-in (xác nhận SV đã nhận phòng).",
       };
     }
     return {
@@ -590,6 +623,10 @@ const RoomsPage: React.FC = () => {
 
     if (bedsRes.status === "fulfilled") {
       setBedsByRoom((m) => ({ ...m, [roomId]: (bedsRes.value.data?.beds || []) as Bed[] }));
+      const cleared = Number((bedsRes.value.data as { reconciledCleared?: number })?.reconciledCleared || 0);
+      if (cleared > 0) {
+        message.info(`Đã giải phóng ${cleared} slot không hợp lệ (không có HĐ đúng phòng)`);
+      }
       const bss = bedsRes.value.data?.slotStats as RoomSlotStats | undefined;
       if (bss) setDetailSlotStats((m) => ({ ...m, [roomId]: bss }));
     }
@@ -613,6 +650,10 @@ const RoomsPage: React.FC = () => {
     try {
       const res = await roomsApi.getBeds(roomId);
       setBedsByRoom((m) => ({ ...m, [roomId]: (res.data?.beds || []) as Bed[] }));
+      const cleared = Number((res.data as { reconciledCleared?: number })?.reconciledCleared || 0);
+      if (cleared > 0) {
+        message.info(`Đã giải phóng ${cleared} slot không hợp lệ (không có HĐ đúng phòng)`);
+      }
       const bss = res.data?.slotStats as RoomSlotStats | undefined;
       if (bss) setDetailSlotStats((m) => ({ ...m, [roomId]: bss }));
     } catch {
@@ -644,6 +685,28 @@ const RoomsPage: React.FC = () => {
     } catch (err: unknown) {
       message.error((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không check-in được");
     }
+  };
+
+  const handleReleaseBed = (roomId: string, bedId: string) => {
+    Modal.confirm({
+      title: "Giải phóng giường?",
+      content: "Slot sẽ trở về trống. Chỉ dùng khi giường bị chiếm nhầm hoặc không có HĐ hợp lệ.",
+      okText: "Giải phóng",
+      okType: "danger",
+      cancelText: "Hủy",
+      onOk: async () => {
+        try {
+          await bedsApi.checkout(bedId);
+          message.success("Đã giải phóng giường");
+          await refreshRoomSnapshot(roomId);
+        } catch (err: unknown) {
+          message.error(
+            (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+              "Không giải phóng được"
+          );
+        }
+      },
+    });
   };
 
   const handleBedCheckout = (roomId: string, bedId: string) => {
@@ -1231,14 +1294,8 @@ const RoomsPage: React.FC = () => {
                         {bedsByRoom[detailModal._id]?.length ? (
                           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
                             {(bedsByRoom[detailModal._id] || []).map((b) => {
-                              const meta = bedUiMeta(b);
                               const st = String(b.status || "");
                               const occupant = b.currentUser && typeof b.currentUser === "object" ? b.currentUser : null;
-                              const residents = detailResidents[detailModal._id] || [];
-                              const needsBed = residents.filter((r) => !r.bedCode);
-                              const canAssign = st === "available" && needsBed.length > 0;
-                              const uid =
-                                occupant && "_id" in occupant && occupant._id ? String(occupant._id) : "";
                               const ccRaw = b.currentContract;
                               const contractIdStr =
                                 ccRaw && typeof ccRaw === "object" && "_id" in ccRaw
@@ -1246,6 +1303,37 @@ const RoomsPage: React.FC = () => {
                                   : ccRaw
                                     ? String(ccRaw)
                                     : "";
+                              const uid =
+                                occupant && "_id" in occupant && occupant._id ? String(occupant._id) : "";
+                              const residents = detailResidents[detailModal._id] || [];
+                              const residentMatch = findActiveResidentForBed(residents, {
+                                contractIdStr,
+                                uid,
+                                bedCode: b.code,
+                              });
+                              const hasActiveRoomContract = !!residentMatch;
+                              const isTaken = st === "occupied" || st === "reserved";
+                              const canRelease = isTaken && !hasActiveRoomContract;
+                              let meta = bedUiMeta(b);
+                              if (canRelease) {
+                                meta = {
+                                  bg: "#fef2f2",
+                                  border: "#ef4444",
+                                  icon: <WarningOutlined />,
+                                  label: "Không có HĐ phòng",
+                                  desc: occupant
+                                    ? "SV trên giường nhưng không có HĐ active của phòng — bấm Giải phóng."
+                                    : "Giường đang chiếm nhưng không có HĐ hiệu lực — bấm Giải phóng.",
+                                };
+                              }
+                              const needsBed = residents.filter((r) => !r.bedCode);
+                              const canAssign = st === "available" && needsBed.length > 0;
+                              const canCheckIn =
+                                st === "occupied" &&
+                                hasActiveRoomContract &&
+                                b.residencyPhase === "assigned_pending_checkin";
+                              const canCheckOut =
+                                st === "occupied" && hasActiveRoomContract && !!b.checkInAt && !!contractIdStr;
 
                               const menuItems: MenuProps["items"] = [];
                               if (st === "occupied" && b.residencyPhase === "assigned_pending_checkin") {
@@ -1266,12 +1354,21 @@ const RoomsPage: React.FC = () => {
                                   },
                                 });
                               }
-                              if ((st === "occupied" || st === "reserved") && contractIdStr) {
+                              if ((st === "occupied" || st === "reserved") && contractIdStr && hasActiveRoomContract) {
                                 menuItems.push({
                                   key: "co",
                                   icon: <LogoutOutlined />,
                                   label: "Check-out",
                                   onClick: () => handleBedCheckout(detailModal._id, b._id),
+                                });
+                              }
+                              if (canRelease) {
+                                menuItems.push({
+                                  key: "rel",
+                                  icon: <LogoutOutlined />,
+                                  label: "Giải phóng",
+                                  danger: true,
+                                  onClick: () => handleReleaseBed(detailModal._id, b._id),
                                 });
                               }
                               if (contractIdStr) {
@@ -1337,6 +1434,11 @@ const RoomsPage: React.FC = () => {
                                         <>
                                           <div style={{ fontWeight: 600 }}>{occupant.fullName}</div>
                                           <div style={{ opacity: 0.85 }}>MSSV: {occupant.studentId || "—"}</div>
+                                          {canRelease ? (
+                                            <Tag color="error" style={{ marginTop: 4 }}>
+                                              Không có HĐ hiệu lực trong phòng
+                                            </Tag>
+                                          ) : null}
                                         </>
                                       ) : (
                                         <span style={{ color: "#64748b" }}>Slot trống</span>
@@ -1347,12 +1449,43 @@ const RoomsPage: React.FC = () => {
                                       <br />
                                       Check-in: {b.checkInAt ? formatDateVi(b.checkInAt) : "—"}
                                     </div>
+                                    <Space wrap size="small">
+                                      {canCheckIn ? (
+                                        <Button
+                                          type="primary"
+                                          size="small"
+                                          icon={<LoginOutlined />}
+                                          onClick={() => void handleBedCheckIn(detailModal._id, b._id)}
+                                        >
+                                          Check-in
+                                        </Button>
+                                      ) : null}
+                                      {canCheckOut ? (
+                                        <Button
+                                          danger
+                                          size="small"
+                                          icon={<LogoutOutlined />}
+                                          onClick={() => handleBedCheckout(detailModal._id, b._id)}
+                                        >
+                                          Check-out
+                                        </Button>
+                                      ) : null}
+                                      {canRelease ? (
+                                        <Button
+                                          size="small"
+                                          danger
+                                          onClick={() => handleReleaseBed(detailModal._id, b._id)}
+                                        >
+                                          Giải phóng
+                                        </Button>
+                                      ) : null}
+                                    </Space>
                                     <div>
                                       {canAssign ? (
                                         <Select
                                           size="small"
                                           style={{ width: "100%" }}
-                                          placeholder="Phân SV (chưa có giường)"
+                                          placeholder="Phân SV có HĐ hiệu lực (chưa có giường)"
                                           allowClear
                                           onChange={(v) => {
                                             if (v) void assignResidentToBed(detailModal._id, b._id, String(v));

@@ -94,6 +94,7 @@ const MyViolationsPage: React.FC = () => {
   const [billPaidMap, setBillPaidMap] = useState<Map<string, boolean>>(new Map());
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [semester, setSemester] = useState("HK1");
+  const [filterByTerm, setFilterByTerm] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState<Violation | null>(null);
@@ -156,36 +157,48 @@ const MyViolationsPage: React.FC = () => {
     void loadStats();
   }, [loadStats]);
 
-  const filteredRows = useMemo(() => {
+  const tableRows = useMemo(() => {
     const q = searchInput.trim().toLowerCase();
     return rows.filter((r) => {
-      if (r.schoolYear && r.schoolYear !== schoolYear) return false;
-      if (r.semester && r.semester !== semester) return false;
+      if (filterByTerm) {
+        if (r.schoolYear && r.schoolYear !== schoolYear) return false;
+        if (r.semester && r.semester !== semester) return false;
+      }
       if (!q) return true;
       const name = String(r.ruleName || "").toLowerCase();
       const desc = String(r.description || "").toLowerCase();
       return name.includes(q) || desc.includes(q);
     });
-  }, [rows, schoolYear, semester, searchInput]);
+  }, [rows, schoolYear, semester, searchInput, filterByTerm]);
+
+  const termRows = useMemo(
+    () =>
+      rows.filter((r) => {
+        if (r.schoolYear && r.schoolYear !== schoolYear) return false;
+        if (r.semester && r.semester !== semester) return false;
+        return true;
+      }),
+    [rows, schoolYear, semester],
+  );
 
   const pageRows = useMemo(() => {
     const start = (page - 1) * LIMIT;
-    return filteredRows.slice(start, start + LIMIT);
-  }, [filteredRows, page]);
+    return tableRows.slice(start, start + LIMIT);
+  }, [tableRows, page]);
 
   const pendingPayCount = useMemo(
     () =>
-      filteredRows.filter((r) => {
+      rows.filter((r) => {
         const bid = billIdOf(r);
         return !isViolationPending(r) && violationRecordedTotal(r) > 0 && bid && !billPaidMap.get(bid);
       }).length,
-    [filteredRows, billPaidMap],
+    [rows, billPaidMap],
   );
 
   const totalPoints = useMemo(() => {
     if (statsPoints != null) return statsPoints;
-    return filteredRows.reduce((s, r) => s + Number(r.points || 0), 0);
-  }, [filteredRows, statsPoints]);
+    return termRows.reduce((s, r) => s + Number(r.points || 0), 0);
+  }, [termRows, statsPoints]);
 
   const openPay = (r: Violation) => {
     const bid = billIdOf(r);
@@ -347,7 +360,7 @@ const MyViolationsPage: React.FC = () => {
           >
             <Statistic
               title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Vi phạm đã ghi (kỳ)</span>}
-              value={filteredRows.length}
+              value={termRows.length}
               suffix="lần"
               valueStyle={{ color: "#fff" }}
             />
@@ -408,13 +421,26 @@ const MyViolationsPage: React.FC = () => {
               { value: "HK3", label: "HK3" },
             ]}
           />
+          <Select
+            style={{ width: 200 }}
+            value={filterByTerm ? "term" : "all"}
+            onChange={(v) => {
+              setFilterByTerm(v === "term");
+              setPage(1);
+            }}
+            options={[
+              { value: "all", label: "Tất cả học kỳ" },
+              { value: "term", label: "Chỉ kỳ đang chọn" },
+            ]}
+          />
           <Button icon={<ReloadOutlined />} onClick={() => void loadData()}>
             Làm mới
           </Button>
         </div>
 
         <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-          Tổng {filteredRows.length} bản ghi · {schoolYear} · {semester}
+          Hiển thị {tableRows.length} / {rows.length} vi phạm
+          {filterByTerm ? ` · ${schoolYear} · ${semester}` : " (mọi học kỳ)"}
         </Typography.Text>
 
         <Table
@@ -427,7 +453,7 @@ const MyViolationsPage: React.FC = () => {
           pagination={{
             current: page,
             pageSize: LIMIT,
-            total: filteredRows.length,
+            total: tableRows.length,
             showSizeChanger: false,
             showTotal: (t, range) => `${range[0]}-${range[1]} / ${t} bản ghi`,
             onChange: (p) => setPage(p),

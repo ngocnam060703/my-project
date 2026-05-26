@@ -123,7 +123,7 @@ const ServicesPage: React.FC = () => {
         lockRes.data?.bannerMessage ||
           (lockFromRegs as { bannerMessage?: string } | undefined)?.bannerMessage ||
           (locked
-            ? "Kỳ hóa đơn này đã được chốt sổ. Bạn không thể đăng ký hoặc thay đổi dịch vụ phát sinh. Vui lòng chọn kỳ hóa đơn của tháng tiếp theo nếu muốn đăng ký trước."
+            ? `Admin đã tạo hóa đơn tháng ${month}/${year}. Bạn không thể đăng ký hoặc thay đổi dịch vụ cho kỳ này. Chọn tháng sau nếu muốn đăng ký trước.`
             : null),
       );
       setHistoryRegs(parseRegistrationsPayload(hRes.data));
@@ -160,7 +160,7 @@ const ServicesPage: React.FC = () => {
 
   const registerPersonal = async (s: Service, quantity?: number, enabled?: boolean) => {
     if (periodLocked) {
-      message.warning("Hóa đơn tháng này đã được chốt. Không thể thay đổi dịch vụ.");
+      message.warning("Admin đã tạo hóa đơn tháng cho kỳ này. Không thể thay đổi dịch vụ.");
       return;
     }
     setSaving(s._id);

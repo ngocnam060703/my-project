@@ -453,29 +453,17 @@ const ViolationsPage: React.FC = () => {
     const loadRoomStudents = async () => {
       setRoomStudentsLoading(true);
       try {
-        let list: User[] = [];
-        try {
-          const res = await client.get(`/rooms/${encodeURIComponent(roomId)}/residents`);
-          const residents = (res.data?.residents || []) as Array<{ user?: User }>;
-          const uniq = new Map<string, User>();
-          residents.forEach((it) => {
-            const u = it.user;
-            if (u?._id) uniq.set(String(u._id), u);
-          });
-          list = Array.from(uniq.values());
-        } catch {
-          const cRes = await client.get("/contracts", { params: { room: roomId, limit: 200, status: "active" } });
-          const contracts = (cRes.data?.contracts || []) as Array<{ user?: User; status?: string }>;
-          const uniq = new Map<string, User>();
-          contracts.forEach((c) => {
-            const u = c.user;
-            if (u && typeof u === "object" && u._id) uniq.set(String(u._id), u);
-          });
-          list = Array.from(uniq.values());
-        }
+        const res = await violationsApi.getRoomResidents(roomId);
+        const list = (res.data?.residents || [])
+          .map((it) => it.user)
+          .filter((u): u is User => !!u && typeof u === "object" && !!u._id);
         if (mounted) setRoomStudents(list);
-      } catch {
-        if (mounted) setRoomStudents([]);
+      } catch (e: unknown) {
+        if (mounted) {
+          setRoomStudents([]);
+          const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+          message.error(msg || "Không tải được sinh viên trong phòng — thử khởi động lại backend");
+        }
       } finally {
         if (mounted) setRoomStudentsLoading(false);
       }
@@ -727,8 +715,8 @@ const ViolationsPage: React.FC = () => {
                     const split = form.getFieldValue("splitToRoom");
                     message.warning(
                       split
-                        ? "Chọn loại vi phạm từ danh sách và chọn phòng. Với «chia cả phòng», phòng phải đang có ít nhất một hợp đồng hiệu lực."
-                        : "Chọn loại vi phạm từ danh sách, phòng và sinh viên vi phạm."
+                        ? "Chọn loại vi phạm từ danh sách và chọn phòng. Với «chia cả phòng», phòng phải có SV đang ở theo HĐ active hiệu lực."
+                        : "Chọn phòng và sinh viên — danh sách SV theo HĐ đang hiệu lực (sau chuyển phòng là phòng mới)."
                     );
                   }}
                   initialValues={{ semester: "HK1", schoolYear: defaultSchoolYear(), fineAmount: 0, compensationAmount: 0 }}
@@ -799,7 +787,7 @@ const ViolationsPage: React.FC = () => {
                                   ? "Đang tải sinh viên trong phòng..."
                                   : selectableStudents.length
                                     ? "Chọn sinh viên trong phòng đã chọn"
-                                    : "Phòng này chưa có sinh viên đang ở"
+                                    : "Phòng này chưa có SV với HĐ active hiệu lực"
                                 : "Vui lòng chọn phòng trước"
                             }
                             disabled={!selectedRoomId || roomStudentsLoading}

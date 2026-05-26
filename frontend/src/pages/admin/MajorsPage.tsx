@@ -138,7 +138,7 @@ const MajorsPage: React.FC = () => {
       <div style={{ marginBottom: 16 }}>
         <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Quản lý ngành</h2>
         <div style={{ color: "#6b7280" }}>
-          Ngành chỉ là tham chiếu cho hồ sơ sinh viên nội trú — thống kê số SV đang có hợp đồng KTX hiệu lực.
+          Thống kê số SV đang ở KTX theo HĐ active còn hiệu lực — khớp cột Ngành trên hồ sơ SV với trường &quot;Ngành&quot; bên dưới.
         </div>
       </div>
 
@@ -234,7 +234,7 @@ const MajorsPage: React.FC = () => {
             <Input placeholder="VD: Hệ thống thông tin / An toàn thông tin..." />
           </Form.Item>
           <p style={{ margin: "0 0 16px 0", color: "#6b7280", fontSize: 13 }}>
-            Tên ngành cần trùng với chuỗi &quot;Ngành&quot; trên user để thống kê &quot;Số SV đang ở KTX&quot; đúng.
+            Trường &quot;Ngành&quot; (faculty) cần trùng với cột Ngành trên hồ sơ sinh viên; SV phải có HĐ active đang hiệu lực.
           </p>
           <Form.Item>
             <Button type="primary" htmlType="submit" loading={saving} block>

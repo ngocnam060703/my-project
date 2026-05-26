@@ -68,6 +68,16 @@ function monthsBetweenStartEnd(start: string | Date, end: string | Date): number
   return Math.max(1, m);
 }
 
+function isTransferContractRow(c: Contract): boolean {
+  return !!(c.isTransferContract || String(c.contractNumber || "").startsWith("HD-CP"));
+}
+
+function roomLabel(room: Room | null | undefined): string {
+  if (!room) return "-";
+  const area = room.area && typeof room.area === "object" ? room.area.name : "";
+  return `${room.roomNumber}${area ? ` (${area})` : ""}`;
+}
+
 function roomSlots(r: Room | null | undefined, c?: Contract): number {
   if (c && isContractPricingFrozen(c)) {
     const cap = capacityAtSigning(c, r);
@@ -468,6 +478,21 @@ const ContractsPage: React.FC = () => {
     });
   };
 
+  const openContractDetail = async (r: Contract) => {
+    const roomMissing =
+      !r.room || typeof r.room !== "object" || !(r.room as Room).roomNumber;
+    if (isTransferContractRow(r) || roomMissing) {
+      try {
+        const res = await contractsApi.getById(r._id);
+        setDetailModal(res.data as Contract);
+        return;
+      } catch {
+        message.error("Không tải được chi tiết hợp đồng");
+      }
+    }
+    setDetailModal(r);
+  };
+
   const handleDelete = (c: Contract) => {
     Modal.confirm({
       title: "Xóa hợp đồng",
@@ -542,10 +567,15 @@ const ContractsPage: React.FC = () => {
       key: "room",
       width: 100,
       render: (_: unknown, r: Contract) => {
-        if (!r.room) return "-";
-        const room = typeof r.room === "object" ? r.room : null;
-        const area = room?.area && typeof room.area === "object" ? room.area.name : "";
-        return room ? `${room.roomNumber}${area ? ` (${area})` : ""}` : "-";
+        const target =
+          r.transferRegistration?.targetRoom && typeof r.transferRegistration.targetRoom === "object"
+            ? r.transferRegistration.targetRoom
+            : null;
+        const room =
+          target || (typeof r.room === "object" ? r.room : null);
+        if (!room) return "-";
+        const label = roomLabel(room);
+        return isTransferContractRow(r) && r.status === "pending_payment" ? `→ ${label}` : label;
       },
     },
     {
@@ -553,7 +583,11 @@ const ContractsPage: React.FC = () => {
       key: "roomPricing",
       width: 188,
       render: (_: unknown, r: Contract) => {
-        const room = typeof r.room === "object" ? (r.room as Room) : null;
+        const target =
+          r.transferRegistration?.targetRoom && typeof r.transferRegistration.targetRoom === "object"
+            ? r.transferRegistration.targetRoom
+            : null;
+        const room = target || (typeof r.room === "object" ? (r.room as Room) : null);
         const frozen = isContractPricingFrozen(r);
         const full = contractRoomMonthlySnapshot(r, room) || roomManagementMonthly(room);
         const slots = roomSlots(room, r);
@@ -627,7 +661,7 @@ const ContractsPage: React.FC = () => {
       fixed: "right" as const,
       render: (_: unknown, r: Contract) => (
         <Space wrap size="small">
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => void openContractDetail(r)}>
             Chi tiết
           </Button>
           {r.status === "pending_payment" && (
@@ -1261,8 +1295,50 @@ const ContractsPage: React.FC = () => {
                 <strong>Số hợp đồng:</strong> {detailModal.contractNumber || "-"}
               </p>
 
+              {detailModal.transferRegistration ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 14 }}
+                  message="Hợp đồng chuyển phòng — phòng và giá theo đơn đăng ký"
+                  description={
+                    <div style={{ fontSize: 13, lineHeight: 1.55 }}>
+                      <div>
+                        <strong>Phòng hiện tại:</strong>{" "}
+                        {roomLabel(
+                          typeof detailModal.transferRegistration.fromRoom === "object"
+                            ? detailModal.transferRegistration.fromRoom
+                            : null
+                        )}
+                      </div>
+                      <div>
+                        <strong>Phòng chuyển đến:</strong>{" "}
+                        {roomLabel(
+                          typeof detailModal.transferRegistration.targetRoom === "object"
+                            ? detailModal.transferRegistration.targetRoom
+                            : typeof detailModal.room === "object"
+                              ? detailModal.room
+                              : null
+                        )}
+                      </div>
+                      {detailModal.transferRegistration.transferReason ? (
+                        <div>
+                          <strong>Lý do:</strong> {detailModal.transferRegistration.transferReason}
+                        </div>
+                      ) : null}
+                    </div>
+                  }
+                />
+              ) : null}
+
               {(() => {
-                const room = typeof detailModal.room === "object" ? (detailModal.room as Room) : null;
+                const target =
+                  detailModal.transferRegistration?.targetRoom &&
+                  typeof detailModal.transferRegistration.targetRoom === "object"
+                    ? detailModal.transferRegistration.targetRoom
+                    : null;
+                const room =
+                  target || (typeof detailModal.room === "object" ? (detailModal.room as Room) : null);
                 if (!room) return null;
                 const frozen = isContractPricingFrozen(detailModal);
                 const slots = frozen

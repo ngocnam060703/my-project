@@ -8,14 +8,22 @@ const Notification = require("../models/Notification");
 const { getIO } = require("../socket");
 const { terminateContractDiscipline } = require("../services/violationActions");
 const { normalizeViolationRecord, normalizeAmount } = require("../services/violationDisciplineService");
+const { sendNotification } = require("../services/notificationService");
+const {
+  listResidentsForViolationByRoom,
+  findEffectiveResidenceInRoom,
+} = require("../services/violationResidentsService");
+
+const STUDENT_ROLES = ["user", "student"];
 
 function isAdmin(user) {
   return user?.role === "admin" || user?.role === "manager";
 }
 
-/** Trang «Vi phạm của tôi» — chỉ tài khoản role student (không dùng legacy user). */
-function isStudentRole(user) {
-  return String(user?.role || "") === "student";
+/** Sinh viên KTX: role user hoặc student (đồng bộ các API client khác). */
+function isStudentRole(userOrRole) {
+  const role = typeof userOrRole === "object" && userOrRole ? userOrRole.role : userOrRole;
+  return STUDENT_ROLES.includes(String(role || ""));
 }
 
 exports.requireStudentAccount = (req, res, next) => {
@@ -212,6 +220,23 @@ exports.deleteViolation = async (req, res) => {
   }
 };
 
+/** Admin: SV đang ở phòng theo HĐ active hiệu lực (form ghi nhận vi phạm). */
+exports.getRoomResidents = async (req, res) => {
+  try {
+    if (!isAdmin(req.user)) return res.status(403).json({ message: "Không có quyền" });
+    const { roomId } = req.query;
+    if (!mongoose.isValidObjectId(String(roomId || ""))) {
+      return res.status(400).json({ message: "roomId không hợp lệ" });
+    }
+    const room = await Room.findById(roomId).select("roomNumber area").populate("area", "name").lean();
+    if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
+    const residents = await listResidentsForViolationByRoom(roomId);
+    res.json({ room, residents, totalResidents: residents.length });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
 exports.getStudentSummary = async (req, res) => {
   try {
     if (!isAdmin(req.user)) return res.status(403).json({ message: "Không có quyền" });
@@ -253,9 +278,10 @@ exports.getMyViolations = async (req, res) => {
       .populate("rule", "code name handlingAction")
       .populate("room", "roomNumber area")
       .populate("room.area", "name")
+      .populate("bill", "status total dueDate month year")
       .populate("resolution.resolvedBy", "fullName")
       .sort({ createdAt: -1 });
-    res.json(items);
+    res.json(items.map(normalizeViolationRecord));
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -318,23 +344,20 @@ exports.createViolation = async (req, res) => {
     const imgArr = Array.isArray(images) ? images.filter((x) => typeof x === "string" && x.length < 2_500_000) : [];
 
     if (splitToRoom) {
-      const contracts = await Contract.find({
-        room: roomId,
-        status: { $in: ["active", "pending_payment"] },
-      });
-      if (!contracts.length) {
-        return res.status(400).json({ message: "Phòng không có sinh viên để chia phạt" });
+      const residents = await listResidentsForViolationByRoom(roomId);
+      if (!residents.length) {
+        return res.status(400).json({ message: "Phòng không có sinh viên đang ở (HĐ active hiệu lực) để chia phạt" });
       }
-      const n = contracts.length;
+      const n = residents.length;
       const shareFine = Math.round(fineAmount / n);
       const shareComp = Math.round(compensationAmount / n);
       const batchId = new mongoose.Types.ObjectId();
       const created = [];
-      for (const c of contracts) {
+      for (const row of residents) {
         const points = noIndividualPoints ? 0 : 0;
         const v = await Violation.create({
           rule: rule._id,
-          user: c.user,
+          user: row.user._id,
           room: roomId,
           semester: String(semester),
           schoolYear: String(schoolYear),
@@ -353,6 +376,13 @@ exports.createViolation = async (req, res) => {
           status: "pending",
         });
         created.push(v);
+        await sendNotification({
+          userId: row.user._id,
+          title: "Vi phạm nội quy KTX",
+          message: `Phòng bạn được ghi nhận vi phạm: ${rule.name}. Xem «Vi phạm của tôi».`,
+          type: "discipline_warning",
+          link: "/student/my-violations",
+        });
       }
       return res.status(201).json({ created: created.length, violations: created, batchId });
     }
@@ -361,13 +391,12 @@ exports.createViolation = async (req, res) => {
       return res.status(400).json({ message: "Thiếu sinh viên hoặc bật chia phòng cả phòng" });
     }
 
-    const contract = await Contract.findOne({
-      user: userId,
-      room: roomId,
-      status: { $in: ["active", "pending_payment"] },
-    });
+    const contract = await findEffectiveResidenceInRoom(userId, roomId);
     if (!contract) {
-      return res.status(400).json({ message: "Sinh viên không có hợp đồng hiệu lực với phòng này" });
+      return res.status(400).json({
+        message:
+          "Sinh viên không có hợp đồng đang hiệu lực (active) tại phòng này — có thể đã chuyển phòng hoặc HĐ chưa active",
+      });
     }
 
     const points = noIndividualPoints ? 0 : Number(rule.points || 0);
@@ -415,6 +444,14 @@ exports.createViolation = async (req, res) => {
         });
       }
     }
+
+    await sendNotification({
+      userId,
+      title: "Vi phạm nội quy KTX",
+      message: `Bạn được ghi nhận vi phạm: ${rule.name}. Ban quản lý sẽ xử lý kỷ luật — xem chi tiết tại «Vi phạm của tôi».`,
+      type: "discipline_warning",
+      link: "/student/my-violations",
+    });
 
     const populated = await Violation.findById(v._id)
       .populate("rule")

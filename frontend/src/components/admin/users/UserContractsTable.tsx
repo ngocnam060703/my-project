@@ -19,9 +19,12 @@ function contractAreaName(c: Contract): string {
 
 function contractBedCode(c: Contract): string {
   const b = c.bed;
-  if (!b) return "—";
-  if (typeof b === "object" && b !== null && "code" in b) return String((b as Bed).code || "") || "—";
-  return "—";
+  const r = c.room;
+  if (!b || typeof b !== "object") return "—";
+  const roomId = r && typeof r === "object" ? String(r._id || "") : "";
+  const bedRoom = String((b as Bed).room || "");
+  if (roomId && bedRoom && bedRoom !== roomId) return "—";
+  return String((b as Bed).code || "") || "—";
 }
 
 function formatBedEquipmentVi(raw: string | undefined | null): string {

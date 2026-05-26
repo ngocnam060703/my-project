@@ -103,9 +103,15 @@ function contractProtectedFromRoomPriceChange(contractDoc) {
   return st === "active" || st === "pending_payment" || st === "upcoming";
 }
 
+function isTransferContractLike(contractDoc) {
+  if (!contractDoc) return false;
+  const cn = String(contractDoc.contractNumber || "");
+  return !!(contractDoc.isTransferContract || cn.startsWith("HD-CP"));
+}
+
 /** HĐ chuyển phòng chờ ký: đã snapshot lúc tạo nhưng chưa khóa — cập nhật lại khi SV ký. */
 function isTransferContractAwaitingSign(contractDoc) {
-  if (!contractDoc?.isTransferContract) return false;
+  if (!isTransferContractLike(contractDoc)) return false;
   if (String(contractDoc.status || "") !== "pending_payment") return false;
   return !contractDoc.signedAt && !contractDoc.financialLockedAt;
 }
@@ -318,6 +324,7 @@ module.exports = {
   buildContractPricingFields,
   buildTransferContractPricingOnCreate,
   lockTransferContractPricingOnSign,
+  isTransferContractLike,
   isTransferContractAwaitingSign,
   isPendingContractAwaitingSign,
   hasPricingSnapshot,

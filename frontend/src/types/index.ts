@@ -331,6 +331,15 @@ export interface Contract {
   renewedFromContract?: string | Contract | null;
   isRenewalContract?: boolean;
   isTransferContract?: boolean;
+  registration?: string | { _id: string };
+  transferRegistration?: {
+    _id: string;
+    transferReason?: string;
+    status?: string;
+    transferPhase?: string;
+    targetRoom?: Room;
+    fromRoom?: Room;
+  };
   bed?: string | Bed | null;
   financialLockedAt?: string | null;
   displayPricing?: {

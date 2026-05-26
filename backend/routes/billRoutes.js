@@ -22,6 +22,7 @@ router.put("/:id/pay-online", auth, requireRole("user"), billController.payOnlin
 /** Admin: danh sách / tạo / sinh hàng loạt — GET / đặt trước GET /:id để tránh nhầm path */
 router.get("/", auth, admin, billController.getAll);
 router.get("/room-billing-preview", auth, admin, billController.getRoomBillingPreview);
+router.get("/room-utility-fees", auth, admin, billController.getRoomUtilityFees);
 router.post("/", auth, admin, billController.create);
 router.post("/generate", auth, admin, billController.generateByMonth);
 router.post("/overdue/refresh", auth, admin, billController.runOverdueRefresh);

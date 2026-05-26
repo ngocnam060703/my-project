@@ -14,7 +14,7 @@ import {
 import { billPaymentMethodLabel, billPaymentPayerLabel } from "../../utils/billPaymentLabels";
 import { roomSelectLabel } from "../../utils/roomDisplay";
 import BillsFilterToolbar from "../../components/admin/BillsFilterToolbar";
-import { billsApi, client, roomCostsApi, roomServicesApi, serviceUsageApi, usersApi } from "../../api";
+import { billsApi, client, roomServicesApi, usersApi } from "../../api";
 import { useSocket } from "../../contexts/SocketContext";
 import type { Bill } from "../../types";
 const statusMap: Record<string, { color: string; text: string }> = {
@@ -138,38 +138,12 @@ const BillsPage: React.FC = () => {
     try {
       const hasWifi = await roomHasWifiServiceAssigned(roomId);
       setRoomWifiAssigned(hasWifi);
-      const costRes = await roomCostsApi.getAll({ month, year });
-      const raw = costRes.data as unknown;
-      const list = Array.isArray(raw) ? raw : ((raw as { roomCosts?: unknown[] })?.roomCosts ?? []);
-      const rid = String(roomId);
-      type CostRow = { room?: string | { _id?: string }; electricityFee?: number; waterFee?: number; wifiMonthlyFee?: number };
-      const roomCost = (list as CostRow[]).find((c) => {
-        const id = typeof c.room === "object" && c.room ? String(c.room._id ?? "") : String(c.room ?? "");
-        return id === rid;
-      });
-      if (roomCost) {
-        form.setFieldsValue({
-          electricityFee: roomCost.electricityFee ?? 0,
-          waterFee: roomCost.waterFee ?? 0,
-          sharedCommonFee: hasWifi ? (roomCost.wifiMonthlyFee ?? 0) : 0,
-        });
-        return;
-      }
-      const usageRes = await serviceUsageApi.list({ room: roomId, month, year, limit: 100 });
-      const usages = (usageRes.data as { items?: { _id: string; room?: { _id: string }; service?: { measureUnit: string }; month: number; year: number; amount: number }[] })?.items || [];
-      let electricityFee = 0;
-      let waterFee = 0;
-      usages.forEach((u) => {
-        if (u.service?.measureUnit === "kwh") {
-          electricityFee += u.amount || 0;
-        } else if (u.service?.measureUnit === "m3") {
-          waterFee += u.amount || 0;
-        }
-      });
+      const feesRes = await billsApi.getRoomUtilityFees({ roomId, month, year });
+      const fees = feesRes.data;
       form.setFieldsValue({
-        electricityFee,
-        waterFee,
-        sharedCommonFee: 0,
+        electricityFee: fees?.hasElectricityReading ? fees.electricityFee ?? 0 : 0,
+        waterFee: fees?.hasWaterReading ? fees.waterFee ?? 0 : 0,
+        sharedCommonFee: hasWifi ? fees?.wifiMonthlyFee ?? 0 : 0,
       });
     } catch (err) {
       console.error("Không lấy được chi phí phòng:", err);
@@ -252,7 +226,9 @@ const BillsPage: React.FC = () => {
       const skipped = (res.data as { skipped?: number })?.skipped;
       const updated = (res.data as { updated?: number })?.updated;
       if (created != null || updated != null || skipped != null) {
-        message.success(`Tạo theo phòng xong: ${created || 0}, cập nhật: ${updated || 0}, bỏ qua: ${skipped || 0}`);
+        message.success(
+          `Hóa đơn tháng: tạo ${created || 0}, cập nhật ${updated || 0}, bỏ qua ${skipped || 0}. Các loại khác (phạt, bồi thường…) không bị gộp.`,
+        );
       } else {
         message.success("Tạo hóa đơn thành công");
       }

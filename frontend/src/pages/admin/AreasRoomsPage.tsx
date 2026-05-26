@@ -30,6 +30,7 @@ const AreasRoomsPage: React.FC = () => {
       <Tabs
         activeKey={tab}
         items={items}
+        destroyOnHidden
         onChange={(k) => setSearchParams({ tab: k })}
       />
     </div>

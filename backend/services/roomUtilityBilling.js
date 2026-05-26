@@ -1,6 +1,8 @@
 const Service = require("../models/Service");
 const RoomService = require("../models/RoomService");
 const ServiceRegistration = require("../models/ServiceRegistration");
+const ServiceUsage = require("../models/ServiceUsage");
+const RoomMonthlyCost = require("../models/RoomMonthlyCost");
 
 /** DV đồng hồ (kWh/m³) đã gán cho phòng qua RoomService. */
 async function loadMeterServicesAssignedToRoom(roomId) {
@@ -70,8 +72,61 @@ async function buildUtilityShareResolver(contracts, { electricityTotal, waterTot
   };
 }
 
+/**
+ * Tiền điện/nước khi tạo HĐ tháng: chỉ > 0 khi admin đã nhập chỉ số (ServiceUsage) cho DV đồng hồ đã gán phòng.
+ */
+async function resolveRoomUtilityFeesForBilling(roomId, month, year) {
+  const m = Number(month);
+  const y = Number(year);
+  const meters = await loadMeterServicesAssignedToRoom(roomId);
+
+  let electricityFee = 0;
+  let waterFee = 0;
+  let hasElectricityReading = false;
+  let hasWaterReading = false;
+
+  if (meters.electricity) {
+    const usage = await ServiceUsage.findOne({
+      room: roomId,
+      service: meters.electricity._id,
+      month: m,
+      year: y,
+    }).lean();
+    if (usage) {
+      hasElectricityReading = true;
+      electricityFee = Math.max(0, Number(usage.amount) || 0);
+    }
+  }
+
+  if (meters.water) {
+    const usage = await ServiceUsage.findOne({
+      room: roomId,
+      service: meters.water._id,
+      month: m,
+      year: y,
+    }).lean();
+    if (usage) {
+      hasWaterReading = true;
+      waterFee = Math.max(0, Number(usage.amount) || 0);
+    }
+  }
+
+  const roomCost = await RoomMonthlyCost.findOne({ room: roomId, month: m, year: y }).lean();
+
+  return {
+    electricityFee,
+    waterFee,
+    wifiMonthlyFee: Math.max(0, Number(roomCost?.wifiMonthlyFee || 0)),
+    hasElectricityReading,
+    hasWaterReading,
+    hasElectricityMeter: !!meters.electricity,
+    hasWaterMeter: !!meters.water,
+  };
+}
+
 module.exports = {
   loadMeterServicesAssignedToRoom,
   applyRoomMeterAssignment,
   buildUtilityShareResolver,
+  resolveRoomUtilityFeesForBilling,
 };

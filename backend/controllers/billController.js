@@ -27,6 +27,7 @@ const {
   loadMeterServicesAssignedToRoom,
   applyRoomMeterAssignment,
   buildUtilityShareResolver,
+  resolveRoomUtilityFeesForBilling,
 } = require("../services/roomUtilityBilling");
 
 function isStudentUser(user) {
@@ -116,6 +117,16 @@ function roomCapacitySlots(roomLike) {
 function computeRoomFeePerSlot(roomLike) {
   const total = Number(roomLike?.price ?? 0);
   return Math.round(total / roomCapacitySlots(roomLike));
+}
+
+/** Chỉ hóa đơn tháng — không lẫn phạt / bồi thường / phụ thu chuyển phòng. */
+function findMonthlyBillForPeriod(contractId, month, year) {
+  return Bill.findOne({
+    contract: contractId,
+    month,
+    year,
+    $or: [{ billType: "monthly" }, { billType: { $exists: false } }],
+  });
 }
 
 /** Tiền phòng tháng = contractPrice (hoặc monthlyRent) trên HĐ đang hiệu lực — không lấy giá phòng/slot. */
@@ -405,6 +416,25 @@ exports.getAll = async (req, res) => {
 };
 
 /** Admin: xem tiền phòng theo HĐ active của phòng (preview form tạo HĐ). */
+/** Admin: tiền điện/nước phòng theo chỉ số đã nhập (form tạo HĐ tháng). */
+exports.getRoomUtilityFees = async (req, res) => {
+  try {
+    const { roomId, month, year } = req.query;
+    if (!mongoose.isValidObjectId(String(roomId || ""))) {
+      return res.status(400).json({ message: "roomId không hợp lệ" });
+    }
+    const m = Number(month);
+    const y = Number(year);
+    if (!(m >= 1 && m <= 12) || y < 2000) {
+      return res.status(400).json({ message: "Tháng/năm không hợp lệ" });
+    }
+    const fees = await resolveRoomUtilityFeesForBilling(roomId, m, y);
+    res.json(fees);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.getRoomBillingPreview = async (req, res) => {
   try {
     const { roomId } = req.query;
@@ -502,10 +532,14 @@ exports.create = async (req, res) => {
       }
 
       const occupants = Math.max(1, contracts.length);
-      const roomCost = await RoomMonthlyCost.findOne({ room: roomId, month: m, year: y });
+      const utilityPrefill = await resolveRoomUtilityFeesForBilling(roomId, m, y);
       const meters = await loadMeterServicesAssignedToRoom(roomId);
-      const elecRaw = electricityFee != null ? Number(electricityFee) : Number(roomCost?.electricityFee || 0);
-      const waterRaw = waterFee != null ? Number(waterFee) : Number(roomCost?.waterFee || 0);
+      const elecRaw = utilityPrefill.hasElectricityReading
+        ? Math.max(0, Number(electricityFee != null ? electricityFee : utilityPrefill.electricityFee))
+        : 0;
+      const waterRaw = utilityPrefill.hasWaterReading
+        ? Math.max(0, Number(waterFee != null ? waterFee : utilityPrefill.waterFee))
+        : 0;
       const { electricityTotal, waterTotal } = applyRoomMeterAssignment(meters, elecRaw, waterRaw);
       const fixedOther = Math.max(0, Number(otherFee || 0));
       const utilityShareFor = await buildUtilityShareResolver(contracts, {
@@ -520,7 +554,7 @@ exports.create = async (req, res) => {
       const wifiRoomTotalForBill = resolveWifiRoomTotalForBill(
         commonServices,
         wifiRoomFromForm,
-        roomCost?.wifiMonthlyFee
+        utilityPrefill.wifiMonthlyFee
       );
       const { breakdown: commonBreakdown, commonPerStudent: commonFeeShare } = resolveCommonFeesForRoom(
         room,
@@ -548,7 +582,7 @@ exports.create = async (req, res) => {
       const createdBills = [];
       for (const c of contracts) {
         const contractRoomFee = resolveRoomFeeFromActiveContract(c);
-        const exists = await Bill.findOne({ contract: c._id, month: m, year: y });
+        const exists = await findMonthlyBillForPeriod(c._id, m, y);
         const personal = await buildPersonalFeeForUser({ userId: c.user._id, month: m, year: y });
         const personalBreakdown = personal.breakdown;
         const personalTotal = personal.total;
@@ -561,6 +595,7 @@ exports.create = async (req, res) => {
             skipped += 1;
             continue;
           }
+          exists.billType = "monthly";
           exists.roomFee = contractRoomFee;
           exists.electricityFee = electShare;
           exists.waterFee = waterShare;
@@ -601,6 +636,7 @@ exports.create = async (req, res) => {
             ? `; đã khấu trừ ví ${walletAdj.walletApplied.toLocaleString("vi-VN")}đ`
             : "";
         const bill = await Bill.create({
+          billType: "monthly",
           contract: c._id,
           user: c.user._id,
           room: room._id,
@@ -668,7 +704,7 @@ exports.create = async (req, res) => {
       return res.status(400).json({ message: "Hợp đồng đã hết hạn, không thể tạo hóa đơn" });
     }
 
-    const existing = await Bill.findOne({ contract, month: m, year: y });
+    const existing = await findMonthlyBillForPeriod(contract, m, y);
     if (existing) return res.status(400).json({ message: "Hóa đơn tháng này đã tồn tại" });
     const effectiveRoomFee = resolveRoomFeeFromActiveContract(contractDoc);
     if (roomFeeFromBody > 0 && roomFeeFromBody !== effectiveRoomFee) {
@@ -678,6 +714,7 @@ exports.create = async (req, res) => {
     }
     const total = effectiveRoomFee + Number(electricityFee || 0) + Number(waterFee || 0) + Number(otherFee || 0);
     const bill = await Bill.create({
+      billType: "monthly",
       contract,
       user: contractDoc.user._id,
       room: contractDoc.room._id,
@@ -809,7 +846,7 @@ exports.generateByMonth = async (req, res) => {
 
       for (const c of list) {
         const contractRoomFee = resolveRoomFeeFromActiveContract(c);
-        const exists = await Bill.findOne({ contract: c._id, month, year });
+        const exists = await findMonthlyBillForPeriod(c._id, month, year);
         if (exists) {
           skipped += 1;
           continue;
@@ -822,6 +859,7 @@ exports.generateByMonth = async (req, res) => {
         const { electShare, waterShare } = utilityShareFor(c);
         const total = contractRoomFee + electShare + waterShare + commonFeeShare + personalTotal;
         const bill = await Bill.create({
+          billType: "monthly",
           contract: c._id,
           user: c.user._id,
           room: room._id,

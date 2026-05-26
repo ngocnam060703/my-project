@@ -1,43 +1,60 @@
 const Major = require("../models/Major");
 const Contract = require("../models/Contract");
+const { contractIsEffectiveResident } = require("../services/roomOccupancySync");
 
 function escRx(s) {
   return String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Đếm SV (role user, chưa xóa mềm) đang có HĐ nội trú hiệu lực, gom theo chuỗi user.major (khớp tên ngành). */
+function toStartOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function normMajorKey(s) {
+  return String(s || "").trim().toLowerCase();
+}
+
+/** Đếm SV đang ở KTX theo HĐ active đang hiệu lực — gom theo user.major (cột Ngành hồ sơ SV). */
 async function countResidentsByMajorName() {
   const now = new Date();
-  const rows = await Contract.aggregate([
-    {
-      $match: {
-        status: { $in: ["active", "pending_payment"] },
-        endDate: { $gte: now },
-      },
-    },
-    { $lookup: { from: "users", localField: "user", foreignField: "_id", as: "u" } },
-    { $unwind: "$u" },
-    {
-      $match: {
-        "u.role": "user",
-        $or: [{ "u.isDeleted": false }, { "u.isDeleted": { $exists: false } }],
-      },
-    },
-    {
-      $project: {
-        majorNorm: { $trim: { input: { $ifNull: ["$u.major", ""] } } },
-        uid: "$user",
-      },
-    },
-    { $match: { majorNorm: { $ne: "" } } },
-    { $group: { _id: { m: "$majorNorm", u: "$uid" } } },
-    { $group: { _id: "$_id.m", count: { $sum: 1 } } },
-  ]);
+  const todayStart = toStartOfDay(now);
+  const contracts = await Contract.find({
+    status: "active",
+    endDate: { $gte: todayStart },
+  })
+    .populate("user", "major role isDeleted")
+    .select("user startDate endDate status")
+    .lean();
+
+  const usersByMajor = new Map();
+  for (const c of contracts) {
+    if (!contractIsEffectiveResident(c, now)) continue;
+    const u = c.user;
+    if (!u || u.isDeleted) continue;
+    const role = String(u.role || "");
+    if (role !== "user" && role !== "student") continue;
+    const majorRaw = String(u.major || "").trim();
+    if (!majorRaw) continue;
+    const key = normMajorKey(majorRaw);
+    if (!usersByMajor.has(key)) usersByMajor.set(key, new Set());
+    usersByMajor.get(key).add(String(u._id || c.user));
+  }
+
   const map = Object.create(null);
-  for (const r of rows) {
-    map[r._id] = r.count;
+  for (const [key, set] of usersByMajor) {
+    map[key] = set.size;
   }
   return map;
+}
+
+function residentsForMajorRow(m, counts) {
+  const facultyKey = normMajorKey(m.faculty);
+  const nameKey = normMajorKey(m.name);
+  if (facultyKey && counts[facultyKey] != null) return counts[facultyKey];
+  if (nameKey && counts[nameKey] != null) return counts[nameKey];
+  return 0;
 }
 
 exports.list = async (req, res) => {
@@ -56,10 +73,10 @@ exports.list = async (req, res) => {
     }
     const items = await Major.find(filter).sort({ code: 1, name: 1 }).lean();
     const counts = await countResidentsByMajorName();
-    const enriched = items.map((m) => {
-      const nameKey = String(m.name || "").trim();
-      return { ...m, residentsInDorm: counts[nameKey] ?? 0 };
-    });
+    const enriched = items.map((m) => ({
+      ...m,
+      residentsInDorm: residentsForMajorRow(m, counts),
+    }));
     res.json({ items: enriched, total: enriched.length });
   } catch (e) {
     res.status(500).json({ message: e.message });

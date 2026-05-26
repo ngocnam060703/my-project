@@ -590,7 +590,31 @@ async function completeRoomTransferSettlement(reg, newContract, { performedBy })
     await targetRoom.save();
   }
 
+  const newContractDoc = await Contract.findById(newContract._id || newContract);
+  if (newContractDoc) {
+    const targetId = targetRoom._id;
+    if (String(newContractDoc.room) !== String(targetId)) {
+      newContractDoc.room = targetId;
+      newContractDoc.bed = null;
+    }
+    await newContractDoc.save();
+    newContract = newContractDoc;
+  }
+
   const bedResult = await tryAutoAssignBed(newContract._id, performedBy || studentUserId);
+
+  const Application = require("../models/Application");
+  if (fromRoom?._id && targetRoom?._id) {
+    await Application.updateMany(
+      {
+        user: studentUserId,
+        status: "approved",
+        assignedRoom: fromRoom._id,
+      },
+      { $set: { assignedRoom: targetRoom._id } }
+    );
+  }
+
   await syncOccupancyForRooms([fromRoom._id, targetRoom._id]);
 
   let supplementBill = null;
