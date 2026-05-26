@@ -37,7 +37,7 @@ const MaintenanceReportStatsCards: React.FC<Props> = ({ summary }) => (
     <Col xs={24} sm={12} lg={6}>
       <Card bordered={false} style={cardStyle("#d97706", "#92400e")}>
         <Statistic
-          title={<span style={titleStyle}>Đơn chờ xử lý</span>}
+          title={<span style={titleStyle}>Chờ kiểm tra</span>}
           value={summary.pendingCount ?? 0}
           suffix="đơn"
           valueStyle={valueStyle}
@@ -47,7 +47,7 @@ const MaintenanceReportStatsCards: React.FC<Props> = ({ summary }) => (
     <Col xs={24} sm={12} lg={6}>
       <Card bordered={false} style={cardStyle("#059669", "#047857")}>
         <Statistic
-          title={<span style={titleStyle}>Đơn đã xử lý</span>}
+          title={<span style={titleStyle}>Đã khắc phục</span>}
           value={summary.resolvedCount ?? 0}
           suffix="đơn"
           valueStyle={valueStyle}

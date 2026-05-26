@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { App, Row, Col, Card, Spin, Progress, Switch, Space, Button, Modal, Form, Input, DatePicker, Select, Alert } from "antd";
+import { App, Row, Col, Card, Spin, Progress, Switch, Space, Button, Modal, Form, Input, DatePicker, Select, Alert, Segmented, Empty } from "antd";
 import { HomeOutlined, TeamOutlined, FileAddOutlined, WarningOutlined } from "@ant-design/icons";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
 import { useNavigate } from "react-router-dom";
@@ -25,6 +25,7 @@ interface DashboardStats {
   overview?: {
     pendingApplications: number;
     pendingApplicationsBreakdown?: {
+      pendingAccounts?: number;
       dormApplications: number;
       transferRegistrations: number;
       contractExtensions: number;
@@ -59,6 +60,16 @@ interface DashboardStats {
       dueDate: string;
     }>;
     revenueSeries?: Array<{ month: string; doanhThu: number }>;
+  };
+  charts?: {
+    residentsByMajor?: Array<{ major: string; count: number }>;
+    revenue?: {
+      year?: number;
+      month?: number;
+      byDay?: Array<{ day: number; label: string; doanhThu: number }>;
+      byMonth?: Array<{ month: number; label: string; doanhThu: number }>;
+      byYear?: Array<{ year: number; label: string; doanhThu: number }>;
+    };
   };
   incidents?: {
     summary?: {
@@ -130,6 +141,7 @@ const DashboardPage: React.FC = () => {
   const [maintenanceType, setMaintenanceType] = useState<"all" | "electricity" | "water" | "equipment" | "other">("all");
   const [maintenanceStatus, setMaintenanceStatus] = useState<"all" | "pending" | "processing" | "resolved">("all");
   const [violationSeverity, setViolationSeverity] = useState<"all" | "light" | "medium" | "heavy">("all");
+  const [revenueChartMode, setRevenueChartMode] = useState<"day" | "month" | "year">("month");
 
   const loadDashboardStats = async () => {
     setLoading(true);
@@ -397,13 +409,6 @@ const DashboardPage: React.FC = () => {
 
   const s: DashboardStats = stats || {};
   const roomByArea = s.roomByArea || [];
-  const revenueByMonth =
-    s.billing?.revenueSeries?.length
-      ? s.billing.revenueSeries
-      : (s.revenueByMonth || []).map((r) => ({
-          month: r.month || `${r._id?.month || ""}/${r._id?.year || ""}`,
-          doanhThu: Number(r.doanhThu ?? r.total ?? 0),
-        }));
   const overview = s.overview || {
     pendingApplications: s.pendingRegistrations || 0,
     availableRooms: s.availableRooms || 0,
@@ -413,11 +418,29 @@ const DashboardPage: React.FC = () => {
   const roomPerf = s.roomPerformance?.summary;
   const billingSummary = s.billing?.summary;
   const incidentSummary = s.incidents?.summary;
+  const residentsByMajor = Array.isArray(s.charts?.residentsByMajor) ? s.charts!.residentsByMajor! : [];
+  const revenueCharts = s.charts?.revenue;
+  const revenueByDayRows = Array.isArray(revenueCharts?.byDay) ? revenueCharts!.byDay! : [];
+  const revenueByMonthRows = Array.isArray(revenueCharts?.byMonth) ? revenueCharts!.byMonth! : [];
+  const revenueByYearRows = Array.isArray(revenueCharts?.byYear) ? revenueCharts!.byYear! : [];
+  const revenueChartData =
+    revenueChartMode === "day"
+      ? revenueByDayRows.map((d) => ({ label: d.label, doanhThu: d.doanhThu }))
+      : revenueChartMode === "year"
+        ? revenueByYearRows.map((d) => ({ label: d.label, doanhThu: d.doanhThu }))
+        : revenueByMonthRows.map((d) => ({ label: d.label, doanhThu: d.doanhThu }));
+  const revenueHasPaidAmount = revenueChartData.some((d) => Number(d.doanhThu) > 0);
+  const revenueChartHint =
+    revenueChartMode === "day"
+      ? `Theo ngày thanh toán — tháng ${revenueCharts?.month ?? billMonth}/${revenueCharts?.year ?? billYear}`
+      : revenueChartMode === "month"
+        ? `Theo tháng thanh toán — năm ${revenueCharts?.year ?? billYear}`
+        : "Theo năm thanh toán (6 năm gần nhất)";
 
   const pendingViolations = incidentSummary?.pendingViolations ?? s.pendingViolations ?? 0;
   const pendingBd = overview.pendingApplicationsBreakdown;
   const pendingAppsHint = pendingBd
-    ? `KTX: ${pendingBd.dormApplications} · Chuyển phòng: ${pendingBd.transferRegistrations} · Gia hạn: ${pendingBd.contractExtensions}`
+    ? `TK: ${pendingBd.pendingAccounts ?? 0} · KTX: ${pendingBd.dormApplications} · Chuyển phòng: ${pendingBd.transferRegistrations} · Gia hạn: ${pendingBd.contractExtensions}`
     : "";
 
   const extensionStatusText =
@@ -475,7 +498,7 @@ const DashboardPage: React.FC = () => {
               <Select.Option key={y} value={y}>{y}</Select.Option>
             ))}
           </Select>
-          {billPeriodType === "month" && (
+          {(billPeriodType === "month" || revenueChartMode === "day") && (
             <Select value={billMonth} style={{ width: 110 }} onChange={(v) => setBillMonth(v)}>
               {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                 <Select.Option key={m} value={m}>Tháng {m}</Select.Option>
@@ -516,6 +539,10 @@ const DashboardPage: React.FC = () => {
                   {
                     "Mốc thời gian": s.timeRange?.label || "—",
                     "Đơn chờ duyệt": overview.pendingApplications,
+                    "TK chờ duyệt": pendingBd?.pendingAccounts ?? 0,
+                    "KTX chờ duyệt": pendingBd?.dormApplications ?? 0,
+                    "Chuyển phòng chờ": pendingBd?.transferRegistrations ?? 0,
+                    "Gia hạn chờ": pendingBd?.contractExtensions ?? 0,
                     "Phòng trống": overview.availableRooms,
                     "Sinh viên đang lưu trú": overview.residentStudents,
                     "Doanh thu tạm tính": overview.estimatedRevenue,
@@ -542,6 +569,50 @@ const DashboardPage: React.FC = () => {
             loading={loading}
             description={pendingAppsHint}
           />
+          {!loading && overview.pendingApplications > 0 ? (
+            <Space wrap size={[4, 0]} style={{ marginTop: 6, paddingLeft: 2 }}>
+              {(pendingBd?.pendingAccounts ?? 0) > 0 ? (
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: "auto", fontSize: 12 }}
+                  onClick={() => navigate("/admin/users?tab=pending")}
+                >
+                  Duyệt tài khoản
+                </Button>
+              ) : null}
+              {(pendingBd?.dormApplications ?? 0) > 0 ? (
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: "auto", fontSize: 12 }}
+                  onClick={() => navigate("/admin/applications")}
+                >
+                  Đơn KTX
+                </Button>
+              ) : null}
+              {(pendingBd?.transferRegistrations ?? 0) > 0 ? (
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: "auto", fontSize: 12 }}
+                  onClick={() => navigate("/admin/applications?tab=registrations")}
+                >
+                  Chuyển phòng
+                </Button>
+              ) : null}
+              {(pendingBd?.contractExtensions ?? 0) > 0 ? (
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, height: "auto", fontSize: 12 }}
+                  onClick={() => navigate("/admin/contracts?tab=extend")}
+                >
+                  Gia hạn
+                </Button>
+              ) : null}
+            </Space>
+          ) : null}
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <DashboardStatCard
@@ -674,30 +745,98 @@ const DashboardPage: React.FC = () => {
 
       <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
         <Col xs={24} lg={12}>
-          <Card title="Thống kê phòng theo khu">
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={roomByArea}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="_id" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="total" fill="#0d9488" name="Tổng" />
-                <Bar dataKey="available" fill="#059669" name="Trống" />
-              </BarChart>
-            </ResponsiveContainer>
+          <Card
+            title="Sinh viên đang ở KTX theo ngành"
+            extra={
+              <span style={{ fontSize: 12, color: "#6b7280" }}>
+                HĐ active đang hiệu lực · {residentsByMajor.reduce((n, r) => n + r.count, 0)} SV
+              </span>
+            }
+          >
+            {loading ? (
+              <Spin />
+            ) : residentsByMajor.length === 0 ? (
+              <Empty description="Chưa có sinh viên đang ở" />
+            ) : (
+              <ResponsiveContainer width="100%" height={Math.max(280, residentsByMajor.length * 40)}>
+                <BarChart layout="vertical" data={residentsByMajor} margin={{ left: 4, right: 16, top: 8, bottom: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" allowDecimals={false} />
+                  <YAxis type="category" dataKey="major" width={140} tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v) => [`${v} sinh viên`, "Đang ở"]} />
+                  <Bar dataKey="count" fill="#0d9488" name="Sinh viên" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="Doanh thu theo kỳ (đã thanh toán)">
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={revenueByMonth}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="month" />
-                <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
-                <Tooltip formatter={(v) => [`${Number(v)?.toLocaleString("vi-VN")}đ`, "Doanh thu"]} />
-                <Line type="monotone" dataKey="doanhThu" stroke="#0d9488" strokeWidth={2} name="Doanh thu" />
-              </LineChart>
-            </ResponsiveContainer>
+          <Card
+            title="Doanh thu đã thu"
+            extra={
+              <Segmented
+                size="small"
+                value={revenueChartMode}
+                onChange={(v) => setRevenueChartMode(v as "day" | "month" | "year")}
+                options={[
+                  { label: "Ngày", value: "day" },
+                  { label: "Tháng", value: "month" },
+                  { label: "Năm", value: "year" },
+                ]}
+              />
+            }
+          >
+            <p style={{ margin: "0 0 12px", fontSize: 12, color: "#6b7280" }}>{revenueChartHint}</p>
+            {loading ? (
+              <Spin />
+            ) : revenueChartData.length === 0 ? (
+              <Empty description="Chưa có dữ liệu doanh thu (khởi động lại backend nếu vừa cập nhật)" />
+            ) : !revenueHasPaidAmount && revenueChartMode !== "month" ? (
+              <Empty description="Chưa có doanh thu đã thanh toán trong kỳ — thử đổi năm/tháng ở bộ lọc" />
+            ) : revenueChartMode === "month" ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={revenueChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(v) => `${(Number(v) / 1000).toFixed(0)}k`} />
+                  <Tooltip formatter={(v) => [`${Number(v)?.toLocaleString("vi-VN")}đ`, "Doanh thu"]} />
+                  <Line type="monotone" dataKey="doanhThu" stroke="#0d9488" strokeWidth={2} name="Doanh thu" />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={revenueChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="label" tick={{ fontSize: revenueChartMode === "day" ? 10 : 11 }} interval={revenueChartMode === "day" ? 2 : 0} />
+                  <YAxis tickFormatter={(v) => `${(Number(v) / 1000).toFixed(0)}k`} />
+                  <Tooltip formatter={(v) => [`${Number(v)?.toLocaleString("vi-VN")}đ`, "Doanh thu"]} />
+                  <Bar dataKey="doanhThu" fill="#059669" name="Doanh thu" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+        <Col xs={24}>
+          <Card title="Thống kê phòng theo khu">
+            {loading ? (
+              <Spin />
+            ) : roomByArea.length === 0 ? (
+              <Empty description="Không có phòng phù hợp bộ lọc" />
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={roomByArea}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="_id" />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="total" fill="#0d9488" name="Tổng" />
+                  <Bar dataKey="available" fill="#059669" name="Trống" />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </Card>
         </Col>
       </Row>

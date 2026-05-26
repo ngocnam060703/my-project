@@ -1,6 +1,7 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const Contract = require("../models/Contract");
+const Room = require("../models/Room");
 const Area = require("../models/Area");
 const Bill = require("../models/Bill");
 const Violation = require("../models/Violation");
@@ -61,6 +62,8 @@ function pickProfile(body) {
 function buildListFilter(query) {
   const { role, search, status } = query;
   const filter = { ...notDeleted };
+  /** Tab «Người dùng»: không gồm SV chờ duyệt / bị từ chối — chỉ tab «Tài khoản chờ duyệt». */
+  filter.status = { $nin: ["pending", "rejected"] };
   if (role) {
     if (isStudentRole(role)) filter.role = { $in: STUDENT_ROLES };
     else filter.role = role;
@@ -188,24 +191,58 @@ exports.getById = async (req, res) => {
     let currentRoom = null;
 
     if (isStudentRole(user.role)) {
-      contracts = await Contract.find({ user: user._id })
-        .populate({
+      const contractPopulate = [
+        {
           path: "room",
           select: "roomNumber floor area price status capacity currentOccupancy",
           populate: { path: "area", select: "name genderPolicy" },
-        })
-        .populate("bed", "code status room equipmentStatus assignedAt checkInAt")
+        },
+        { path: "bed", select: "code status room equipmentStatus assignedAt checkInAt" },
+      ];
+
+      contracts = await Contract.find({ user: user._id })
+        .populate(contractPopulate)
         .sort({ updatedAt: -1 })
         .lean();
 
-      const now = new Date();
-      currentContract =
-        contracts.find((c) => c.status === "active" && new Date(c.endDate) >= now) ||
-        contracts.find((c) => c.status === "pending_payment" && new Date(c.endDate) >= now) ||
-        contracts.find((c) => c.status === "active") ||
-        contracts.find((c) => c.status === "pending_payment") ||
-        null;
-      currentRoom = currentContract?.room || null;
+      const { findResidenceContract } = require("../services/ktxMembership");
+      const { resolveContractLivingRoomId } = require("../services/violationResidentsService");
+
+      const residence = await findResidenceContract(user._id, { syncLifecycle: true });
+      if (residence) {
+        const rid = String(residence._id);
+        currentContract = contracts.find((c) => String(c._id) === rid) || null;
+        if (!currentContract) {
+          currentContract = await Contract.findById(rid).populate(contractPopulate).lean();
+          if (currentContract) contracts = [currentContract, ...contracts.filter((c) => String(c._id) !== rid)];
+        }
+
+        const livingRoomId = await resolveContractLivingRoomId(currentContract || residence);
+        if (livingRoomId) {
+          const roomDoc = await Room.findById(livingRoomId)
+            .select("roomNumber floor area price status capacity currentOccupancy")
+            .populate({ path: "area", select: "name genderPolicy" })
+            .lean();
+          if (roomDoc) {
+            currentRoom = roomDoc;
+            if (currentContract) currentContract = { ...currentContract, room: roomDoc };
+          }
+        }
+
+        const withBed = await Contract.findById(rid).populate(contractPopulate).lean();
+        if (withBed) {
+          currentContract = { ...withBed, room: currentRoom || withBed.room };
+        }
+      } else {
+        const now = new Date();
+        currentContract =
+          contracts.find((c) => c.status === "active" && new Date(c.endDate) >= now) ||
+          contracts.find((c) => c.status === "pending_payment" && new Date(c.endDate) >= now) ||
+          contracts.find((c) => c.status === "active") ||
+          contracts.find((c) => c.status === "pending_payment") ||
+          null;
+        currentRoom = currentContract?.room || null;
+      }
     }
 
     /** Lịch sử cư trú (theo HĐ + BedHistory), công nợ & vi phạm */
@@ -231,13 +268,25 @@ exports.getById = async (req, res) => {
 
       violationsRecent = await Violation.find({ user: user._id }).sort({ createdAt: -1 }).limit(25).lean();
 
+      const livingRoomId =
+        currentRoom && typeof currentRoom === "object" ? String(currentRoom._id || "") : "";
       const bCur = currentContract?.bed;
+      const bedInLivingRoom =
+        bCur &&
+        typeof bCur === "object" &&
+        livingRoomId &&
+        String(bCur.room || "") === livingRoomId;
+
       if (!currentContract) residencyOperationalStatus = "no_active_contract";
-      else if (!bCur || typeof bCur !== "object") residencyOperationalStatus = "contract_no_bed";
+      else if (!bedInLivingRoom) residencyOperationalStatus = "no_bed_assigned";
       else if (String(bCur.status) !== "occupied") residencyOperationalStatus = "no_bed_assigned";
       else if (!bCur.checkInAt && bCur.assignedAt) residencyOperationalStatus = "assigned_pending_checkin";
       else if (bCur.checkInAt) residencyOperationalStatus = "checked_in_staying";
       else residencyOperationalStatus = "assigned_pending_checkin";
+
+      if (currentContract && !bedInLivingRoom && bCur && typeof bCur === "object") {
+        currentContract = { ...currentContract, bed: null };
+      }
 
       const histRows =
         contracts.length > 0
@@ -257,14 +306,69 @@ exports.getById = async (req, res) => {
         histByContract[cid].push(h);
       }
 
+      /** HĐ đã chấm dứt — không gán trạng thái «đang ở» theo HĐ hiện hành */
+      const TERMINAL_CONTRACT_STATUSES = new Set([
+        "terminated",
+        "expired",
+        "cancelled",
+        "transferred_settled",
+        "terminated_due_to_transfer",
+      ]);
+      const OCCUPANCY_ELIGIBLE_STATUSES = new Set(["active", "pending_payment", "upcoming"]);
+
+      function contractResidencyEnded(contract, at) {
+        const st = String(contract.status || "");
+        if (TERMINAL_CONTRACT_STATUSES.has(st)) return true;
+        if (contract.endDate && new Date(contract.endDate) < at) return true;
+        return false;
+      }
+
+      function mapEndedResidencyStayStatus(contractStatus) {
+        const st = String(contractStatus || "");
+        if (st === "cancelled") return "ended_cancelled";
+        if (st === "transferred_settled" || st === "terminated_due_to_transfer") return "ended_transfer_settled";
+        if (st === "terminated") return "ended_terminated";
+        if (st === "expired") return "ended_expired";
+        return "checked_out";
+      }
+
       if (contracts.length) {
         const now = new Date();
-        stayHistory = [...contracts]
-          .sort((a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0))
-          .map((c) => {
+        const { resolveContractLivingRoomId } = require("../services/violationResidentsService");
+        const sortedContracts = [...contracts].sort(
+          (a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0)
+        );
+        const displayRoomByContractId = new Map();
+        await Promise.all(
+          sortedContracts.map(async (c) => {
+            const ended =
+              TERMINAL_CONTRACT_STATUSES.has(String(c.status || "")) ||
+              (c.endDate && new Date(c.endDate) < now);
+            if (!ended && OCCUPANCY_ELIGIBLE_STATUSES.has(String(c.status || ""))) {
+              const lid = await resolveContractLivingRoomId(c);
+              if (lid) {
+                const r = await Room.findById(lid)
+                  .select("roomNumber")
+                  .populate({ path: "area", select: "name" })
+                  .lean();
+                if (r) {
+                  displayRoomByContractId.set(String(c._id), r);
+                  return;
+                }
+              }
+            }
+            if (c.room && typeof c.room === "object") displayRoomByContractId.set(String(c._id), c.room);
+          })
+        );
+
+        stayHistory = sortedContracts.map((c) => {
             const cid = String(c._id);
             const ev = histByContract[cid] || [];
-            const bdoc = c.bed && typeof c.bed === "object" ? c.bed : null;
+            const bdocRaw = c.bed && typeof c.bed === "object" ? c.bed : null;
+            const roomForRow = displayRoomByContractId.get(cid) || (c.room && typeof c.room === "object" ? c.room : null);
+            const rowRoomId = roomForRow && roomForRow._id ? String(roomForRow._id) : "";
+            const bdoc =
+              bdocRaw && rowRoomId && String(bdocRaw.room || "") === rowRoomId ? bdocRaw : null;
 
             let checkInAt = null;
             for (const e of ev) {
@@ -305,7 +409,7 @@ exports.getById = async (req, res) => {
             }
             const noteOut = [...new Set(notesFromHist)].slice(0, 5).join(" · ");
 
-            const rn = c.room && typeof c.room === "object" ? String(c.room.roomNumber || "").trim() : "";
+            const rn = roomForRow ? String(roomForRow.roomNumber || "").trim() : "";
             let bc = bdoc ? String(bdoc.code || "").trim() : "";
             if (!bc) {
               for (let i = ev.length - 1; i >= 0; i--) {
@@ -319,14 +423,21 @@ exports.getById = async (req, res) => {
             const composite =
               rn && bc ? (bc.startsWith(`${rn}-`) ? bc : `${rn}-${bc}`) : bc || rn || "—";
 
-            const isCurrent = currentContract && String(currentContract._id) === cid;
-            const ended =
-              ["terminated", "expired"].includes(String(c.status || "")) || new Date(c.endDate) < now;
+            const ended = contractResidencyEnded(c, now);
             const notYetStarted = new Date(c.startDate) > now;
+            const isOccupancyCurrent =
+              currentContract &&
+              String(currentContract._id) === cid &&
+              !ended &&
+              OCCUPANCY_ELIGIBLE_STATUSES.has(String(c.status || ""));
+
+            // HĐ đã chấm dứt ưu tiên trước «chưa bắt đầu kỳ» (VD: gia hạn upcoming bị hủy)
+            if (!checkOutAt && ended && c.endDate && checkInAt) checkOutAt = c.endDate;
 
             let residencyStayStatus = "checked_out";
-            if (notYetStarted) residencyStayStatus = "not_started";
-            else if (isCurrent && !ended) {
+            if (ended) residencyStayStatus = mapEndedResidencyStayStatus(c.status);
+            else if (notYetStarted) residencyStayStatus = "not_started";
+            else if (isOccupancyCurrent) {
               if (residencyOperationalStatus === "assigned_pending_checkin") residencyStayStatus = "pending_checkin";
               else if (residencyOperationalStatus === "checked_in_staying") residencyStayStatus = "staying";
               else if (
@@ -344,8 +455,8 @@ exports.getById = async (req, res) => {
               startDate: c.startDate,
               endDate: c.endDate,
               areaName:
-                c.room && typeof c.room === "object" && c.room.area && typeof c.room.area === "object"
-                  ? c.room.area.name
+                roomForRow && roomForRow.area && typeof roomForRow.area === "object"
+                  ? roomForRow.area.name
                   : "",
               roomNumber: rn || "",
               bedCode: bc || "",

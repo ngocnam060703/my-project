@@ -218,11 +218,11 @@ const HomePage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card hoverable onClick={() => navigate("/student/my-registrations")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
+          <Card hoverable onClick={() => navigate("/student/my-applications")} style={{ textAlign: "center", cursor: "pointer", borderRadius: 12 }}>
             <FileAddOutlined style={{ fontSize: 48, color: "var(--card-accent-2)", marginBottom: 16 }} />
-            <Title level={4}>Đăng ký của tôi</Title>
-            <Paragraph>Đơn đăng ký nội trú</Paragraph>
-            <Button type="primary" ghost onClick={(e) => { e.stopPropagation(); navigate("/student/my-registrations"); }}>Xem đơn</Button>
+            <Title level={4}>Đơn của tôi</Title>
+            <Paragraph>Đăng ký nội trú & chuyển phòng</Paragraph>
+            <Button type="primary" ghost onClick={(e) => { e.stopPropagation(); navigate("/student/my-applications"); }}>Xem đơn</Button>
           </Card>
         </Col>
         <Col xs={24} md={8}>

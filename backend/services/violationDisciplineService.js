@@ -6,6 +6,7 @@ const { sendNotification } = require("./notificationService");
 const RESOLUTION_LABELS = {
   warning: "Cảnh cáo / nhắc nhở chính thức",
   fine: "Phạt tiền",
+  compensation: "Bồi thường",
   expulsion: "Buộc rời KTX / chấm dứt HĐ",
 };
 
@@ -36,7 +37,7 @@ async function populateViolation(violationId) {
 }
 
 /**
- * Admin xử lý một vi phạm (warning | fine | expulsion).
+ * Admin xử lý một vi phạm (warning | fine | compensation | expulsion).
  */
 async function resolveViolationDisciplinary({ violationId, reviewerId, actionType, penaltyAmount, note }) {
   const v = await Violation.findById(violationId).populate("user", "_id fullName").populate("room", "_id");
@@ -54,7 +55,9 @@ async function resolveViolationDisciplinary({ violationId, reviewerId, actionTyp
   }
 
   const now = new Date();
-  const penalty = actionType === "fine" ? normalizeAmount(penaltyAmount) : 0;
+  const isFine = actionType === "fine";
+  const isCompensation = actionType === "compensation";
+  const penalty = isFine || isCompensation ? normalizeAmount(penaltyAmount) : 0;
 
   v.status = "resolved";
   v.resolution = {
@@ -64,34 +67,44 @@ async function resolveViolationDisciplinary({ violationId, reviewerId, actionTyp
     resolvedAt: now,
     resolvedBy: reviewerId,
   };
-  if (actionType === "fine" && penalty > 0) {
+  if (isFine && penalty > 0) {
     v.fineAmount = penalty;
+  }
+  if (isCompensation && penalty > 0) {
+    v.compensationAmount = penalty;
   }
 
   const roomId = v.room?._id || v.room;
   const userId = v.user?._id || v.user;
 
-  if (actionType === "fine" && penalty > 0 && !v.bill && userId && roomId) {
-    const contract = await Contract.findOne({
-      user: userId,
-      room: roomId,
-      status: { $in: ["active", "pending_payment"] },
-    });
-    if (contract) {
-      await createPenaltyBill({
-        contractDoc: contract,
-        violationDoc: v,
-        userId,
-        roomId,
-        totalAmount: penalty,
-        penaltyBreakdown: [{ label: "Phạt tiền (quyết định xử lý)", amount: penalty }],
-        note: `Xử lý kỷ luật — ${String(note || "").slice(0, 200)}`,
+  await v.save();
+
+  /** Hóa đơn phạt chỉ tạo khi admin xác nhận xử lý (phạt tiền / bồi thường), không tạo lúc ghi nhận. */
+  if ((isFine || isCompensation) && !v.bill && userId && roomId) {
+    const fineAmt = normalizeAmount(v.fineAmount);
+    const compAmt = normalizeAmount(v.compensationAmount);
+    const totalPay = fineAmt + compAmt;
+    if (totalPay > 0) {
+      const contract = await Contract.findOne({
+        user: userId,
+        room: roomId,
+        status: { $in: ["active", "pending_payment"] },
       });
-    } else {
-      await v.save();
+      if (contract) {
+        const penaltyBreakdown = [];
+        if (fineAmt > 0) penaltyBreakdown.push({ label: "Phạt tiền (quyết định xử lý)", amount: fineAmt });
+        if (compAmt > 0) penaltyBreakdown.push({ label: "Bồi thường (quyết định xử lý)", amount: compAmt });
+        await createPenaltyBill({
+          contractDoc: contract,
+          violationDoc: v,
+          userId,
+          roomId,
+          totalAmount: totalPay,
+          penaltyBreakdown,
+          note: `Xử lý kỷ luật — ${String(note || "").slice(0, 200)}`,
+        });
+      }
     }
-  } else {
-    await v.save();
   }
 
   if (actionType === "expulsion" && userId && roomId) {

@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation, useSearchParams } from "react-router-dom";
 import { App as AntdApp, Spin } from "antd";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -13,7 +13,6 @@ import RegisterPage from "./pages/RegisterPage";
 import HomePage from "./pages/client/HomePage";
 import RoomsPage from "./pages/client/RoomsPage";
 import RoomDetailPage from "./pages/client/RoomDetailPage";
-import MyRegistrationsPage from "./pages/client/MyRegistrationsPage";
 import MyContractsPage from "./pages/client/MyContractsPage";
 import MyBillsPage from "./pages/client/MyBillsPage";
 import MyViolationsPage from "./pages/client/MyViolationsPage";
@@ -23,7 +22,6 @@ import DamageReportPage from "./pages/client/DamageReportPage";
 import ContractRenewalPage from "./pages/client/ContractRenewalPage";
 import DormRegistrationPage from "./pages/client/DormRegistrationPage";
 import StudentApplicationsPage from "./pages/client/StudentApplicationsPage";
-import RoomTransferPage from "./pages/client/RoomTransferPage";
 import RegulationsPage from "./pages/client/RegulationsPage";
 import DashboardPage from "./pages/admin/DashboardPage";
 import UsersPage from "./pages/admin/UsersPage";
@@ -34,18 +32,26 @@ import ContractsPage from "./pages/admin/ContractsPage";
 import BillsPage from "./pages/admin/BillsPage";
 import ViolationsPage from "./pages/admin/ViolationsPage";
 import MaintenanceReportsAdminPage from "./pages/admin/MaintenanceReportsAdminPage";
-import ServicesPageAdmin from "./pages/admin/ServicesPage";
 import ServiceManagementBootstrapPage from "./pages/admin/ServiceManagementBootstrapPage";
 import ServicesPageClient from "./pages/client/ServicesPage";
 import MajorsPage from "./pages/admin/MajorsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
-/** `/` → admin vào /admin, còn lại (khách + sinh viên) vào /student */
+/** `/` → admin/manager đã đăng nhập vào /admin; mặc định vào /login */
 const RootRedirect: React.FC = () => {
   const { user, loading } = useAuth();
   if (loading) return <Spin size="large" style={{ display: "block", margin: "100px auto" }} />;
   if (user?.role === "admin" || user?.role === "manager") return <Navigate to="/admin" replace />;
-  return <Navigate to="/student" replace />;
+  return <Navigate to="/login" replace />;
+};
+
+/** URL cũ chuyển phòng / đăng ký cũ → tab «Chuyển phòng» trong «Đơn của tôi» */
+const LegacyStudentTransferApplicationsRedirect: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const roomId = searchParams.get("roomId");
+  const next = new URLSearchParams({ tab: "transfer" });
+  if (roomId) next.set("roomId", roomId);
+  return <Navigate to={`/student/my-applications?${next.toString()}`} replace />;
 };
 
 /** Không cho admin/manager dùng layout sinh viên */
@@ -99,20 +105,29 @@ function App() {
                   <Route path="violations" element={<ViolationsPage />} />
                   <Route path="maintenance-reports" element={<MaintenanceReportsAdminPage />} />
                   <Route path="facilities" element={<Navigate to="/admin/rooms" replace />} />
-                  <Route path="services" element={<ServicesPageAdmin />} />
-                  <Route path="dorm-services" element={<ServiceManagementBootstrapPage />} />
-                  <Route path="dorm_services" element={<Navigate to="/admin/dorm-services" replace />} />
+                  <Route path="services" element={<ServiceManagementBootstrapPage />} />
+                  <Route path="dorm-services" element={<Navigate to="/admin/services" replace />} />
+                  <Route path="dorm_services" element={<Navigate to="/admin/services" replace />} />
                 </Route>
 
-                <Route path="/student" element={<StudentAreaGuard><ClientLayout /></StudentAreaGuard>}>
+                <Route
+                  path="/student"
+                  element={
+                    <ProtectedRoute>
+                      <StudentAreaGuard>
+                        <ClientLayout />
+                      </StudentAreaGuard>
+                    </ProtectedRoute>
+                  }
+                >
                   <Route index element={<HomePage />} />
                   <Route path="rooms" element={<RoomsPage />} />
                   <Route path="rooms/:id" element={<RoomDetailPage />} />
                   <Route path="dorm-registration" element={<ProtectedRoute><DormRegistrationPage /></ProtectedRoute>} />
                   <Route path="my-applications" element={<ProtectedRoute><StudentApplicationsPage /></ProtectedRoute>} />
                   <Route path="dorm-applications" element={<Navigate to="/student/my-applications" replace />} />
-                  <Route path="room-transfer" element={<ProtectedRoute><RoomTransferPage /></ProtectedRoute>} />
-                  <Route path="my-registrations" element={<ProtectedRoute><MyRegistrationsPage /></ProtectedRoute>} />
+                  <Route path="room-transfer" element={<LegacyStudentTransferApplicationsRedirect />} />
+                  <Route path="my-registrations" element={<LegacyStudentTransferApplicationsRedirect />} />
                   <Route path="my-contracts" element={<ProtectedRoute><MyContractsPage /></ProtectedRoute>} />
                   <Route path="my-bills" element={<ProtectedRoute><MyBillsPage /></ProtectedRoute>} />
                   <Route path="billing" element={<Navigate to="/student/my-bills" replace />} />
@@ -131,7 +146,7 @@ function App() {
                 <Route path="/rooms" element={<Navigate to="/student/rooms" replace />} />
                 <Route path="/rooms/:id" element={<LegacyRoomDetailRedirect />} />
                 <Route path="/dorm-registration" element={<LegacyDormRegistrationRedirect />} />
-                <Route path="/my-registrations" element={<Navigate to="/student/my-registrations" replace />} />
+                <Route path="/my-registrations" element={<Navigate to="/student/my-applications?tab=transfer" replace />} />
                 <Route path="/my-contracts" element={<Navigate to="/student/my-contracts" replace />} />
                 <Route path="/my-bills" element={<Navigate to="/student/my-bills" replace />} />
                 <Route path="/calendar" element={<Navigate to="/student/calendar" replace />} />

@@ -6,6 +6,7 @@ const router = express.Router();
 
 router.get("/my", auth, registrationController.getMyRegistrations);
 router.get("/transfer-eligibility", auth, registrationController.getTransferEligibility);
+router.get("/transfer-candidate-rooms", auth, registrationController.getTransferCandidateRooms);
 router.get("/:id/transfer-summary", auth, registrationController.getTransferSummary);
 router.post("/:id/confirm-transfer", auth, registrationController.confirmTransfer);
 router.post("/", auth, registrationController.create);
@@ -15,5 +16,6 @@ router.use(auth, requireRole("admin", "manager"));
 router.get("/", registrationController.getAll);
 router.put("/:id/approve", registrationController.approve);
 router.put("/:id/reject", registrationController.reject);
+router.delete("/:id", registrationController.adminDeleteTransfer);
 
 module.exports = router;

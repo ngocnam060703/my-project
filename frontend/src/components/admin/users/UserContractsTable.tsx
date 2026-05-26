@@ -3,6 +3,11 @@ import { Empty, Table, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import type { Bill, Contract, Bed } from "../../../types";
+import {
+  CONTRACT_STATUS_TAG_CLASS,
+  contractStatusAntTagAdmin,
+  contractStatusTagWrapStyle,
+} from "../../../utils/contractStatusDisplay";
 
 function contractAreaName(c: Contract): string {
   const r = c.room;
@@ -14,9 +19,12 @@ function contractAreaName(c: Contract): string {
 
 function contractBedCode(c: Contract): string {
   const b = c.bed;
-  if (!b) return "—";
-  if (typeof b === "object" && b !== null && "code" in b) return String((b as Bed).code || "") || "—";
-  return "—";
+  const r = c.room;
+  if (!b || typeof b !== "object") return "—";
+  const roomId = r && typeof r === "object" ? String(r._id || "") : "";
+  const bedRoom = String((b as Bed).room || "");
+  if (roomId && bedRoom && bedRoom !== roomId) return "—";
+  return String((b as Bed).code || "") || "—";
 }
 
 function formatBedEquipmentVi(raw: string | undefined | null): string {
@@ -46,21 +54,6 @@ function contractIdsWithOverdueBills(bills: Bill[] | undefined): Set<string> {
     if (id) s.add(id);
   }
   return s;
-}
-
-function contractEnterpriseBadge(
-  c: Pick<Contract, "status" | "endDate" | "_id">,
-  overdueContractIds: Set<string>,
-): { color: string; text: string } {
-  const now = dayjs();
-  const end = c.endDate ? dayjs(c.endDate) : null;
-  if (overdueContractIds.has(String(c._id))) return { color: "red", text: "Quá hạn TT" };
-  if (c.status === "active" && end && end.isBefore(now, "day")) return { color: "orange", text: "Hết hạn" };
-  if (c.status === "active") return { color: "green", text: "Đang hiệu lực" };
-  if (c.status === "pending_payment") return { color: "gold", text: "Chờ thanh toán" };
-  if (c.status === "expired") return { color: "default", text: "Đã hết hạn" };
-  if (c.status === "terminated") return { color: "default", text: "Đã chấm dứt" };
-  return { color: "default", text: String(c.status || "—") };
 }
 
 export interface UserContractsTableProps {
@@ -97,19 +90,23 @@ const UserContractsTable: React.FC<UserContractsTableProps> = ({ contracts, over
         render: (_: unknown, c) => (typeof c.room === "object" && c.room ? c.room.roomNumber : "—"),
       },
       {
-        title: "Giá phòng (nền)",
+        title: "Giá phòng",
         key: "roomFee",
-        width: 150,
+        width: 120,
         render: (_: unknown, c) => {
           const r = typeof c.room === "object" ? c.room : null;
           if (!r || r.price == null) return "—";
           const slots = Math.max(1, Number(r.capacity) || 1);
           const full = Math.round(Number(r.price));
           const per = Math.round(full / slots);
-          const text = `Tổng: ${full.toLocaleString("vi-VN")}đ/tháng / ${slots} slot · ${per.toLocaleString("vi-VN")}đ`;
           return (
-            <Tooltip title={`Tổng ${full.toLocaleString("vi-VN")}đ/th · ${slots} slot → ${per.toLocaleString("vi-VN")}đ/slot/th`}>
-              <span style={{ whiteSpace: "nowrap" }}>{text}</span>
+            <Tooltip title={`Tổng ${full.toLocaleString("vi-VN")}đ/tháng · ${slots} chỗ · ${per.toLocaleString("vi-VN")}đ/chỗ/tháng`}>
+              <div style={{ lineHeight: 1.4, whiteSpace: "normal" }}>
+                <div>{full.toLocaleString("vi-VN")}đ/tháng</div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>
+                  {per.toLocaleString("vi-VN")}đ/chỗ · {slots} chỗ
+                </div>
+              </div>
             </Tooltip>
           );
         },
@@ -135,13 +132,15 @@ const UserContractsTable: React.FC<UserContractsTableProps> = ({ contracts, over
       {
         title: "Trạng thái",
         key: "st",
-        width: 130,
+        width: 118,
         render: (_: unknown, c) => {
-          const { color, text } = contractEnterpriseBadge(c, overdueIds);
+          const { color, text } = contractStatusAntTagAdmin(c, overdueIds);
           return (
-            <Tag color={color} style={{ fontWeight: 600, margin: 0 }}>
-              {text}
-            </Tag>
+            <div style={{ maxWidth: "100%", whiteSpace: "normal" }}>
+              <Tag color={color} className={CONTRACT_STATUS_TAG_CLASS} style={contractStatusTagWrapStyle}>
+                {text}
+              </Tag>
+            </div>
           );
         },
       },

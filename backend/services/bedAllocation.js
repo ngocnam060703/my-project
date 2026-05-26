@@ -42,16 +42,65 @@ async function ensureBedsForRoom(roomId, capacity, roomNumberHint) {
  * Gán giường trống đầu tiên cho hợp đồng (active / pending_payment).
  * @returns {{ ok: boolean, already?: boolean, bed?: object, message?: string }}
  */
+async function detachBedFromContract(contract, bedDoc, performedBy, note) {
+  if (!bedDoc || !contract) return;
+  if (String(bedDoc.currentContract || "") === String(contract._id)) {
+    bedDoc.status = "available";
+    bedDoc.currentUser = null;
+    bedDoc.currentContract = null;
+    bedDoc.assignedAt = null;
+    bedDoc.checkInAt = null;
+    await bedDoc.save();
+    await BedHistory.create({
+      bed: bedDoc._id,
+      room: bedDoc.room,
+      user: contract.user,
+      contract: contract._id,
+      action: "checked_out",
+      fromBedCode: bedDoc.code,
+      toStatus: "available",
+      note: note || "Gỡ giường — phòng HĐ đã đổi",
+      performedBy: performedBy || null,
+    });
+  }
+  contract.bed = null;
+  await contract.save();
+}
+
 async function tryAutoAssignBed(contractId, performedBy) {
   const contract = await Contract.findById(contractId);
   if (!contract) return { ok: false, message: "Không tìm thấy hợp đồng" };
-  if (!contract.room || !contract.user) return { ok: false, message: "Hợp đồng thiếu phòng hoặc sinh viên" };
+  if (!contract.user) return { ok: false, message: "Hợp đồng thiếu sinh viên" };
   if (!["active", "pending_payment"].includes(String(contract.status))) {
     return { ok: false, message: "Chỉ gán giường khi hợp đồng active hoặc pending_payment" };
   }
+
+  const { resolveContractEntitledRoomId, alignContractRoomToEntitledRoom } = require("./violationResidentsService");
+  const entitledRoomId = await resolveContractEntitledRoomId(contract);
+  if (!entitledRoomId) return { ok: false, message: "Hợp đồng chưa có phòng hiệu lực" };
+  await alignContractRoomToEntitledRoom(contract);
+
   if (contract.bed) {
-    const bed = await Bed.findById(contract.bed).lean();
-    return { ok: true, already: true, bed };
+    const existing = await Bed.findById(contract.bed);
+    if (existing && String(existing.room) === String(contract.room)) {
+      if (
+        String(existing.status) === "occupied" &&
+        String(existing.currentContract || "") === String(contract._id)
+      ) {
+        if (!existing.assignedAt) {
+          existing.assignedAt = new Date();
+          existing.checkInAt = null;
+          await existing.save();
+        }
+        return { ok: true, already: true, bed: existing.toObject ? existing.toObject() : existing };
+      }
+    }
+    if (existing) {
+      await detachBedFromContract(contract, existing, performedBy, "Gỡ giường không thuộc phòng HĐ");
+    } else {
+      contract.bed = null;
+      await contract.save();
+    }
   }
 
   const room = await Room.findById(contract.room).select("capacity roomNumber").lean();

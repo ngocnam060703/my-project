@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Badge,
   Button,
   Card,
@@ -29,7 +30,6 @@ import {
 import dayjs, { type Dayjs } from "dayjs";
 import "dayjs/locale/vi";
 import { servicesApi } from "../../api";
-import PersonalServiceRegistration from "../../components/services/PersonalServiceRegistration";
 
 dayjs.locale("vi");
 
@@ -41,9 +41,12 @@ type Service = {
   type: "common" | "personal";
   price: number;
   unit: "monthly" | "once";
+  measureUnit?: "month" | "kwh" | "m3";
   description?: string;
   isActive: boolean;
 };
+
+const isMeterService = (s: Service) => s.measureUnit === "kwh" || s.measureUnit === "m3";
 
 type Registration = {
   _id: string;
@@ -81,18 +84,49 @@ const ServicesPage: React.FC = () => {
   const [qtyDraft, setQtyDraft] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
+  const [periodLocked, setPeriodLocked] = useState(false);
+  const [lockBannerMessage, setLockBannerMessage] = useState<string | null>(null);
+  /** DV điện/nước đã gán cho phòng SV — chỉ các DV này mới đăng ký sử dụng được. */
+  const [roomMeterServiceIds, setRoomMeterServiceIds] = useState<Set<string>>(new Set());
+
+  const parseRegistrationsPayload = (data: unknown): Registration[] => {
+    if (Array.isArray(data)) return data as Registration[];
+    if (data && typeof data === "object" && Array.isArray((data as { items?: unknown }).items)) {
+      return (data as { items: Registration[] }).items;
+    }
+    return [];
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [sRes, rRes, hRes] = await Promise.all([
+      const [sRes, rRes, lockRes, hRes, meterRes] = await Promise.all([
         servicesApi.getAll({ activeOnly: "true" }),
         servicesApi.getMyRegistrations({ month, year }),
+        servicesApi.getPeriodLockStatus({ month, year }),
         servicesApi.getMyRegistrations(),
+        servicesApi.getMyRoomMeterServices().catch(() => ({ data: { roomId: null, serviceIds: [] as string[] } })),
       ]);
       setServices(sRes.data || []);
-      setRegs(rRes.data || []);
-      setHistoryRegs(hRes.data || []);
+      const meterIds = meterRes.data?.serviceIds || [];
+      setRoomMeterServiceIds(new Set(meterIds.map(String)));
+      const regPayload = rRes.data;
+      setRegs(parseRegistrationsPayload(regPayload));
+      const lockFromRegs =
+        regPayload &&
+        typeof regPayload === "object" &&
+        !Array.isArray(regPayload) &&
+        (regPayload as { periodLock?: { serviceRegistrationLocked?: boolean; bannerMessage?: string } }).periodLock;
+      const locked = lockRes.data?.serviceRegistrationLocked ?? lockFromRegs?.serviceRegistrationLocked ?? false;
+      setPeriodLocked(locked);
+      setLockBannerMessage(
+        lockRes.data?.bannerMessage ||
+          (lockFromRegs as { bannerMessage?: string } | undefined)?.bannerMessage ||
+          (locked
+            ? `Admin đã tạo hóa đơn tháng ${month}/${year}. Bạn không thể đăng ký hoặc thay đổi dịch vụ cho kỳ này. Chọn tháng sau nếu muốn đăng ký trước.`
+            : null),
+      );
+      setHistoryRegs(parseRegistrationsPayload(hRes.data));
     } catch {
       message.error("Không tải được dịch vụ");
     } finally {
@@ -114,9 +148,21 @@ const ServicesPage: React.FC = () => {
   }, [regs]);
 
   const common = useMemo(() => services.filter((s) => s.type === "common"), [services]);
+  const commonMeters = useMemo(
+    () => common.filter((s) => isMeterService(s) && roomMeterServiceIds.has(s._id)),
+    [common, roomMeterServiceIds],
+  );
+  const commonFixed = useMemo(
+    () => common.filter((s) => !isMeterService(s) || !roomMeterServiceIds.has(s._id)),
+    [common, roomMeterServiceIds],
+  );
   const personal = useMemo(() => services.filter((s) => s.type === "personal"), [services]);
 
   const registerPersonal = async (s: Service, quantity?: number, enabled?: boolean) => {
+    if (periodLocked) {
+      message.warning("Admin đã tạo hóa đơn tháng cho kỳ này. Không thể thay đổi dịch vụ.");
+      return;
+    }
     setSaving(s._id);
     try {
       await servicesApi.upsertMyRegistration({
@@ -235,6 +281,20 @@ const ServicesPage: React.FC = () => {
         </Row>
       </Card>
 
+      {periodLocked && lockBannerMessage ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={lockBannerMessage}
+          style={{
+            marginBottom: 0,
+            borderRadius: 12,
+            background: "#fffbe6",
+            border: "1px solid #ffe58f",
+          }}
+        />
+      ) : null}
+
       {loading ? (
         <Skeleton active paragraph={{ rows: 6 }} />
       ) : (
@@ -247,11 +307,51 @@ const ServicesPage: React.FC = () => {
               </Title>
               <Badge count={common.length} style={{ backgroundColor: "#1677ff" }} />
             </Space>
-            {common.length === 0 ? (
+            {commonMeters.length > 0 && (
+              <>
+                <Paragraph type="secondary" style={{ marginBottom: 12 }}>
+                  Bật đăng ký nếu bạn <strong>sử dụng</strong> điện/nước phòng trong kỳ — chỉ SV đăng ký mới bị tính trên hóa đơn.
+                </Paragraph>
+                <Row gutter={[16, 16]} style={{ marginBottom: commonFixed.length ? 16 : 0 }}>
+                  {commonMeters.map((s) => {
+                    const reg = regByService[s._id];
+                    const on = reg?.enabled ?? false;
+                    return (
+                      <Col xs={24} sm={12} lg={8} key={s._id}>
+                        <Card size="small" style={cardShell("#0891b2")} styles={{ body: { minHeight: 160 } }}>
+                          <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+                            <Tag color="cyan">Điện / nước phòng</Tag>
+                            <Text strong style={{ fontSize: 16 }}>
+                              {s.name}
+                            </Text>
+                            <Text type="secondary" style={{ fontSize: 13 }}>
+                              Theo chỉ số phòng — chia cho SV đã bật đăng ký
+                            </Text>
+                            <Text strong style={{ fontSize: 16, color: "#0891b2" }}>
+                              {formatMoney(s.price)}
+                              <Text type="secondary"> / {s.measureUnit === "m3" ? "m³" : "kWh"}</Text>
+                            </Text>
+                            <Switch
+                              checked={on}
+                              loading={saving === s._id}
+                              disabled={periodLocked}
+                              onChange={(checked) => void registerPersonal(s, 1, checked)}
+                              checkedChildren="Đăng ký"
+                              unCheckedChildren="Không dùng"
+                            />
+                          </Space>
+                        </Card>
+                      </Col>
+                    );
+                  })}
+                </Row>
+              </>
+            )}
+            {commonFixed.length === 0 && commonMeters.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dịch vụ chung" />
-            ) : (
+            ) : commonFixed.length > 0 ? (
               <Row gutter={[16, 16]}>
-                {common.map((s) => (
+                {commonFixed.map((s) => (
                   <Col xs={24} sm={12} lg={8} key={s._id}>
                     <Card size="small" style={cardShell("#1677ff")} styles={{ body: { minHeight: 140 } }}>
                       <Space orientation="vertical" size={8} style={{ width: "100%" }}>
@@ -276,7 +376,7 @@ const ServicesPage: React.FC = () => {
                   </Col>
                 ))}
               </Row>
-            )}
+            ) : null}
           </div>
 
           <div>
@@ -287,9 +387,6 @@ const ServicesPage: React.FC = () => {
               </Title>
               <Badge count={personal.length} style={{ backgroundColor: "#722ed1" }} />
             </Space>
-            <div style={{ marginBottom: 16 }}>
-              <PersonalServiceRegistration />
-            </div>
             {personal.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dịch vụ cá nhân" />
             ) : (
@@ -297,6 +394,7 @@ const ServicesPage: React.FC = () => {
                 {personal.map((s) => {
                   const reg = regByService[s._id];
                   const busy = saving === s._id;
+                  const frozen = periodLocked || busy;
                   if (s.unit === "once") {
                     const currentQty = Number(reg?.quantity || 0);
                     const val = qtyDraft[s._id] ?? currentQty;
@@ -365,6 +463,7 @@ const ServicesPage: React.FC = () => {
                             <Switch
                               checked={enabled}
                               loading={busy}
+                              disabled={periodLocked}
                               checkedChildren="Bật"
                               unCheckedChildren="Tắt"
                               onChange={(checked) => void registerPersonal(s, 1, checked)}

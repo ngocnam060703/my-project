@@ -8,12 +8,16 @@ const maintenanceReportSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     room: { type: mongoose.Schema.Types.ObjectId, ref: "Room", required: true, index: true },
-    /** electricity | water | equipment | other — khu vực / loại sự cố */
+    /** @deprecated — dữ liệu cũ; báo cáo mới dùng damagedItemLabel */
     incidentType: {
       type: String,
-      enum: ["electricity", "water", "equipment", "other"],
-      required: true,
+      enum: ["electricity", "water", "equipment", "other", ""],
+      default: "",
     },
+    /** CSVC / vật tư hỏng trong phòng */
+    facility: { type: mongoose.Schema.Types.ObjectId, ref: "Facility", default: null },
+    facilityLocation: { type: mongoose.Schema.Types.ObjectId, ref: "FacilityLocation", default: null },
+    damagedItemLabel: { type: String, default: "", trim: true, maxlength: 200 },
     description: { type: String, required: true, trim: true, maxlength: 8000 },
     images: [{ type: String }],
     status: {
@@ -70,11 +74,11 @@ function buildRequestCode(doc) {
   return `YC-${y}${m}-${suffix}`;
 }
 
-maintenanceReportSchema.pre("save", function assignRequestCode(next) {
+/** Mongoose 9+: middleware không dùng callback `next`. */
+maintenanceReportSchema.pre("save", function assignRequestCode() {
   if (!this.requestCode && this._id) {
     this.requestCode = buildRequestCode(this);
   }
-  next();
 });
 
 module.exports = mongoose.model("MaintenanceReport", maintenanceReportSchema);

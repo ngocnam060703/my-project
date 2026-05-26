@@ -14,7 +14,7 @@ router.post(
   "/",
   auth,
   requireRole("user"),
-  applicationValidators.createApplication,
+  ...applicationValidators.createApplication,
   validateRequest,
   applicationController.create
 );
@@ -24,7 +24,7 @@ router.get(
   "/stats/by-day",
   auth,
   requireRole("admin", "manager"),
-  applicationValidators.statsByDay,
+  ...applicationValidators.statsByDay,
   validateRequest,
   applicationController.statsByDay
 );
@@ -34,7 +34,7 @@ router.get(
   "/",
   auth,
   requireRole("admin", "manager"),
-  applicationValidators.listApplications,
+  ...applicationValidators.listApplications,
   validateRequest,
   applicationController.list
 );
@@ -65,7 +65,7 @@ router.patch(
   "/:id/reject",
   auth,
   requireRole("admin", "manager"),
-  applicationValidators.rejectApplication,
+  ...applicationValidators.rejectApplication,
   validateRequest,
   applicationController.reject
 );

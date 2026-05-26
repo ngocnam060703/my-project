@@ -100,6 +100,10 @@ export interface StayHistoryRow {
     | "pending_checkin"
     | "staying"
     | "checked_out"
+    | "ended_cancelled"
+    | "ended_transfer_settled"
+    | "ended_terminated"
+    | "ended_expired"
     | "pending_bed"
     | "not_started"
     | string;
@@ -251,6 +255,14 @@ export interface TransferFinancialSnapshot {
   supplementAmount?: number;
   walletCreditAmount?: number;
   financialAction?: "none" | "supplement" | "wallet_credit";
+  /** room_offset = đã có HĐ tiền phòng admin, có thể phụ thu; defer_room_invoice = chưa có HĐ, chốt ngày ở */
+  financialMode?: "room_offset" | "defer_room_invoice";
+  hasPaidOldRoomBill?: boolean;
+  hasAnyOldRoomBill?: boolean;
+  settlementDate?: string;
+  newFirstMonthProrated?: number;
+  daysNewFirstMonth?: number;
+  totalCreditFromOld?: number;
   priceComparison?: "higher" | "lower" | "equal";
   labels?: {
     oldRoom?: { roomNumber?: string; areaName?: string };
@@ -319,6 +331,15 @@ export interface Contract {
   renewedFromContract?: string | Contract | null;
   isRenewalContract?: boolean;
   isTransferContract?: boolean;
+  registration?: string | { _id: string };
+  transferRegistration?: {
+    _id: string;
+    transferReason?: string;
+    status?: string;
+    transferPhase?: string;
+    targetRoom?: Room;
+    fromRoom?: Room;
+  };
   bed?: string | Bed | null;
   financialLockedAt?: string | null;
   displayPricing?: {
@@ -494,6 +515,12 @@ export interface Bill {
     quantity?: number;
     amount?: number;
   }>;
+  commonServiceBreakdown?: Array<{
+    service?: string;
+    name?: string;
+    unit?: string;
+    totalAmount?: number;
+  }>;
 }
 
 export interface ViolationRule {
@@ -513,7 +540,7 @@ export interface ViolationRule {
 
 export type ViolationStatus = "pending" | "resolved";
 
-export type DisciplinaryActionType = "warning" | "fine" | "expulsion";
+export type DisciplinaryActionType = "warning" | "fine" | "compensation" | "expulsion";
 
 export interface ViolationResolution {
   actionType: DisciplinaryActionType;
@@ -560,8 +587,25 @@ export interface MaintenanceReport {
   _id: string;
   user?: User | string;
   room?: Room | string;
-  incidentType: MaintenanceIncidentType;
+  incidentType?: MaintenanceIncidentType | "";
+  facility?: { _id: string; name?: string; code?: string } | string | null;
+  facilityLocation?: string | null;
+  damagedItemLabel?: string;
   description: string;
+  /** @deprecated — dùng compensationBill / requiresPayment */
+  hasCompensationBill?: boolean;
+  /** Chờ admin phán quyết (pending / processing) */
+  awaitingAdminRuling?: boolean;
+  /** Ghi chú phán quyết BQL — chỉ khi đã resolved */
+  adminRulingNote?: string;
+  /** Cần thanh toán bồi thường (student_caused + đã có số tiền) */
+  requiresPayment?: boolean;
+  compensationBill?: {
+    _id: string;
+    billCode?: string;
+    total: number;
+    status: string;
+  };
   images?: string[];
   status: MaintenanceReportStatus;
   adminNote?: string;

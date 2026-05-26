@@ -24,13 +24,17 @@ const resolveDisciplinaryRules = [
   body("note").optional().isString().isLength({ max: 2000 }),
   body().custom((_, { req }) => {
     const at = req.body.actionType;
-    if (!["warning", "fine", "expulsion"].includes(at)) {
-      throw new Error("actionType phải là: warning | fine | expulsion");
+    if (!["warning", "fine", "compensation", "expulsion"].includes(at)) {
+      throw new Error("actionType phải là: warning | fine | compensation | expulsion");
     }
-    if (at === "fine") {
+    if (at === "fine" || at === "compensation") {
       const n = Number(req.body.penaltyAmount);
       if (!Number.isFinite(n) || n <= 0) {
-        throw new Error("Với hình thức phạt tiền, penaltyAmount phải là số dương");
+        throw new Error(
+          at === "fine"
+            ? "Với hình thức phạt tiền, penaltyAmount phải là số dương"
+            : "Với hình thức bồi thường, penaltyAmount phải là số dương"
+        );
       }
     }
     return true;

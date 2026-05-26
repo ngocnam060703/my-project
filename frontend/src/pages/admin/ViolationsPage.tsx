@@ -40,6 +40,7 @@ import {
   violationRecordedFine,
   violationRecordedCompensation,
   violationRecordedTotal,
+  violationCompensationDisplay,
 } from "../../utils/violationDisplay";
 import type { ViolationRule, Violation, User, Room } from "../../types";
 
@@ -52,6 +53,7 @@ const severityVi: Record<string, string> = {
 const actionTypeVi: Record<string, string> = {
   warning: "Cảnh cáo / nhắc nhở",
   fine: "Phạt tiền",
+  compensation: "Bồi thường",
   expulsion: "Buộc rời KTX",
 };
 
@@ -126,6 +128,7 @@ const ViolationsPage: React.FC = () => {
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [semester, setSemester] = useState("HK1");
+  const [activeTab, setActiveTab] = useState("rules");
 
   useEffect(() => {
     const t = window.setTimeout(() => setSearchDebounced(searchInput.trim()), 400);
@@ -162,37 +165,50 @@ const ViolationsPage: React.FC = () => {
     }
   }, []);
 
-  const loadViolations = useCallback(async () => {
-    setLoading(true);
-    try {
-      const vRes = await violationsApi.getAll({
-        page: vPage,
-        limit: vPageSize,
-        schoolYear,
-        semester,
-        user: filterUserId,
-        room: filterRoomId,
-        search: searchDebounced || undefined,
-        severity: filterSeverity,
-        status: filterStatus,
-      });
-      setViolations(vRes.data?.violations || []);
-      setVTotal(vRes.data?.total || 0);
-    } catch {
-      message.error("Không tải được danh sách vi phạm");
-    } finally {
-      setLoading(false);
-    }
-  }, [vPage, vPageSize, schoolYear, semester, filterUserId, filterRoomId, searchDebounced, filterSeverity, filterStatus]);
+  const loadViolations = useCallback(
+    async (overrides?: { schoolYear?: string; semester?: string; page?: number; status?: string }) => {
+      const sy = overrides?.schoolYear ?? schoolYear;
+      const sem = overrides?.semester ?? semester;
+      const page = overrides?.page ?? vPage;
+      const status =
+        overrides && Object.prototype.hasOwnProperty.call(overrides, "status") ? overrides.status : filterStatus;
+      setLoading(true);
+      try {
+        const vRes = await violationsApi.getAll({
+          page,
+          limit: vPageSize,
+          schoolYear: sy,
+          semester: sem,
+          user: filterUserId,
+          room: filterRoomId,
+          search: searchDebounced || undefined,
+          severity: filterSeverity,
+          status,
+        });
+        setViolations(vRes.data?.violations || []);
+        setVTotal(vRes.data?.total || 0);
+      } catch {
+        message.error("Không tải được danh sách vi phạm");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [vPage, vPageSize, schoolYear, semester, filterUserId, filterRoomId, searchDebounced, filterSeverity, filterStatus]
+  );
 
-  const loadSummary = useCallback(async () => {
-    try {
-      const r = await violationsApi.getStudentsSummary({ schoolYear, semester });
-      setSummary(r.data?.students || []);
-    } catch {
-      message.error("Không tải được tổng điểm");
-    }
-  }, [schoolYear, semester]);
+  const loadSummary = useCallback(
+    async (overrides?: { schoolYear?: string; semester?: string }) => {
+      const sy = overrides?.schoolYear ?? schoolYear;
+      const sem = overrides?.semester ?? semester;
+      try {
+        const r = await violationsApi.getStudentsSummary({ schoolYear: sy, semester: sem });
+        setSummary(r.data?.students || []);
+      } catch {
+        message.error("Không tải được tổng điểm");
+      }
+    },
+    [schoolYear, semester]
+  );
 
   useEffect(() => {
     void loadRules();
@@ -212,6 +228,8 @@ const ViolationsPage: React.FC = () => {
 
   const submitViolation = async (v: Record<string, unknown>) => {
     try {
+      const sy = String(v.schoolYear || defaultSchoolYear()).trim();
+      const sem = String(v.semester || "HK1").trim();
       const imgs: string[] = [];
       for (const f of fileList) {
         if (f.originFileObj) {
@@ -219,12 +237,12 @@ const ViolationsPage: React.FC = () => {
           imgs.push(b64);
         }
       }
-      await violationsApi.create({
+      const res = await violationsApi.create({
         ruleId: v.ruleId,
         userId: v.splitToRoom ? undefined : v.userId,
         roomId: v.roomId,
-        semester: v.semester,
-        schoolYear: v.schoolYear,
+        semester: sem,
+        schoolYear: sy,
         description: v.description || "",
         images: imgs,
         fineAmount: Number(v.fineAmount) || 0,
@@ -233,12 +251,21 @@ const ViolationsPage: React.FC = () => {
         immediateExpulsion: !!v.immediateExpulsion,
         noIndividualPoints: !!v.noIndividualPoints,
       });
-      message.success("Đã ghi nhận vi phạm thành công");
+      const createdCount = Number((res.data as { created?: number })?.created) || 0;
+      message.success(
+        createdCount > 1 ? `Đã ghi nhận ${createdCount} vi phạm (chia cả phòng)` : "Đã ghi nhận vi phạm thành công"
+      );
       form.resetFields();
-      form.setFieldsValue({ semester: "HK1", schoolYear: defaultSchoolYear() });
+      form.setFieldsValue({ semester: sem, schoolYear: sy });
       setFileList([]);
-      void loadViolations();
-      void loadSummary();
+      setSchoolYear(sy);
+      setSemester(sem);
+      setVPage(1);
+      const listStatusAfterCreate = filterStatus === "resolved" ? undefined : filterStatus;
+      if (filterStatus === "resolved") setFilterStatus(undefined);
+      setActiveTab("list");
+      await loadViolations({ schoolYear: sy, semester: sem, page: 1, status: listStatusAfterCreate });
+      await loadSummary({ schoolYear: sy, semester: sem });
     } catch (e: unknown) {
       message.error((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Lỗi");
     }
@@ -252,7 +279,8 @@ const ViolationsPage: React.FC = () => {
       const r = await disciplinaryApi.resolve({
         violationId: target._id,
         actionType: vals.actionType,
-        penaltyAmount: vals.actionType === "fine" ? vals.penaltyAmount : undefined,
+        penaltyAmount:
+          vals.actionType === "fine" || vals.actionType === "compensation" ? vals.penaltyAmount : undefined,
         note: vals.note,
       });
 
@@ -425,29 +453,17 @@ const ViolationsPage: React.FC = () => {
     const loadRoomStudents = async () => {
       setRoomStudentsLoading(true);
       try {
-        let list: User[] = [];
-        try {
-          const res = await client.get(`/rooms/${encodeURIComponent(roomId)}/residents`);
-          const residents = (res.data?.residents || []) as Array<{ user?: User }>;
-          const uniq = new Map<string, User>();
-          residents.forEach((it) => {
-            const u = it.user;
-            if (u?._id) uniq.set(String(u._id), u);
-          });
-          list = Array.from(uniq.values());
-        } catch {
-          const cRes = await client.get("/contracts", { params: { room: roomId, limit: 200, status: "active" } });
-          const contracts = (cRes.data?.contracts || []) as Array<{ user?: User; status?: string }>;
-          const uniq = new Map<string, User>();
-          contracts.forEach((c) => {
-            const u = c.user;
-            if (u && typeof u === "object" && u._id) uniq.set(String(u._id), u);
-          });
-          list = Array.from(uniq.values());
-        }
+        const res = await violationsApi.getRoomResidents(roomId);
+        const list = (res.data?.residents || [])
+          .map((it) => it.user)
+          .filter((u): u is User => !!u && typeof u === "object" && !!u._id);
         if (mounted) setRoomStudents(list);
-      } catch {
-        if (mounted) setRoomStudents([]);
+      } catch (e: unknown) {
+        if (mounted) {
+          setRoomStudents([]);
+          const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+          message.error(msg || "Không tải được sinh viên trong phòng — thử khởi động lại backend");
+        }
       } finally {
         if (mounted) setRoomStudentsLoading(false);
       }
@@ -460,12 +476,13 @@ const ViolationsPage: React.FC = () => {
 
   const filterToolbar = (
     <Space wrap style={{ marginBottom: 12 }} size="middle">
-      <Input
-        placeholder="Tìm theo tên vi phạm, mô tả, sinh viên..."
+      <Input.Search
+        placeholder="Tìm theo tên hoặc MSSV"
         allowClear
-        style={{ width: 280 }}
+        style={{ width: 260 }}
         value={searchInput}
         onChange={(e) => setSearchInput(e.target.value)}
+        onSearch={(v) => setSearchInput(v)}
       />
       <Select
         allowClear
@@ -590,6 +607,8 @@ const ViolationsPage: React.FC = () => {
       </Row>
 
       <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
         items={[
           {
             key: "rules",
@@ -696,8 +715,8 @@ const ViolationsPage: React.FC = () => {
                     const split = form.getFieldValue("splitToRoom");
                     message.warning(
                       split
-                        ? "Chọn loại vi phạm từ danh sách và chọn phòng. Với «chia cả phòng», phòng phải đang có ít nhất một hợp đồng hiệu lực."
-                        : "Chọn loại vi phạm từ danh sách, phòng và sinh viên vi phạm."
+                        ? "Chọn loại vi phạm từ danh sách và chọn phòng. Với «chia cả phòng», phòng phải có SV đang ở theo HĐ active hiệu lực."
+                        : "Chọn phòng và sinh viên — danh sách SV theo HĐ đang hiệu lực (sau chuyển phòng là phòng mới)."
                     );
                   }}
                   initialValues={{ semester: "HK1", schoolYear: defaultSchoolYear(), fineAmount: 0, compensationAmount: 0 }}
@@ -768,7 +787,7 @@ const ViolationsPage: React.FC = () => {
                                   ? "Đang tải sinh viên trong phòng..."
                                   : selectableStudents.length
                                     ? "Chọn sinh viên trong phòng đã chọn"
-                                    : "Phòng này chưa có sinh viên đang ở"
+                                    : "Phòng này chưa có SV với HĐ active hiệu lực"
                                 : "Vui lòng chọn phòng trước"
                             }
                             disabled={!selectedRoomId || roomStudentsLoading}
@@ -943,10 +962,27 @@ const ViolationsPage: React.FC = () => {
                                 const totalRecorded = violationRecordedTotal(r);
                                 setResolveTarget(r);
                                 resolveForm.resetFields();
+                                const defaultAction =
+                                  recordedComp > 0 && recordedFine === 0
+                                    ? "compensation"
+                                    : recordedFine > 0
+                                      ? "fine"
+                                      : totalRecorded > 0
+                                        ? "fine"
+                                        : "warning";
+                                const defaultAmount =
+                                  defaultAction === "compensation"
+                                    ? recordedComp
+                                    : defaultAction === "fine"
+                                      ? recordedFine || totalRecorded
+                                      : undefined;
                                 resolveForm.setFieldsValue({
-                                  actionType: totalRecorded > 0 ? "fine" : "warning",
-                                  penaltyAmount: totalRecorded > 0 ? totalRecorded : recordedFine || undefined,
-                                  note: recordedComp > 0 && recordedFine === 0 ? `Bồi thường ghi nhận: ${recordedComp.toLocaleString("vi-VN")}đ` : "",
+                                  actionType: defaultAction,
+                                  penaltyAmount: defaultAmount || undefined,
+                                  note:
+                                    recordedComp > 0 && recordedFine === 0
+                                      ? `Bồi thường ghi nhận: ${recordedComp.toLocaleString("vi-VN")}đ`
+                                      : "",
                                 });
                               }}
                             >
@@ -1087,11 +1123,18 @@ const ViolationsPage: React.FC = () => {
                   <Descriptions.Item label="Quyết định kỷ luật">
                     {actionTypeVi[detail.resolution.actionType] || detail.resolution.actionType}
                   </Descriptions.Item>
-                  {(detail.resolution.penaltyAmount || 0) > 0 && (
-                    <Descriptions.Item label="Tiền phạt (theo quyết định)">
-                      {detail.resolution.penaltyAmount!.toLocaleString("vi-VN")}đ
-                    </Descriptions.Item>
-                  )}
+                  {(detail.resolution.penaltyAmount || 0) > 0 &&
+                    (detail.resolution.actionType === "fine" || detail.resolution.actionType === "compensation") && (
+                      <Descriptions.Item
+                        label={
+                          detail.resolution.actionType === "compensation"
+                            ? "Bồi thường (theo quyết định)"
+                            : "Tiền phạt (theo quyết định)"
+                        }
+                      >
+                        {detail.resolution.penaltyAmount!.toLocaleString("vi-VN")}đ
+                      </Descriptions.Item>
+                    )}
                   <Descriptions.Item label="Ghi chú xử lý">{detail.resolution.note?.trim() || "—"}</Descriptions.Item>
                   <Descriptions.Item label="Người xử lý">
                     {typeof detail.resolution.resolvedBy === "object" ? detail.resolution.resolvedBy?.fullName || "—" : "—"}
@@ -1155,22 +1198,38 @@ const ViolationsPage: React.FC = () => {
                   options={[
                     { value: "warning", label: actionTypeVi.warning },
                     { value: "fine", label: actionTypeVi.fine },
+                    { value: "compensation", label: actionTypeVi.compensation },
                     { value: "expulsion", label: actionTypeVi.expulsion },
                   ]}
                 />
               </Form.Item>
               <Form.Item shouldUpdate={(prev, cur) => prev.actionType !== cur.actionType} noStyle>
-                {() =>
-                  resolveForm.getFieldValue("actionType") === "fine" ? (
-                    <Form.Item
-                      name="penaltyAmount"
-                      label="Số tiền phạt (VNĐ)"
-                      rules={[{ required: true, message: "Nhập số tiền phạt" }]}
-                    >
-                      <InputNumber min={1} style={{ width: "100%" }} placeholder="VD: 100000" />
-                    </Form.Item>
-                  ) : null
-                }
+                {() => {
+                  const at = resolveForm.getFieldValue("actionType");
+                  if (at === "fine") {
+                    return (
+                      <Form.Item
+                        name="penaltyAmount"
+                        label="Số tiền phạt (VNĐ)"
+                        rules={[{ required: true, message: "Nhập số tiền phạt" }]}
+                      >
+                        <InputNumber min={1} style={{ width: "100%" }} placeholder="VD: 100000" />
+                      </Form.Item>
+                    );
+                  }
+                  if (at === "compensation") {
+                    return (
+                      <Form.Item
+                        name="penaltyAmount"
+                        label="Số tiền bồi thường (VNĐ)"
+                        rules={[{ required: true, message: "Nhập số tiền bồi thường" }]}
+                      >
+                        <InputNumber min={1} style={{ width: "100%" }} placeholder="VD: 30000" />
+                      </Form.Item>
+                    );
+                  }
+                  return null;
+                }}
               </Form.Item>
               <Form.Item name="note" label="Ghi chú quyết định">
                 <Input.TextArea rows={3} placeholder="Tùy chọn" />

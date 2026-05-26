@@ -7,10 +7,25 @@ function handleServiceError(res, e) {
   res.status(status).json({ message: e.message || "Lỗi hệ thống" });
 }
 
+/** GET /api/reports/room-facilities — CSVC phòng cho form khai báo */
+exports.roomFacilities = async (req, res) => {
+  try {
+    if (!maintenanceReportService.isStudentRole(req.user.role)) {
+      return res.status(403).json({ message: "Chỉ sinh viên" });
+    }
+    const data = await maintenanceReportService.listRoomFacilityOptions(req.user._id);
+    res.json(data);
+  } catch (e) {
+    handleServiceError(res, e);
+  }
+};
+
 /** GET /api/my-reports */
 exports.listMine = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên" });
+    if (!maintenanceReportService.isStudentRole(req.user.role)) {
+      return res.status(403).json({ message: "Chỉ sinh viên" });
+    }
     const items = await maintenanceReportService.listMine(req.user._id);
     res.json(items);
   } catch (e) {
@@ -21,7 +36,9 @@ exports.listMine = async (req, res) => {
 /** POST /api/reports */
 exports.create = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên được tạo khai báo" });
+    if (!maintenanceReportService.isStudentRole(req.user.role)) {
+      return res.status(403).json({ message: "Chỉ sinh viên được tạo khai báo" });
+    }
     const populated = await maintenanceReportService.createReport(req.user, req.body);
     res.status(201).json(populated);
   } catch (e) {
@@ -38,13 +55,17 @@ exports.getById = async (req, res) => {
       .populate("room", "roomNumber area")
       .populate("room.area", "name")
       .populate("user", "fullName studentId email phone")
+      .populate("facility", "name code")
       .populate("processedBy", "fullName")
       .populate("bill", "billCode total status billType");
     if (!doc) return res.status(404).json({ message: "Không tìm thấy khai báo" });
 
     const isStaff = req.user.role === "admin" || req.user.role === "manager";
     const isOwner = String(doc.user?._id || doc.user) === String(req.user._id);
-    if (isStaff || (isOwner && req.user.role === "user")) return res.json(doc);
+    if (isStaff) return res.json(doc);
+    if (isOwner && maintenanceReportService.isStudentRole(req.user.role)) {
+      return res.json(maintenanceReportService.toStudentMaintenanceDto(doc));
+    }
     return res.status(403).json({ message: "Không có quyền xem khai báo này" });
   } catch (e) {
     handleServiceError(res, e);
@@ -54,7 +75,9 @@ exports.getById = async (req, res) => {
 /** DELETE /api/reports/:id — hủy (soft: status cancelled) */
 exports.cancel = async (req, res) => {
   try {
-    if (req.user.role !== "user") return res.status(403).json({ message: "Chỉ sinh viên" });
+    if (!maintenanceReportService.isStudentRole(req.user.role)) {
+      return res.status(403).json({ message: "Chỉ sinh viên" });
+    }
     const { id } = req.params;
     if (!mongoose.isValidObjectId(String(id))) return res.status(400).json({ message: "id không hợp lệ" });
     const result = await maintenanceReportService.cancelReport(req.user._id, id);

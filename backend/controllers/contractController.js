@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const Contract = require("../models/Contract");
 const Room = require("../models/Room");
 const User = require("../models/User");
+const Registration = require("../models/Registration");
+const Application = require("../models/Application");
 const Notification = require("../models/Notification");
 const ContractExtendRequest = require("../models/ContractExtendRequest");
 const {
@@ -28,17 +30,282 @@ const { processRenewalHandovers, runContractLifecycleJobs } = require("../servic
 const {
   buildContractPricingFields,
   applyPricingSnapshotToContract,
+  lockTransferContractPricingOnSign,
   assertNoManualPricingInBody,
   resolveContractDisplayPricing,
   ensureContractPricingSnapshot,
   isContractPricingFrozen,
   hasPricingSnapshot,
+  isTransferContractLike,
 } = require("../services/contractPricing");
 
 function attachContractDisplayPricing(contractLean, roomLean) {
   if (!contractLean) return contractLean;
   const display = resolveContractDisplayPricing(contractLean, roomLean);
   return { ...contractLean, displayPricing: display };
+}
+
+function hasPopulatedRoom(c) {
+  return !!(c?.room && typeof c.room === "object" && c.room.roomNumber);
+}
+
+function hasPopulatedUser(c) {
+  return !!(c?.user && typeof c.user === "object" && (c.user.fullName || c.user.studentId));
+}
+
+function contractRoomRefId(c) {
+  if (!c) return "";
+  return String(c.room?._id || c.room || "");
+}
+
+/** Nạp phòng từ room / đơn chuyển / đơn đăng ký KTX cho danh sách HĐ admin. */
+async function loadRoomContextMapsForContracts(rows) {
+  const regIds = new Set();
+  const appIds = new Set();
+  const roomIdSet = new Set();
+
+  for (const c of rows) {
+    const rid = contractRoomRefId(c);
+    if (rid) roomIdSet.add(rid);
+    const regId = c.registration?._id || c.registration;
+    if (regId) regIds.add(String(regId));
+    const appId = c.application?._id || c.application;
+    if (appId) appIds.add(String(appId));
+  }
+
+  const [transferRegs, apps] = await Promise.all([
+    regIds.size
+      ? Registration.find({ _id: { $in: [...regIds] } }).select("room fromRoom").lean()
+      : [],
+    appIds.size
+      ? Application.find({ _id: { $in: [...appIds] } }).select("assignedRoom").lean()
+      : [],
+  ]);
+
+  const regRoomByRegId = new Map(transferRegs.map((r) => [String(r._id), r.room]));
+  const appRoomByAppId = new Map(apps.map((a) => [String(a._id), a.assignedRoom]));
+
+  for (const rid of regRoomByRegId.values()) if (rid) roomIdSet.add(String(rid));
+  for (const rid of appRoomByAppId.values()) if (rid) roomIdSet.add(String(rid));
+
+  const rooms = roomIdSet.size
+    ? await Room.find({ _id: { $in: [...roomIdSet] } })
+        .select(ROOM_SELECT_FOR_PRICING)
+        .populate("area", "name")
+        .lean()
+    : [];
+  const roomById = new Map(rooms.map((r) => [String(r._id), r]));
+
+  return { roomById, regRoomByRegId, appRoomByAppId };
+}
+
+function resolveRoomLeanForContractRow(c, ctx) {
+  const { roomById, regRoomByRegId, appRoomByAppId } = ctx;
+  if (hasPopulatedRoom(c)) return c.room;
+
+  const directId = contractRoomRefId(c);
+  if (directId && roomById.has(directId)) return roomById.get(directId);
+
+  if (c.registration) {
+    const targetId = regRoomByRegId.get(String(c.registration?._id || c.registration));
+    if (targetId && roomById.has(String(targetId))) return roomById.get(String(targetId));
+  }
+
+  if (c.application) {
+    const assigned = appRoomByAppId.get(String(c.application?._id || c.application));
+    if (assigned && roomById.has(String(assigned))) return roomById.get(String(assigned));
+  }
+
+  return null;
+}
+
+const ROOM_SELECT_FOR_PRICING =
+  "roomNumber floor area capacity maxCapacity price currentPrice currentOccupancy status";
+
+/** Phòng đích + phòng cũ từ đơn chuyển phòng (trang admin HĐ). */
+async function enrichContractTransferContextForAdmin(contractLean) {
+  if (!contractLean || !isTransferContractLike(contractLean)) return contractLean;
+  const regId = contractLean.registration?._id || contractLean.registration;
+  if (!regId) return contractLean;
+  const reg = await Registration.findById(regId)
+    .select("room fromRoom transferReason status transferPhase")
+    .populate({
+      path: "room",
+      select: ROOM_SELECT_FOR_PRICING,
+      populate: { path: "area", select: "name" },
+    })
+    .populate({
+      path: "fromRoom",
+      select: ROOM_SELECT_FOR_PRICING,
+      populate: { path: "area", select: "name" },
+    })
+    .lean();
+  if (!reg) return contractLean;
+  return {
+    ...contractLean,
+    transferRegistration: {
+      _id: reg._id,
+      transferReason: reg.transferReason,
+      status: reg.status,
+      transferPhase: reg.transferPhase,
+      targetRoom: reg.room,
+      fromRoom: reg.fromRoom,
+    },
+  };
+}
+
+/** Đồng bộ giá HĐ chờ ký từ phòng + displayPricing cho trang admin. */
+async function enrichContractsForAdminList(rows) {
+  if (!Array.isArray(rows) || !rows.length) return rows;
+  const {
+    isPendingContractAwaitingSign,
+    applyPricingSnapshotToContract,
+  } = require("../services/contractPricing");
+
+  const pendingIds = rows
+    .filter((c) => c && isPendingContractAwaitingSign(c))
+    .map((c) => c._id)
+    .filter(Boolean);
+  if (pendingIds.length) {
+    const pendingDocs = await Contract.find({ _id: { $in: pendingIds } });
+    const transferRegIds = [
+      ...new Set(
+        pendingDocs
+          .filter((d) => isTransferContractLike(d) && d.registration)
+          .map((d) => String(d.registration))
+          .filter(Boolean)
+      ),
+    ];
+    const transferRegs = transferRegIds.length
+      ? await Registration.find({ _id: { $in: transferRegIds } }).select("room").lean()
+      : [];
+    const transferTargetRoomByReg = new Map(transferRegs.map((r) => [String(r._id), r.room]));
+
+    const appIds = [
+      ...new Set(
+        pendingDocs
+          .filter((d) => d.application)
+          .map((d) => String(d.application))
+          .filter(Boolean)
+      ),
+    ];
+    const apps = appIds.length
+      ? await Application.find({ _id: { $in: appIds } }).select("assignedRoom").lean()
+      : [];
+    const appRoomByAppId = new Map(apps.map((a) => [String(a._id), a.assignedRoom]));
+
+    const roomIds = [
+      ...new Set(
+        pendingDocs.flatMap((d) => {
+          const ids = [String(d.room)];
+          if (isTransferContractLike(d) && d.registration) {
+            const target = transferTargetRoomByReg.get(String(d.registration));
+            if (target) ids.push(String(target));
+          }
+          if (d.application) {
+            const ar = appRoomByAppId.get(String(d.application));
+            if (ar) ids.push(String(ar));
+          }
+          return ids.filter(Boolean);
+        })
+      ),
+    ];
+    const rooms = await Room.find({ _id: { $in: roomIds } }).lean();
+    const roomMap = new Map(rooms.map((r) => [String(r._id), r]));
+    const userIds = [...new Set(pendingDocs.map((d) => String(d.user)).filter(Boolean))];
+    const users = await User.find({ _id: { $in: userIds } }).select("priorityType").lean();
+    const userMap = new Map(users.map((u) => [String(u._id), u]));
+    await Promise.all(
+      pendingDocs.map(async (doc) => {
+        let roomDoc = roomMap.get(String(doc.room));
+        if (isTransferContractLike(doc) && doc.registration) {
+          const targetId = transferTargetRoomByReg.get(String(doc.registration));
+          if (targetId) {
+            roomDoc = roomMap.get(String(targetId)) || roomDoc;
+            if (String(doc.room) !== String(targetId)) {
+              doc.room = targetId;
+              doc.bed = null;
+            }
+          }
+        }
+        if (!roomDoc && doc.application) {
+          const assigned = appRoomByAppId.get(String(doc.application));
+          if (assigned) {
+            roomDoc = roomMap.get(String(assigned)) || null;
+            if (roomDoc && String(doc.room) !== String(assigned)) {
+              doc.room = assigned;
+              doc.bed = null;
+            }
+          }
+        }
+        const userDoc = userMap.get(String(doc.user));
+        if (!roomDoc) return;
+        applyPricingSnapshotToContract(doc, { roomDoc, userDoc }, { force: true });
+        await doc.save();
+      })
+    );
+    const refreshed = await Contract.find({ _id: { $in: pendingIds } }).lean();
+    const byId = new Map(refreshed.map((r) => [String(r._id), r]));
+    rows = rows.map((c) => {
+      const fresh = byId.get(String(c._id));
+      if (!fresh) return c;
+      const merged = { ...c, ...fresh };
+      if (hasPopulatedUser(c)) merged.user = c.user;
+      return merged;
+    });
+  }
+
+  const roomCtx = await loadRoomContextMapsForContracts(rows);
+
+  const enriched = await Promise.all(
+    rows.map(async (c) => {
+      let roomLean = resolveRoomLeanForContractRow(c, roomCtx);
+      let row = roomLean ? { ...c, room: roomLean } : { ...c };
+      if (isTransferContractLike(row) && row.registration) {
+        const withTransfer = await enrichContractTransferContextForAdmin(row);
+        const target = withTransfer.transferRegistration?.targetRoom;
+        if (target && typeof target === "object") {
+          row = { ...withTransfer, room: target };
+          roomLean = target;
+        } else {
+          row = withTransfer;
+          if (!roomLean) roomLean = resolveRoomLeanForContractRow(withTransfer, roomCtx);
+        }
+      } else if (!roomLean) {
+        roomLean = resolveRoomLeanForContractRow(row, roomCtx);
+        if (roomLean) row = { ...row, room: roomLean };
+      }
+      return attachContractDisplayPricing(row, roomLean);
+    })
+  );
+  return enriched;
+}
+
+/** Sinh viên: đồng bộ phòng HĐ chuyển + transferRegistration (lịch sử HĐ). */
+async function enrichStudentContractsForList(rows) {
+  if (!Array.isArray(rows) || !rows.length) return rows;
+  const { alignAndRefreshContractListRows } = require("../services/contractResidenceSync");
+  const synced = await alignAndRefreshContractListRows(rows);
+  return Promise.all(
+    synced.map(async (c) => {
+      if (!isTransferContractLike(c)) {
+        const roomLean = c.room && typeof c.room === "object" ? c.room : null;
+        return attachContractDisplayPricing(c, roomLean);
+      }
+      let row = await enrichContractTransferContextForAdmin(c);
+      const target = row.transferRegistration?.targetRoom;
+      const roomLean =
+        target && typeof target === "object"
+          ? target
+          : row.room && typeof row.room === "object"
+            ? row.room
+            : null;
+      if (target && typeof target === "object") {
+        row = { ...row, room: target };
+      }
+      return attachContractDisplayPricing(row, roomLean);
+    })
+  );
 }
 
 const CONTRACT_STATUSES = [
@@ -186,6 +453,8 @@ exports.getAll = async (req, res) => {
                     capacity: "$room.capacity",
                     currentOccupancy: "$room.currentOccupancy",
                     price: "$room.price",
+                    currentPrice: "$room.currentPrice",
+                    maxCapacity: "$room.maxCapacity",
                     area: { _id: "$roomArea._id", name: "$roomArea.name" },
                   },
                 },
@@ -219,7 +488,16 @@ exports.getAll = async (req, res) => {
                   paymentConfirmedAt: 1,
                   paymentConfirmedBy: 1,
                   monthlyRent: 1,
+                  contractPrice: 1,
+                  roomCurrentPriceSnapshot: 1,
+                  roomCapacityAtSigning: 1,
+                  baseSlotPriceBeforeDiscount: 1,
+                  priorityDiscountPercent: 1,
+                  financialLockedAt: 1,
                   depositAmount: 1,
+                  isTransferContract: 1,
+                  transferredFromContract: 1,
+                  studentSignStatus: 1,
                   createdAt: 1,
                   updatedAt: 1,
                 },
@@ -231,16 +509,19 @@ exports.getAll = async (req, res) => {
       ];
 
       const agg = await Contract.aggregate(pipeline);
-      const items = agg?.[0]?.items || [];
+      let items = agg?.[0]?.items || [];
       const totalCount = agg?.[0]?.total?.[0]?.count || 0;
+      const { alignAndRefreshContractListRows } = require("../services/contractResidenceSync");
+      items = await alignAndRefreshContractListRows(items);
+      items = await enrichContractsForAdminList(items);
       return res.json({ contracts: items, total: totalCount });
     }
 
-    const contracts = await Contract.find(baseMatch)
+    let contracts = await Contract.find(baseMatch)
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth faculty major")
       .populate({
         path: "room",
-        select: "roomNumber floor area capacity price currentOccupancy status",
+        select: "roomNumber floor area capacity maxCapacity price currentPrice currentOccupancy status",
         populate: [
           { path: "area", select: "name" },
           { path: "roomLeader", select: "_id fullName" },
@@ -250,7 +531,12 @@ exports.getAll = async (req, res) => {
       .limit(lim)
       .sort({ createdAt: -1 });
     const total = await Contract.countDocuments(baseMatch);
-    res.json({ contracts, total });
+    const { alignAndRefreshContractListRows } = require("../services/contractResidenceSync");
+    let contractsSynced = await alignAndRefreshContractListRows(
+      contracts.map((c) => (c.toObject ? c.toObject() : c))
+    );
+    contractsSynced = await enrichContractsForAdminList(contractsSynced);
+    res.json({ contracts: contractsSynced, total });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -258,7 +544,7 @@ exports.getAll = async (req, res) => {
 
 exports.getMyContracts = async (req, res) => {
   try {
-    const contracts = await Contract.find({ user: req.user._id })
+    let contracts = await Contract.find({ user: req.user._id })
       .populate({
         path: "room",
         select: "roomNumber floor area capacity price currentOccupancy status",
@@ -268,6 +554,9 @@ exports.getMyContracts = async (req, res) => {
         ],
       })
       .sort({ createdAt: -1 });
+    contracts = await enrichStudentContractsForList(
+      contracts.map((c) => (c.toObject ? c.toObject() : c))
+    );
     res.json(contracts);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -462,19 +751,59 @@ exports.getById = async (req, res) => {
       .populate("user", "fullName email phone studentId gender citizenId dateOfBirth")
       .populate({
         path: "room",
-        select: "roomNumber floor area capacity price currentOccupancy status",
+        select: ROOM_SELECT_FOR_PRICING,
         populate: [
           { path: "area", select: "name" },
           { path: "roomLeader", select: "_id fullName" },
         ],
       });
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+    const {
+      alignContractRoomWithOccupiedBed,
+      resolveContractRoomDocument,
+    } = require("../services/contractResidenceSync");
+    await alignContractRoomWithOccupiedBed(contract);
+    await resolveContractRoomDocument(contract);
+    const {
+      isPendingContractAwaitingSign,
+      applyPricingSnapshotToContract,
+    } = require("../services/contractPricing");
+    if (isPendingContractAwaitingSign(contract)) {
+      const [roomDoc, userDoc] = await Promise.all([
+        Room.findById(contract.room),
+        User.findById(contract.user).select("priorityType"),
+      ]);
+      if (roomDoc) {
+        applyPricingSnapshotToContract(contract, { roomDoc, userDoc }, { force: true });
+        await contract.save();
+      }
+    }
+    await contract.populate({
+      path: "room",
+      select: ROOM_SELECT_FOR_PRICING,
+      populate: [
+        { path: "area", select: "name" },
+        { path: "roomLeader", select: "_id fullName" },
+      ],
+    });
     const ownerId = String(contract.user?._id || contract.user || "");
     const isStudent = req.user.role === "user" || req.user.role === "student";
     if (isStudent && ownerId !== String(req.user._id)) {
       return res.status(403).json({ message: "Không có quyền xem" });
     }
-    res.json(contract);
+    const lean = contract.toObject ? contract.toObject() : contract;
+    let roomLean = lean.room && typeof lean.room === "object" ? lean.room : null;
+    let payload = attachContractDisplayPricing(lean, roomLean);
+    if (isTransferContractLike(payload)) {
+      payload = await enrichContractTransferContextForAdmin(payload);
+      const target = payload.transferRegistration?.targetRoom;
+      if (target && typeof target === "object") {
+        payload = { ...payload, room: target };
+        roomLean = target;
+        payload = attachContractDisplayPricing(payload, roomLean);
+      }
+    }
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -678,13 +1007,30 @@ exports.studentSign = async (req, res) => {
     if (contract.signedAt && !legacyTransferNeedsSign) {
       return res.status(400).json({ message: "Hợp đồng đã được ký" });
     }
-    const [roomDoc, userDoc] = await Promise.all([
-      Room.findById(contract.room),
-      User.findById(contract.user).select("priorityType"),
-    ]);
-    if (!roomDoc) return res.status(400).json({ message: "Không tìm thấy phòng của hợp đồng" });
-    applyPricingSnapshotToContract(contract, { roomDoc, userDoc, force: true });
+    const {
+      alignTransferContractRoomFromRegistration,
+      resolveContractRoomDocument,
+    } = require("../services/contractResidenceSync");
+    if (isTransferLike) {
+      await alignTransferContractRoomFromRegistration(contract);
+    }
+    const { roomDoc } = await resolveContractRoomDocument(contract);
+    const userDoc = await User.findById(contract.user).select("priorityType");
+    if (!roomDoc) {
+      return res.status(400).json({
+        message:
+          "Không tìm thấy phòng của hợp đồng. Liên hệ BQL để gán lại phòng trên đơn đăng ký / chuyển phòng.",
+      });
+    }
     const now = new Date();
+    if (isTransferLike) {
+      lockTransferContractPricingOnSign(contract, { roomDoc, userDoc, lockedAt: now });
+    } else if (String(contract.status) === "pending_payment") {
+      applyPricingSnapshotToContract(contract, { roomDoc, userDoc }, { force: true });
+      contract.financialLockedAt = now;
+    } else {
+      contract.financialLockedAt = contract.financialLockedAt || now;
+    }
     contract.signedAt = now;
     contract.studentSignStatus = "student_signed";
     contract.studentConfirmedAt = now;
@@ -692,8 +1038,16 @@ exports.studentSign = async (req, res) => {
     contract.studentSignIp = getClientIp(req);
     contract.studentSignUserAgent = String(req.headers["user-agent"] || "").slice(0, 500);
     contract.consentAcceptedAt = now;
-    contract.financialLockedAt = now;
     await contract.save();
+
+    if (!isTransferLike) {
+      try {
+        await tryAutoAssignBed(contract._id, req.user._id);
+      } catch {
+        // best-effort — admin có thể gán lại từ HĐ / phòng
+      }
+    }
+    await syncRoomAfterContractChange(roomDoc._id);
 
     await notifyAdminsStudentSigned({
       studentName: req.user.fullName,
@@ -704,32 +1058,36 @@ exports.studentSign = async (req, res) => {
     const io = getIO();
     if (isTransferLike) {
       contract.isTransferContract = true;
-      contract.paymentConfirmedAt = now;
-      contract.paymentConfirmedBy = req.user._id;
-      contract.adminReviewedAt = now;
-      contract.adminReviewedBy = req.user._id;
-      contract.status = "active";
       await contract.save();
-      try {
-        await tryAutoAssignBed(contract._id, req.user._id);
-      } catch {
-        // best-effort
+      if (contract.registration) {
+        const { emitTransferRegistrationChanged } = require("../services/roomTransferService");
+        emitTransferRegistrationChanged({
+          userId: req.user._id,
+          registrationId: contract.registration._id || contract.registration,
+          action: "student_signed",
+        });
       }
-      io.emit("registration:approved", {
+      io.emit("registration:transfer-changed", {
         userId: req.user._id.toString(),
-        message: "Hợp đồng chuyển phòng đã có hiệu lực",
+        action: "student_signed",
+      });
+      io.emit("contract:student-signed", {
+        userId: req.user._id.toString(),
+        contractId: String(contract._id),
+        message: "Bạn đã ký hợp đồng chuyển phòng. Chờ admin xác nhận.",
       });
       await Notification.create({
         user: req.user._id,
-        title: "Hợp đồng chuyển phòng có hiệu lực",
-        message: `Bạn đã ký hợp đồng ${contract.contractNumber}. Hợp đồng phòng mới đã active.`,
+        title: "Đã ký hợp đồng chuyển phòng",
+        message: `Bạn đã ký ${contract.contractNumber}. Vui lòng chờ admin xác nhận để hợp đồng có hiệu lực và hoàn tất chuyển phòng.`,
         type: "contract_signed",
         link: "/student/my-contracts",
       });
     } else {
-      io.emit("bill:new", {
+      io.emit("contract:student-signed", {
         userId: req.user._id.toString(),
-        message: "Bạn đã xác nhận thanh toán. Chờ admin xác nhận để hợp đồng có hiệu lực.",
+        contractId: String(contract._id),
+        message: "Bạn đã ký xác nhận hợp đồng. Chờ admin xác nhận để hợp đồng có hiệu lực.",
       });
       await Notification.create({
         user: req.user._id,
@@ -794,16 +1152,21 @@ exports.confirmPayment = async (req, res) => {
         return res.status(400).json({ message: "Chưa có file PDF hợp đồng đã ký. Vui lòng upload trước khi xác nhận." });
       }
     }
-    const [roomDoc, userDoc] = await Promise.all([
-      Room.findById(contract.room),
-      User.findById(contract.user).select("priorityType"),
-    ]);
-    if (roomDoc) {
-      applyPricingSnapshotToContract(contract, {
-        roomDoc,
-        userDoc,
-        force: !hasPricingSnapshot(contract),
+    const { resolveContractRoomDocument } = require("../services/contractResidenceSync");
+    const { roomDoc } = await resolveContractRoomDocument(contract);
+    const userDoc = await User.findById(contract.user).select("priorityType");
+    if (!roomDoc) {
+      return res.status(400).json({
+        message: "Không tìm thấy phòng của hợp đồng — kiểm tra đơn đăng ký / chuyển phòng trước khi xác nhận.",
       });
+    }
+    if (
+      roomDoc &&
+      String(contract.status) === "pending_payment" &&
+      !isContractPricingFrozen(contract) &&
+      !hasPricingSnapshot(contract)
+    ) {
+      applyPricingSnapshotToContract(contract, { roomDoc, userDoc });
     }
     if (!contract.financialLockedAt) {
       contract.financialLockedAt = contract.signedAt || contract.renewalConsentAt || new Date();
@@ -835,6 +1198,15 @@ exports.confirmPayment = async (req, res) => {
       return res.json(contract);
     }
 
+    if (contract.isTransferContract && contract.registration) {
+      const Registration = require("../models/Registration");
+      const { completeRoomTransferSettlement } = require("../services/roomTransferService");
+      const reg = await Registration.findById(contract.registration);
+      if (reg && reg.transferPhase !== "completed") {
+        await completeRoomTransferSettlement(reg, contract, { performedBy: req.user._id });
+      }
+    }
+
     contract.status = "active";
     await contract.save();
 
@@ -843,16 +1215,20 @@ exports.confirmPayment = async (req, res) => {
     } catch {
       // best-effort
     }
+    await syncRoomAfterContractChange(contract.room);
 
     const io = getIO();
+    const transferDone = contract.isTransferContract;
     io.emit("registration:approved", {
       userId: contract.user.toString(),
-      message: "Bạn là thành viên của KTX",
+      message: transferDone ? "Chuyển phòng đã hoàn tất" : "Bạn là thành viên của KTX",
     });
     await Notification.create({
       user: contract.user,
-      title: "Bạn là thành viên của KTX",
-      message: "Thanh toán đã được xác nhận. Hợp đồng của bạn đã có hiệu lực, bạn là thành viên của KTX.",
+      title: transferDone ? "Chuyển phòng hoàn tất" : "Bạn là thành viên của KTX",
+      message: transferDone
+        ? `Admin đã xác nhận hợp đồng ${contract.contractNumber}. Hợp đồng cũ đã thanh lý; bạn đã chuyển sang phòng mới.`
+        : "Thanh toán đã được xác nhận. Hợp đồng của bạn đã có hiệu lực, bạn là thành viên của KTX.",
       type: "contract_active",
       link: "/student/my-contracts",
     });
@@ -868,6 +1244,17 @@ exports.ensureBed = async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
     if (!mongoose.isValidObjectId(id)) return res.status(400).json({ message: "ID hợp đồng không hợp lệ" });
+
+    const contractDoc = await Contract.findById(id);
+    if (!contractDoc) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
+
+    const { resolveContractLivingRoomId } = require("../services/violationResidentsService");
+    const livingRoomId = await resolveContractLivingRoomId(contractDoc);
+    if (livingRoomId && String(contractDoc.room) !== String(livingRoomId)) {
+      contractDoc.room = livingRoomId;
+      contractDoc.bed = null;
+      await contractDoc.save();
+    }
 
     const result = await tryAutoAssignBed(id, req.user?._id);
     if (!result.ok) {
@@ -912,8 +1299,14 @@ exports.getMyContractOverview = async (req, res) => {
       })
       .sort({ createdAt: -1 })
       .lean();
+    const { resolveContractRoomDocument } = require("../services/contractResidenceSync");
     for (const c of contracts) {
-      if ((c.status === "active" || c.signedAt) && (c.contractPrice == null || c.roomCapacityAtSigning == null)) {
+      const roomMissing =
+        !c.room || (typeof c.room === "object" && c.room !== null && !c.room.roomNumber);
+      if (roomMissing) {
+        await resolveContractRoomDocument(c._id);
+      }
+      if (c.status === "pending_payment" && (c.contractPrice == null || c.roomCapacityAtSigning == null)) {
         await ensureContractPricingSnapshot(c._id);
       }
     }
@@ -928,16 +1321,26 @@ exports.getMyContractOverview = async (req, res) => {
       })
       .sort({ createdAt: -1 })
       .lean();
-    const contractsWithDisplay = contractsRefreshed.map((c) =>
-      attachContractDisplayPricing(c, c.room && typeof c.room === "object" ? c.room : null)
+    let contractsWithDisplay = await enrichStudentContractsForList(contractsRefreshed);
+    const { attachPopulatedRoomToContractLean } = require("../services/roomResidentsListService");
+    contractsWithDisplay = await Promise.all(
+      contractsWithDisplay.map((row) => attachPopulatedRoomToContractLean(row))
     );
     const { findResidenceContract, isWithinStayPeriod } = require("../services/ktxMembership");
     const residenceLean = await findResidenceContract(req.user._id, { syncLifecycle: false });
-    const activeContract = residenceLean
+    let activeContract = residenceLean
       ? contractsWithDisplay.find((c) => String(c._id) === String(residenceLean._id)) ||
         contractsWithDisplay.find((c) => c.status === "active" && isWithinStayPeriod(c)) ||
         null
       : contractsWithDisplay.find((c) => c.status === "active" && isWithinStayPeriod(c)) || null;
+    if (activeContract) {
+      activeContract = await attachPopulatedRoomToContractLean(activeContract);
+      const roomId = activeContract.room?._id || activeContract.room;
+      if (roomId) {
+        const { syncRoomsOccupancyFromContracts } = require("../services/roomOccupancySync");
+        await syncRoomsOccupancyFromContracts([roomId]);
+      }
+    }
     const extendRequests = await ContractExtendRequest.find({ user: req.user._id })
       .populate("contract", "contractNumber status endDate startDate")
       .sort({ createdAt: -1 })

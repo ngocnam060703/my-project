@@ -3,6 +3,12 @@ const MaintenanceReport = require("../models/MaintenanceReport");
 const Contract = require("../models/Contract");
 const Room = require("../models/Room");
 const User = require("../models/User");
+const FacilityLocation = require("../models/FacilityLocation");
+
+function isStudentRole(role) {
+  const r = String(role || "");
+  return r === "user" || r === "student";
+}
 const Notification = require("../models/Notification");
 const { getIO } = require("../socket");
 const { createDamageReimbursementBill } = require("./damageReimbursementBillService");
@@ -57,16 +63,16 @@ async function assertManagerAccess(req, doc) {
   }
 }
 
-async function notifyAdminsNewReport({ reporter, roomDoc, incidentType }) {
+async function notifyAdminsNewReport({ reporter, roomDoc, damagedItemLabel }) {
   const io = getIO();
   const areaId = String(roomDoc?.area?._id || roomDoc?.area || "");
-  const typeLabel = INCIDENT_LABEL[incidentType] || incidentType;
+  const itemLabel = damagedItemLabel || "thiết bị/vật tư";
   const admins = await User.find({
     $or: [{ role: "admin" }, { role: "manager", managedArea: areaId || null }],
   }).select("_id");
   if (!admins.length) return;
   const title = "Khai báo hư hỏng mới";
-  const msg = `${reporter?.fullName || "Sinh viên"} báo sự cố [${typeLabel}] tại phòng ${roomDoc?.roomNumber || ""}.`;
+  const msg = `${reporter?.fullName || "Sinh viên"} báo hỏng [${itemLabel}] tại phòng ${roomDoc?.roomNumber || ""}.`;
   await Notification.insertMany(
     admins.map((a) => ({
       user: a._id,
@@ -86,25 +92,104 @@ async function notifyStudentResolved({ studentId, roomNumber, resolutionType, co
   const isComp = resolutionType === "compensation";
   const title = isComp ? "Khai báo hư hỏng — bồi thường" : "Khai báo hư hỏng đã xử lý";
   const message = isComp
-    ? `Yêu cầu phòng ${roomNumber || ""} đã xử lý. Bạn cần bồi thường ${Math.round(compensationAmount || 0).toLocaleString("vi-VN")}đ (xem Hóa đơn).`
-    : `Yêu cầu sửa chữa phòng ${roomNumber || ""} đã được xử lý (yêu cầu bảo trì).`;
+    ? `Yêu cầu phòng ${roomNumber || ""} đã có phán quyết: sinh viên làm hỏng — bồi thường ${Math.round(compensationAmount || 0).toLocaleString("vi-VN")}đ. Xem chi tiết tại Khai báo hư hỏng.`
+    : `Yêu cầu phòng ${roomNumber || ""} đã xử lý: hao mòn tự nhiên / bảo trì — bạn không phải bồi thường.`;
   await Notification.create({
     user: studentId,
     title,
     message,
     type: "general",
-    link: isComp ? "/student/my-bills" : "/student/damage-report",
+    link: "/student/damage-report",
   });
   io.emit("notification:new", { userId: String(studentId), title, message, link: "/student/damage-report" });
 }
 
+const STUDENT_HIDDEN_FIELDS = [
+  "damageCause",
+  "compensationAmount",
+  "resolutionType",
+  "severity",
+  "maintenanceStatus",
+  "adminNote",
+  "bill",
+  "processedBy",
+];
+
+function toStudentMaintenanceDto(doc) {
+  const o = doc && typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
+  for (const k of STUDENT_HIDDEN_FIELDS) delete o[k];
+
+  const status = String(doc?.status || "");
+  if (status === "pending" || status === "processing") {
+    o.awaitingAdminRuling = true;
+    return o;
+  }
+
+  if (status !== "resolved") return o;
+
+  const cause = String(doc?.damageCause || "");
+  o.damageCause = cause;
+  o.adminRulingNote = String(doc?.adminNote || "").trim();
+  o.processedAt = doc?.processedAt || null;
+
+  if (cause === "natural_wear") {
+    o.compensationAmount = 0;
+    o.requiresPayment = false;
+    return o;
+  }
+
+  if (cause === "student_caused") {
+    o.compensationAmount = Math.round(Number(doc?.compensationAmount) || 0);
+    o.requiresPayment = o.compensationAmount > 0;
+    const bill = doc?.bill;
+    if (bill && typeof bill === "object" && bill._id) {
+      o.compensationBill = {
+        _id: String(bill._id),
+        billCode: bill.billCode || "",
+        total: Math.round(Number(bill.total) || o.compensationAmount),
+        status: String(bill.status || "unpaid"),
+      };
+    } else if (bill) {
+      o.compensationBill = { _id: String(bill), billCode: "", total: o.compensationAmount, status: "unpaid" };
+    }
+  }
+
+  return o;
+}
+
 function stripStudentForbiddenFields(body) {
-  const allowed = ["type", "description", "images"];
+  const allowed = ["facilityLocationId", "damagedItemLabel", "description", "images"];
   const out = {};
   for (const k of allowed) {
     if (body[k] !== undefined) out[k] = body[k];
   }
   return out;
+}
+
+async function resolveDamagedItemForRoom(roomId, { facilityLocationId, damagedItemLabel }) {
+  const customLabel = String(damagedItemLabel || "").trim();
+  if (facilityLocationId) {
+    const loc = await FacilityLocation.findById(facilityLocationId).populate("facility", "name code");
+    if (!loc || String(loc.room) !== String(roomId)) {
+      const err = new Error("Thiết bị/vật tư không thuộc phòng của bạn");
+      err.status = 400;
+      throw err;
+    }
+    const fac = loc.facility;
+    const name = fac?.name || customLabel || "CSVC phòng";
+    const label = loc.quantity > 1 ? `${name} (SL ${loc.quantity})` : name;
+    return {
+      facilityLocation: loc._id,
+      facility: fac?._id || null,
+      damagedItemLabel: label,
+    };
+  }
+  if (customLabel.length < 2) {
+    const err = new Error("Vui lòng chọn thiết bị/vật tư hoặc nhập tên (tối thiểu 2 ký tự)");
+    err.status = 400;
+    throw err;
+  }
+  return { facilityLocation: null, facility: null, damagedItemLabel: customLabel };
 }
 
 async function buildAdminListFilter(req, query) {
@@ -135,6 +220,7 @@ async function buildAdminListFilter(req, query) {
     const users = await User.find({
       $or: [{ fullName: rx }, { studentId: rx }],
       role: { $in: ["user", "student"] },
+      isDeleted: { $ne: true },
     }).select("_id");
     const or = [{ requestCode: rx }, { description: rx }];
     if (users.length) or.push({ user: { $in: users.map((u) => u._id) } });
@@ -161,21 +247,71 @@ const POPULATE_LIST =
 const POPULATE_DETAIL = [
   { path: "user", select: "fullName studentId email phone" },
   { path: "room", select: "roomNumber area", populate: { path: "area", select: "name" } },
+  { path: "facility", select: "name code" },
   { path: "processedBy", select: "fullName" },
   { path: "bill", select: "billCode total status billType" },
 ];
 
+/** CSVC phòng cho form khai báo — kho FacilityLocation + fallback Room.amenities */
+async function listRoomFacilityOptions(userId) {
+  const contract = await resolveResidentContract(userId);
+  if (!contract?.room) {
+    const err = new Error("Bạn chưa có hợp đồng phòng đang hiệu lực");
+    err.status = 403;
+    throw err;
+  }
+  const roomId = contract.room._id || contract.room;
+  const locations = await FacilityLocation.find({ room: roomId })
+    .populate("facility", "name code category")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const items = locations
+    .filter((loc) => loc.facility && typeof loc.facility === "object")
+    .map((loc) => ({
+      _id: String(loc._id),
+      quantity: Number(loc.quantity) || 1,
+      facility: {
+        name: loc.facility.name,
+        code: loc.facility.code || "",
+      },
+      source: "inventory",
+    }));
+
+  const roomDoc = await Room.findById(roomId).select("amenities roomNumber").lean();
+  if (items.length === 0 && roomDoc?.amenities?.length) {
+    roomDoc.amenities.forEach((raw, i) => {
+      const name = String(raw || "").trim();
+      if (!name) return;
+      items.push({
+        _id: `amenity:${encodeURIComponent(name)}`,
+        quantity: 1,
+        facility: { name, code: "" },
+        source: "amenity",
+      });
+    });
+  }
+
+  return {
+    roomId: String(roomId),
+    roomNumber: roomDoc?.roomNumber || contract.room?.roomNumber || "",
+    items,
+  };
+}
+
 async function listMine(userId) {
-  return MaintenanceReport.find({ user: userId })
+  const items = await MaintenanceReport.find({ user: userId })
     .populate("room", "roomNumber area")
     .populate("room.area", "name")
-    .populate("bill", "billCode total status")
+    .populate("facility", "name code")
+    .populate("bill", "billCode total status billType")
     .sort({ createdAt: -1 });
+  return items.map((doc) => toStudentMaintenanceDto(doc));
 }
 
 async function createReport(user, body) {
   const safe = stripStudentForbiddenFields(body);
-  const { type: incidentType, description, images } = safe;
+  const { facilityLocationId, damagedItemLabel, description, images } = safe;
   const contract = await resolveResidentContract(user._id);
   if (!contract || !contract.room) {
     const err = new Error("Bạn chưa có hợp đồng phòng đang hiệu lực để gửi khai báo");
@@ -192,17 +328,23 @@ async function createReport(user, body) {
     err.status = 400;
     throw err;
   }
+  const itemFields = await resolveDamagedItemForRoom(roomId, {
+    facilityLocationId,
+    damagedItemLabel,
+  });
   const imgs = Array.isArray(images) ? images.filter((x) => typeof x === "string").slice(0, 10) : [];
   const doc = await MaintenanceReport.create({
     user: user._id,
     room: roomId,
-    incidentType,
+    ...itemFields,
+    incidentType: "",
     description: String(description || "").trim(),
     images: imgs,
     status: "pending",
   });
-  await notifyAdminsNewReport({ reporter: user, roomDoc, incidentType });
-  return MaintenanceReport.findById(doc._id).populate(POPULATE_DETAIL);
+  await notifyAdminsNewReport({ reporter: user, roomDoc, damagedItemLabel: itemFields.damagedItemLabel });
+  const populated = await MaintenanceReport.findById(doc._id).populate(POPULATE_DETAIL);
+  return toStudentMaintenanceDto(populated);
 }
 
 async function cancelReport(userId, reportId) {
@@ -260,58 +402,56 @@ async function adminPatch(req, reportId, body) {
   await assertManagerAccess(req, doc);
 
   const prevStatus = doc.status;
-  const {
-    status,
-    adminNote,
-    severity,
-    damageCause,
-    resolutionType,
-    compensationAmount,
-    maintenanceStatus,
-  } = body;
+  const { status, adminNote, damageCause, compensationAmount } = body;
 
   if (adminNote != null) doc.adminNote = String(adminNote).trim();
-  if (severity != null) doc.severity = severity;
-  if (damageCause != null) doc.damageCause = damageCause;
-  if (maintenanceStatus != null) doc.maintenanceStatus = maintenanceStatus;
 
+  /** Tiếp nhận — chuyển «Đang sửa chữa» */
   if (status === "processing" && doc.status === "pending") {
     doc.status = "processing";
-    if (!doc.processedAt) {
-      doc.processedAt = new Date();
-      doc.processedBy = req.user._id;
-    }
-  } else if (status === "resolved" || resolutionType) {
-    const rType = resolutionType || doc.resolutionType;
-    if (!rType) {
-      const err = new Error("Vui lòng chọn loại xử lý: Yêu cầu bảo trì hoặc Bồi thường");
-      err.status = 400;
-      throw err;
-    }
-    if (!damageCause && !doc.damageCause) {
-      const err = new Error("Vui lòng xác nhận nguyên nhân hư hỏng");
-      err.status = 400;
-      throw err;
-    }
-    if (damageCause) doc.damageCause = damageCause;
+    doc.processedAt = new Date();
+    doc.processedBy = req.user._id;
+    await doc.save();
+    return MaintenanceReport.findById(doc._id).populate(POPULATE_DETAIL);
+  }
 
-    doc.resolutionType = rType;
+  /** Phán quyết — «Đã khắc phục» + nguyên nhân + phí đền bù */
+  const cause = damageCause || doc.damageCause;
+  const finishing =
+    status === "resolved" ||
+    (damageCause && ["natural_wear", "student_caused"].includes(String(damageCause)));
+
+  if (finishing) {
+    if (!cause) {
+      const err = new Error("Vui lòng chọn nguyên nhân hư hỏng sau khi kiểm tra thực tế");
+      err.status = 400;
+      throw err;
+    }
+    if (!["processing", "pending", "resolved"].includes(doc.status)) {
+      const err = new Error("Đơn không ở trạng thái cho phép hoàn tất xử lý");
+      err.status = 400;
+      throw err;
+    }
+
+    doc.damageCause = cause;
     doc.status = "resolved";
     doc.processedAt = new Date();
     doc.processedBy = req.user._id;
+    doc.maintenanceStatus = "completed";
 
-    if (rType === "maintenance") {
+    if (cause === "natural_wear") {
       doc.compensationAmount = 0;
-      doc.maintenanceStatus = maintenanceStatus || doc.maintenanceStatus || "scheduled";
-    } else if (rType === "compensation") {
+      doc.resolutionType = "maintenance";
+      doc.bill = null;
+    } else if (cause === "student_caused") {
       const amt = Math.round(Number(compensationAmount ?? doc.compensationAmount) || 0);
       if (amt <= 0) {
-        const err = new Error("Chi phí bồi thường phải lớn hơn 0");
+        const err = new Error("Phí đền bù phải lớn hơn 0 khi nguyên nhân là sinh viên làm hỏng");
         err.status = 400;
         throw err;
       }
       doc.compensationAmount = amt;
-      doc.maintenanceStatus = "";
+      doc.resolutionType = "compensation";
       const bill = await createDamageReimbursementBill({
         reportDoc: doc,
         amount: amt,
@@ -319,7 +459,7 @@ async function adminPatch(req, reportId, body) {
       });
       doc.bill = bill._id;
     }
-  } else if (status != null) {
+  } else if (status != null && status !== doc.status) {
     doc.status = status;
     if (["processing", "resolved"].includes(status) && !doc.processedAt) {
       doc.processedAt = new Date();
@@ -343,10 +483,13 @@ async function adminPatch(req, reportId, body) {
 
 module.exports = {
   listMine,
+  listRoomFacilityOptions,
   createReport,
   cancelReport,
   adminList,
   adminPatch,
   resolveResidentContract,
+  toStudentMaintenanceDto,
+  isStudentRole,
   INCIDENT_LABEL,
 };

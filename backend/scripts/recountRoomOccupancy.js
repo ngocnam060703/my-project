@@ -10,11 +10,11 @@ function toStartOfDay(d) {
   return x;
 }
 
-function holdsSlot(c) {
-  const st = String(c.status || "");
-  if (st !== "active" && st !== "pending_payment") return false;
-  if (!c.endDate) return false;
-  return toStartOfDay(c.endDate) >= toStartOfDay(new Date());
+const { isWithinStayPeriod } = require("../services/ktxMembership");
+
+function isEffectiveResident(c) {
+  if (String(c.status || "") !== "active") return false;
+  return isWithinStayPeriod(c);
 }
 
 async function main() {
@@ -22,13 +22,13 @@ async function main() {
   await mongoose.connect(uri);
 
   const rooms = await Room.find({}).select("_id capacity currentOccupancy status").lean();
-  const contracts = await Contract.find({ status: { $in: ["active", "pending_payment"] } })
-    .select("room status endDate")
+  const contracts = await Contract.find({ status: "active" })
+    .select("room status startDate endDate")
     .lean();
 
   const countByRoom = new Map();
   for (const c of contracts) {
-    if (!holdsSlot(c)) continue;
+    if (!isEffectiveResident(c)) continue;
     const rid = String(c.room || "");
     if (!rid) continue;
     countByRoom.set(rid, (countByRoom.get(rid) || 0) + 1);
@@ -63,7 +63,7 @@ async function main() {
         updated,
         unchanged,
         roomsOverCapacityAccordingToContracts: overCapacity,
-        note: "Recounted Room.currentOccupancy from active/pending_payment contracts (endDate >= today).",
+        note: "Recounted Room.currentOccupancy from active contracts within stay period.",
       },
       null,
       2

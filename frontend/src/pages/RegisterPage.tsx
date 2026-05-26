@@ -5,6 +5,13 @@ import { UserOutlined, LockOutlined, MailOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { authApi } from "../api";
 
+function sanitizeRegisterErrorMessage(msg: string): string {
+  if (!msg || !/E11000/i.test(msg)) return msg;
+  if (/email/i.test(msg)) return "Email này đã được đăng ký. Vui lòng đăng nhập hoặc dùng email khác.";
+  if (/studentId/i.test(msg)) return "MSSV này đã được đăng ký. Vui lòng đăng nhập hoặc dùng MSSV khác.";
+  return "Thông tin đăng ký đã trùng với tài khoản khác. Vui lòng kiểm tra email và MSSV.";
+}
+
 const RegisterPage: React.FC = () => {
   useDocumentTitle("Đăng ký");
   const { message } = App.useApp();
@@ -38,10 +45,10 @@ const RegisterPage: React.FC = () => {
         message.error("Không kết nối được máy chủ. Kiểm tra backend đang chạy và cấu hình API.");
         return;
       }
-      const fromApi =
+      const raw =
         ax.response?.data?.message ||
         (Array.isArray(ax.response?.data?.errors) ? ax.response?.data?.errors?.[0]?.msg : "");
-      message.error(fromApi || "Đăng ký thất bại");
+      message.error(sanitizeRegisterErrorMessage(raw || "") || "Đăng ký thất bại");
     } finally {
       setLoading(false);
     }

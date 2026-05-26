@@ -206,7 +206,9 @@ const RoomsPage: React.FC = () => {
                         type="link"
                         key="register"
                         disabled={!activeContract}
-                        onClick={() => navigate(`/student/room-transfer?roomId=${r._id}`)}
+                        onClick={() =>
+                          navigate(`/student/my-applications?tab=transfer&roomId=${encodeURIComponent(r._id)}`)
+                        }
                       >
                         Đăng ký chuyển phòng
                       </Button>

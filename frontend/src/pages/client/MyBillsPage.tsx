@@ -1,98 +1,59 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { App } from "antd";
-import { CheckCircleFilled, CloseCircleFilled, EyeOutlined } from "@ant-design/icons";
+import {
+  App,
+  Button,
+  Card,
+  Col,
+  Input,
+  InputNumber,
+  Modal,
+  Popover,
+  Row,
+  Select,
+  Space,
+  Statistic,
+  Table,
+  Tag,
+} from "antd";
+import { CheckCircleFilled, CloseCircleFilled, CreditCardOutlined, EyeOutlined, FilterOutlined } from "@ant-design/icons";
 import { isAxiosError } from "axios";
+import type { ColumnsType } from "antd/es/table";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { formatDateTimeVi, formatDateVi } from "../../utils/formatDateTime";
-import { billPaymentMethodLabel, billPaymentPayerLabel } from "../../utils/billPaymentLabels";
 import { billsApi } from "../../api";
+import { useSocket } from "../../contexts/SocketContext";
+import type { Bill } from "../../types";
+import { formatDateTimeVi } from "../../utils/formatDateTime";
+import {
+  billDetailTitle,
+  billTypeLabel,
+  billTypeShort,
+  billTypeTagColor,
+  isSpecialBill,
+  isTransferSupplementBill,
+} from "../../utils/billTypeLabels";
+import { billPaymentMethodLabel, billPaymentPayerLabel } from "../../utils/billPaymentLabels";
+import { roomSelectLabel } from "../../utils/roomDisplay";
 
-export type BillStatus = "unpaid" | "paid" | "overdue";
-export type PaymentMethod = "vnpay" | "cash" | null;
-
-export interface Bill {
-  id: string;
-  billCode: string;
-  month: number;
-  year: number;
-  amount: number;
-  dueDate: string | null;
-  status: BillStatus;
-  createdAt: string | null;
-  notes: string;
-  paidAt: string | null;
-  paymentMethod: PaymentMethod;
-  paymentMethodRaw: string | null;
-  payerLabel: string;
-}
-
-type ApiBill = {
-  _id?: string;
-  billCode?: string;
-  month?: number;
-  year?: number;
-  total?: number;
-  amount?: number;
-  dueDate?: string | null;
-  createdAt?: string | null;
-  note?: string;
-  notes?: string;
-  paidAt?: string | null;
-  status?: string;
-  paymentMethod?: string | null;
-  paidBy?: { fullName?: string; role?: string } | string | null;
+const statusMap: Record<string, { color: string; text: string }> = {
+  unpaid: { color: "orange", text: "Chưa thanh toán" },
+  pending: { color: "orange", text: "Chưa thanh toán" },
+  paid: { color: "green", text: "Đã thanh toán" },
+  overdue: { color: "red", text: "Quá hạn" },
 };
 
-const formatMoney = (value: number): string => `${Math.round(value || 0).toLocaleString("vi-VN")}đ`;
+const formatMoney = (v: number | undefined) => `${Math.round(v ?? 0).toLocaleString("vi-VN")}đ`;
+const billCodeDisplay = (b: Bill) => b.billCode || "—";
 
-const formatDate = (value?: string | null): string => formatDateVi(value);
+type PersonalLine = NonNullable<Bill["personalServiceBreakdown"]>[number];
 
-const formatDateTime = (value?: string | null): string => formatDateTimeVi(value);
-
-const normalizePaymentMethod = (method?: string | null): PaymentMethod => {
-  if (!method) return null;
-  if (method === "vnpay" || method === "online") return "vnpay";
-  if (method === "cash" || method === "counter" || method === "manual") return "cash";
-  return null;
+const formatPersonalServiceLine = (it: PersonalLine) => {
+  const name = it.name || "Dịch vụ";
+  const amt = formatMoney(it.amount || 0);
+  const suffix = it.unit === "once" ? ` (${it.quantity ?? 0} lần)` : " (/ tháng)";
+  return `${name}: ${amt}${suffix}`;
 };
 
-const normalizeStatus = (status?: string): BillStatus => {
-  if (status === "paid") return "paid";
-  if (status === "overdue") return "overdue";
-  return "unpaid";
-};
-
-const paymentMethodLabel = (method?: string | null): string => billPaymentMethodLabel(method);
-
-const resolvePayerLabel = (row: ApiBill): string =>
-  billPaymentPayerLabel({
-    status: row.status || "unpaid",
-    paymentMethod: row.paymentMethod ?? undefined,
-    paidBy: row.paidBy,
-  });
-
-const mapApiBill = (row: ApiBill): Bill => {
-  const id = String(row._id || "");
-  const status = normalizeStatus(row.status);
-  const rawMethod = row.paymentMethod || null;
-  return {
-    id,
-    billCode: String(row.billCode || "—"),
-    month: Number(row.month || 0),
-    year: Number(row.year || 0),
-    amount: Number(row.amount ?? row.total ?? 0),
-    dueDate: row.dueDate || null,
-    status,
-    createdAt: row.createdAt || null,
-    notes: String(row.notes || row.note || ""),
-    paidAt: row.paidAt || null,
-    paymentMethod: normalizePaymentMethod(rawMethod),
-    paymentMethodRaw: rawMethod,
-    payerLabel: resolvePayerLabel(row),
-  };
-};
-
-const canPay = (status: BillStatus): boolean => status === "unpaid" || status === "overdue";
+const canPayOnline = (status: string) => ["unpaid", "pending", "overdue"].includes(String(status || ""));
 
 const getErrorMessage = (error: unknown): string => {
   if (isAxiosError(error)) {
@@ -103,281 +64,630 @@ const getErrorMessage = (error: unknown): string => {
   return "Không thể tải dữ liệu hóa đơn.";
 };
 
-const statusBadge = (status: BillStatus) => {
-  if (status === "paid") {
-    return <span className="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700">Đã thanh toán</span>;
-  }
-  if (status === "overdue") {
-    return <span className="inline-flex rounded-full bg-rose-100 px-2 py-1 text-xs font-medium text-rose-700">Quá hạn</span>;
-  }
-  return <span className="inline-flex rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700">Chưa thanh toán</span>;
-};
-
-const BillDetailModal: React.FC<{
-  bill: Bill | null;
-  open: boolean;
-  loading: boolean;
-  onClose: () => void;
-}> = ({ bill, open, loading, onClose }) => {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <h3 className="text-lg font-semibold text-slate-900">Chi tiết hóa đơn</h3>
-          <button type="button" className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50" onClick={onClose}>
-            Đóng
-          </button>
-        </div>
-        <div className="space-y-3 px-6 py-5 text-sm text-slate-700">
-          {loading && <div className="py-4 text-center text-slate-500">Đang tải chi tiết hóa đơn…</div>}
-          {!loading && bill && (
-            <>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <InfoRow label="Mã hóa đơn" value={bill.billCode} />
-                <InfoRow label="Kỳ hóa đơn" value={`${bill.month}/${bill.year}`} />
-                <InfoRow label="Số tiền" value={formatMoney(bill.amount)} />
-                <InfoRow label="Hạn thanh toán" value={formatDate(bill.dueDate)} />
-                <InfoRow label="Ngày tạo hóa đơn" value={formatDateTime(bill.createdAt)} />
-                <InfoRow label="Trạng thái" value={bill.status === "paid" ? "Đã thanh toán" : bill.status === "overdue" ? "Quá hạn" : "Chưa thanh toán"} />
-                <InfoRow label="Ngày đã thanh toán" value={formatDateTime(bill.paidAt)} />
-                <InfoRow label="Phương thức thanh toán" value={paymentMethodLabel(bill.paymentMethodRaw)} />
-                <InfoRow label="Người thanh toán" value={bill.payerLabel} />
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">Ghi chú hóa đơn</p>
-                <p className="text-sm text-slate-700">{bill.notes || "—"}</p>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <div className="rounded-xl border border-slate-200 p-3">
-    <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-    <p className="mt-1 font-medium text-slate-900">{value || "—"}</p>
-  </div>
-);
-
-const BillsTable: React.FC<{
-  rows: Bill[];
-  payingId: string | null;
-  onView: (id: string) => void;
-  onPay: (id: string) => void;
-}> = ({ rows, payingId, onView, onPay }) => (
-  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-sm">
-        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-          <tr>
-            <th className="px-4 py-3">STT</th>
-            <th className="px-4 py-3">Mã hóa đơn</th>
-            <th className="px-4 py-3">Tháng</th>
-            <th className="px-4 py-3">Số tiền</th>
-            <th className="px-4 py-3">Hạn thanh toán</th>
-            <th className="px-4 py-3">Trạng thái</th>
-            <th className="px-4 py-3 text-right">Thao tác</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((bill, index) => (
-            <tr key={bill.id} className="border-t border-slate-100 text-slate-700">
-              <td className="px-4 py-3">{index + 1}</td>
-              <td className="px-4 py-3 font-medium text-slate-900">{bill.billCode}</td>
-              <td className="px-4 py-3">{`${bill.month}/${bill.year}`}</td>
-              <td className="px-4 py-3 font-semibold text-slate-900">{formatMoney(bill.amount)}</td>
-              <td className="px-4 py-3">{formatDate(bill.dueDate)}</td>
-              <td className="px-4 py-3">{statusBadge(bill.status)}</td>
-              <td className="px-4 py-3">
-                <div className="flex justify-end gap-2">
-                  {(bill.status === "unpaid" || bill.status === "overdue") && (
-                    <button
-                      type="button"
-                      onClick={() => onPay(bill.id)}
-                      disabled={payingId === bill.id}
-                      className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {payingId === bill.id ? "Đang chuyển…" : "Thanh toán online VNPay"}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => onView(bill.id)}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    <EyeOutlined />
-                    Xem
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
-                Chưa có hóa đơn nào.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  </div>
-);
-
 const MyBillsPage: React.FC = () => {
   const { message } = App.useApp();
-  const [searchParams] = useSearchParams();
+  const { socket } = useSocket();
   const navigate = useNavigate();
-  const [rows, setRows] = useState<Bill[]>([]);
+  const [searchParams] = useSearchParams();
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1;
+  const currentYear = now.getFullYear();
+
+  const [allBills, setAllBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detail, setDetail] = useState<Bill | null>(null);
+  const [detailModal, setDetailModal] = useState<Bill | null>(null);
+  const [page, setPage] = useState(1);
+  const [searchInput, setSearchInput] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [filters, setFilters] = useState<{
+    status?: string;
+    month?: number;
+    year?: number;
+    billType?: string;
+  }>({
+    month: currentMonth,
+    year: currentYear,
+  });
   const openedFromQueryRef = useRef(false);
 
-  const loadBills = useCallback(async () => {
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(searchInput.trim()), 400);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
-      let raw: ApiBill[] = [];
+      let raw: Bill[] = [];
       try {
         const { data } = await billsApi.getMyBills();
-        raw = Array.isArray(data) ? (data as ApiBill[]) : [];
+        raw = Array.isArray(data) ? (data as Bill[]) : [];
       } catch {
         const { data } = await billsApi.getMy();
-        raw = Array.isArray(data) ? (data as ApiBill[]) : [];
+        raw = Array.isArray(data) ? (data as Bill[]) : [];
       }
-      setRows(raw.map(mapApiBill));
+      setAllBills(raw);
     } catch (err) {
-      setError(getErrorMessage(err));
-      setRows([]);
+      message.error(getErrorMessage(err));
+      setAllBills([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [message]);
 
   useEffect(() => {
-    void loadBills();
-  }, [loadBills]);
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const onBillPaid = () => void load();
+    socket.on("bill:paid", onBillPaid);
+    return () => {
+      socket.off("bill:paid", onBillPaid);
+    };
+  }, [socket, load]);
 
   useEffect(() => {
     const vnpay = searchParams.get("vnpay");
     const responseCode = searchParams.get("vnp_ResponseCode");
-    const txnRef = searchParams.get("vnp_TxnRef");
+    const billId = searchParams.get("billId");
     const success = vnpay === "success" || responseCode === "00";
     const cancel = vnpay === "cancel" || responseCode === "24";
     const hasVnpCallback = vnpay !== null || responseCode !== null;
 
-    if (!hasVnpCallback) return;
-
+    if (hasVnpCallback) {
     if (success) {
       message.success({
         content: "Thanh toán thành công!",
         icon: <CheckCircleFilled style={{ color: "#16a34a" }} />,
       });
-      if (txnRef) {
-        setRows((prev) =>
-          prev.map((row) =>
-            row.id === txnRef || row.billCode === txnRef
-              ? {
-                  ...row,
-                  status: "paid",
-                  paidAt: new Date().toISOString(),
-                  paymentMethod: "vnpay",
-                  paymentMethodRaw: "online",
-                  payerLabel: "Sinh viên",
-                }
-              : row,
-          ),
-        );
-      }
-      void loadBills();
+        void load();
     } else if (cancel) {
       message.warning({
         content: "Đã hủy giao dịch thanh toán",
         icon: <CloseCircleFilled style={{ color: "#f97316" }} />,
       });
     }
-
     navigate("/student/my-bills", { replace: true });
-  }, [searchParams, message, navigate, loadBills]);
-
-  const openDetail = useCallback(async (id: string) => {
-    setDetailOpen(true);
-    setDetailLoading(true);
-    try {
-      const { data } = await billsApi.getById(id);
-      setDetail(mapApiBill((data || {}) as ApiBill));
-    } catch (err) {
-      setError(getErrorMessage(err));
-      setDetailOpen(false);
-    } finally {
-      setDetailLoading(false);
     }
-  }, []);
 
-  useEffect(() => {
-    const billId = searchParams.get("billId");
-    if (!billId || openedFromQueryRef.current) return;
+    if (billId && !openedFromQueryRef.current && allBills.length > 0) {
     openedFromQueryRef.current = true;
-    void openDetail(billId);
+      const hit = allBills.find((b) => String(b._id) === billId);
+      if (hit) setDetailModal(hit);
+      else {
+        void billsApi
+          .getById(billId)
+          .then((res) => setDetailModal(res.data as Bill))
+          .catch(() => message.error("Không tải được chi tiết hóa đơn"));
+      }
     navigate("/student/my-bills", { replace: true });
-  }, [searchParams, navigate, openDetail]);
+    }
+  }, [searchParams, message, navigate, load, allBills]);
 
-  const totalNeedPay = useMemo(() => rows.filter((row) => canPay(row.status)).reduce((sum, row) => sum + row.amount, 0), [rows]);
+  const filteredBills = useMemo(() => {
+    let list = [...allBills];
+    if (filters.status) list = list.filter((b) => b.status === filters.status);
+    if (filters.month) list = list.filter((b) => b.month === filters.month);
+    if (filters.year) list = list.filter((b) => b.year === filters.year);
+    if (filters.billType === "monthly") {
+      list = list.filter((b) => !b.billType || b.billType === "monthly");
+    } else if (
+      filters.billType === "penalty" ||
+      filters.billType === "damage_reimbursement" ||
+      filters.billType === "transfer_supplement"
+    ) {
+      list = list.filter((b) => b.billType === filters.billType);
+    }
+    if (debouncedSearch) {
+      const q = debouncedSearch.toLowerCase();
+      list = list.filter((b) => String(b.billCode || "").toLowerCase().includes(q));
+    }
+    return list;
+  }, [allBills, filters, debouncedSearch]);
 
-  const payOnline = async (id: string) => {
-    setPayingId(id);
-    setError(null);
+  const summary = useMemo(() => {
+    let unpaidTotal = 0;
+    let paidTotal = 0;
+    let unpaidCount = 0;
+    for (const b of filteredBills) {
+      const t = Number(b.total || 0);
+      if (canPayOnline(b.status)) {
+        unpaidTotal += t;
+        unpaidCount += 1;
+      } else if (b.status === "paid") {
+        paidTotal += t;
+      }
+    }
+    const paidTotalAllTime = allBills
+      .filter((b) => b.status === "paid")
+      .reduce((s, b) => s + Number(b.total || 0), 0);
+    return { unpaidTotal, paidTotal, unpaidCount, paidTotalAllTime, total: filteredBills.length };
+  }, [filteredBills, allBills]);
+
+  const payOnline = async (bill: Bill) => {
+    setPayingId(bill._id);
     try {
-      const response = await billsApi.payOnline(id);
+      const response = await billsApi.payOnline(bill._id);
       const paymentUrl = (response.data as { paymentUrl?: string } | undefined)?.paymentUrl;
       if (!paymentUrl) {
-        setError("Không tạo được đường dẫn thanh toán VNPay.");
+        message.error("Không tạo được đường dẫn thanh toán VNPay.");
         return;
       }
       window.location.href = paymentUrl;
     } catch (err) {
-      setError(getErrorMessage(err));
+      message.error(getErrorMessage(err));
     } finally {
       setPayingId(null);
     }
   };
 
+  const cols: ColumnsType<Bill> = [
+    {
+      title: "Mã HĐ",
+      dataIndex: "billCode",
+      key: "billCode",
+      width: 130,
+      fixed: "left",
+      render: (v: string, r: Bill) => v || billCodeDisplay(r),
+    },
+    {
+      title: "Tháng/Năm",
+      key: "my",
+      width: 90,
+      render: (_: unknown, r: Bill) => (
+        <strong>
+          {r.month}/{r.year}
+        </strong>
+      ),
+    },
+    {
+      title: "Loại",
+      key: "billType",
+      width: 100,
+      render: (_: unknown, r: Bill) => <Tag color={billTypeTagColor(r.billType)}>{billTypeShort(r.billType)}</Tag>,
+    },
+    {
+      title: "Phòng",
+      key: "room",
+      width: 88,
+      render: (_: unknown, r: Bill) => {
+        const room = r.room;
+        if (room && typeof room === "object") return room.roomNumber || "—";
+        return "—";
+      },
+    },
+    {
+      title: "Chi tiết phí",
+      key: "fees",
+      width: 120,
+      render: (_: unknown, r: Bill) => {
+        const content = isSpecialBill(r.billType) ? (
+          <div style={{ minWidth: 260 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>
+              {isTransferSupplementBill(r.billType)
+                ? "Phụ thu chuyển phòng"
+                : r.billType === "damage_reimbursement"
+                  ? "Chi tiết bồi thường"
+                  : "Chi tiết phạt"}
+            </div>
+            {(r.penaltyBreakdown || []).length ? (
+              <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                {(r.penaltyBreakdown || []).map((line, idx) => (
+                  <li key={idx}>
+                    {line.label}: <strong>{formatMoney(line.amount)}</strong>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div>—</div>
+            )}
+          </div>
+        ) : (
+          <div style={{ minWidth: 280 }}>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Chi tiết phí</div>
+            <div>
+              Tiền phòng: <strong>{formatMoney(r.roomFee)}</strong>
+            </div>
+            <div>
+              Điện: <strong>{formatMoney(r.electricityFee)}</strong>
+            </div>
+            <div>
+              Nước: <strong>{formatMoney(r.waterFee)}</strong>
+            </div>
+            <div>
+              Wi‑Fi: <strong>{formatMoney(r.sharedCommonFee)}</strong>
+            </div>
+            {r.otherFee ? (
+              <div>
+                Phí khác: <strong>{formatMoney(r.otherFee)}</strong>
+              </div>
+            ) : (
+              <div>Phí khác: —</div>
+            )}
+            {(r.personalServiceBreakdown || []).length ? (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 600 }}>Dịch vụ cá nhân</div>
+                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                  {(r.personalServiceBreakdown || []).map((it, idx) => (
+                    <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div style={{ marginTop: 8 }}>Dịch vụ cá nhân: —</div>
+            )}
+          </div>
+        );
+        return (
+          <Popover content={content} title={null} trigger="hover">
+            <Button size="small">Xem</Button>
+          </Popover>
+        );
+      },
+    },
+    {
+      title: "Tổng",
+      dataIndex: "total",
+      key: "total",
+      width: 110,
+      render: (v: number) => <strong style={{ color: "#134e4a" }}>{formatMoney(v)}</strong>,
+    },
+    {
+      title: "Hạn TT",
+      dataIndex: "dueDate",
+      key: "dueDate",
+      width: 100,
+      render: (d: string) => (d ? new Date(d).toLocaleDateString("vi-VN") : "—"),
+    },
+    {
+      title: "Ngày tạo HĐ",
+      dataIndex: "createdAt",
+      key: "createdAt",
+      width: 140,
+      render: (d?: string) => formatDateTimeVi(d),
+    },
+    {
+      title: "Ngày thanh toán",
+      dataIndex: "paidAt",
+      key: "paidAt",
+      width: 150,
+      render: (d?: string) => formatDateTimeVi(d),
+    },
+    {
+      title: "Phương thức TT",
+      key: "payMethod",
+      width: 160,
+      ellipsis: true,
+      render: (_: unknown, r: Bill) => (r.status === "paid" ? billPaymentMethodLabel(r.paymentMethod) : "—"),
+    },
+    {
+      title: "Trạng thái",
+      dataIndex: "status",
+      key: "status",
+      width: 130,
+      render: (s: string) => (
+        <Tag color={statusMap[s]?.color} style={{ fontWeight: 500 }}>
+          {statusMap[s]?.text || s}
+        </Tag>
+      ),
+    },
+    {
+      title: "Thao tác",
+      key: "action",
+      width: 200,
+      fixed: "right",
+      render: (_: unknown, r: Bill) => (
+        <Space wrap>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>
+            Chi tiết
+          </Button>
+          {canPayOnline(r.status) && Number(r.total || 0) > 0 ? (
+            <Button
+              type="link"
+              size="small"
+              icon={<CreditCardOutlined />}
+              loading={payingId === r._id}
+              onClick={() => void payOnline(r)}
+            >
+              VNPay
+            </Button>
+          ) : null}
+        </Space>
+      ),
+    },
+  ];
+
   return (
-    <div className="mx-auto max-w-6xl space-y-4 px-2 pb-8">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold text-slate-900">Hóa đơn của tôi</h1>
-        <p className="text-sm text-slate-500">Theo dõi trạng thái hóa đơn và thanh toán online VNPay.</p>
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ margin: "0 0 8px 0", fontSize: 22 }}>Hóa đơn của tôi</h2>
+        <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
+          Xem chi tiết, theo dõi trạng thái và thanh toán online các hóa đơn KTX
+        </p>
       </div>
 
-      {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card bordered={false} style={{ background: "linear-gradient(135deg, #0d9488 0%, #134e4a 100%)", color: "white" }}>
+            <Statistic
+              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Tổng cần thanh toán (theo bộ lọc)</span>}
+              value={summary.unpaidTotal}
+              formatter={(v) => formatMoney(Number(v))}
+              valueStyle={{ color: "#fff", fontSize: 20 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card bordered={false} style={{ background: "linear-gradient(135deg, #059669 0%, #047857 100%)", color: "white" }}>
+            <Statistic
+              title={<span style={{ color: "rgba(255,255,255,0.9)" }}>Đã thanh toán (toàn bộ)</span>}
+              value={summary.paidTotalAllTime}
+              formatter={(v) => formatMoney(Number(v))}
+              valueStyle={{ color: "#fff", fontSize: 20 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card>
+            <Statistic title="Hóa đơn chưa thanh toán" value={summary.unpaidCount} suffix="đơn" />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card>
+            <Statistic title="Tổng hóa đơn (theo bộ lọc)" value={summary.total} suffix="đơn" />
+          </Card>
+        </Col>
+      </Row>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-          <p className="text-xs uppercase tracking-wide text-amber-700">Tổng cần thanh toán</p>
-          <p className="mt-1 text-2xl font-bold text-amber-700">{formatMoney(totalNeedPay)}</p>
+      <Card style={{ borderRadius: 12 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 20, alignItems: "center" }}>
+          <FilterOutlined style={{ color: "#6b7280" }} />
+          <Input
+            placeholder="Tìm mã hóa đơn (VD: HD20260001)"
+            allowClear
+            style={{ width: 220 }}
+            value={searchInput}
+            onChange={(e) => {
+              setSearchInput(e.target.value);
+              setPage(1);
+            }}
+          />
+          <Select
+            placeholder="Trạng thái"
+            allowClear
+            style={{ width: 150 }}
+            value={filters.status}
+            onChange={(v) => {
+              setFilters((f) => ({ ...f, status: v }));
+              setPage(1);
+            }}
+            options={[
+              { value: "unpaid", label: "Chưa thanh toán" },
+              { value: "paid", label: "Đã thanh toán" },
+              { value: "overdue", label: "Quá hạn" },
+            ]}
+          />
+          <Select
+            placeholder="Loại HĐ"
+            allowClear
+            style={{ width: 150 }}
+            value={filters.billType}
+            onChange={(v) => {
+              setFilters((f) => ({ ...f, billType: v }));
+              setPage(1);
+            }}
+            options={[
+              { value: "monthly", label: "Hóa đơn tháng" },
+              { value: "penalty", label: "Hóa đơn phạt VP" },
+              { value: "damage_reimbursement", label: "Bồi thường HH" },
+              { value: "transfer_supplement", label: "Phụ thu chuyển phòng" },
+            ]}
+          />
+          <InputNumber
+            placeholder="Tháng"
+            min={1}
+            max={12}
+            style={{ width: 88 }}
+            value={filters.month}
+            onChange={(v) => {
+              setFilters((f) => ({ ...f, month: v ?? undefined }));
+              setPage(1);
+            }}
+          />
+          <InputNumber
+            placeholder="Năm"
+            min={2020}
+            style={{ width: 100 }}
+            value={filters.year}
+            onChange={(v) => {
+              setFilters((f) => ({ ...f, year: v ?? undefined }));
+              setPage(1);
+            }}
+          />
+          <Button
+            onClick={() => {
+              setSearchInput("");
+              setFilters({ month: currentMonth, year: currentYear });
+              setPage(1);
+            }}
+          >
+            Xóa lọc
+          </Button>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-4">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Số hóa đơn chưa thanh toán / quá hạn</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">{rows.filter((r) => canPay(r.status)).length}</p>
+
+        <Table<Bill>
+          columns={cols}
+          dataSource={filteredBills}
+          rowKey="_id"
+          loading={loading}
+          pagination={{
+            current: page,
+            pageSize: 10,
+            total: filteredBills.length,
+            onChange: setPage,
+            showSizeChanger: false,
+            showTotal: (t) => `Tổng ${t} hóa đơn`,
+          }}
+          scroll={{ x: 1280 }}
+          size="middle"
+          locale={{ emptyText: "Chưa có hóa đơn phù hợp bộ lọc" }}
+        />
+      </Card>
+
+      <Modal
+        title={`Chi tiết hóa đơn ${detailModal ? billDetailTitle(detailModal.billType, detailModal.month, detailModal.year) : ""}`}
+        open={!!detailModal}
+        onCancel={() => setDetailModal(null)}
+        footer={[
+          <Button key="close" onClick={() => setDetailModal(null)}>
+            Đóng
+          </Button>,
+          detailModal && canPayOnline(detailModal.status) && Number(detailModal.total || 0) > 0 ? (
+            <Button
+              key="pay"
+              type="primary"
+              icon={<CreditCardOutlined />}
+              loading={payingId === detailModal._id}
+              onClick={() => void payOnline(detailModal)}
+            >
+              Thanh toán VNPay
+            </Button>
+          ) : null,
+        ].filter(Boolean)}
+        width={440}
+      >
+        {detailModal && (
+          <div style={{ lineHeight: 2 }}>
+            <p>
+              <strong>Mã hóa đơn:</strong> {billCodeDisplay(detailModal)}
+            </p>
+            <p>
+              <strong>Phòng:</strong>{" "}
+              {roomSelectLabel(
+                (detailModal.room as { roomNumber?: string; capacity?: number; currentOccupancy?: number; status?: string }) ||
+                  {},
+              )}
+            </p>
+            {isSpecialBill(detailModal.billType) ? (
+              <>
+                <p>
+                  <strong>Loại:</strong>{" "}
+                  <Tag color={billTypeTagColor(detailModal.billType)}>{billTypeLabel(detailModal.billType)}</Tag>
+                </p>
+                <p>
+                  <strong>Kỳ tham chiếu:</strong> Tháng {detailModal.month}/{detailModal.year}
+                </p>
+                {(detailModal.penaltyBreakdown?.length || 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>
+                      {isTransferSupplementBill(detailModal.billType) ? "Cách tính phụ thu:" : "Mục phạt / bồi thường:"}
+                    </strong>
+                    <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                      {detailModal.penaltyBreakdown?.map((line, idx) => (
+                        <li key={idx}>
+                          {line.label}: <strong>{formatMoney(line.amount)}</strong>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {isTransferSupplementBill(detailModal.billType) ? (
+                  <p className="text-muted small mb-0" style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
+                    Đây <strong>không</strong> phải tiền phòng tháng đủ — chỉ là phần chênh lệch sau bù trừ chuyển phòng.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <p>
+                  <strong>Kỳ:</strong> Tháng {detailModal.month}/{detailModal.year}
+                </p>
+                <hr style={{ margin: "12px 0" }} />
+                <p>
+                  <strong>Số người trong phòng:</strong> {detailModal.occupants || 1}
+                </p>
+                <p>
+                  <strong>Tiền phòng:</strong> {formatMoney(detailModal.roomFee)}
+                </p>
+                <p>
+                  <strong>Tiền điện:</strong> {formatMoney(detailModal.electricityFee)}
+                </p>
+                <p>
+                  <strong>Tiền nước:</strong> {formatMoney(detailModal.waterFee)}
+                </p>
+                {detailModal.sharedCommonFee ? (
+                  <p>
+                    <strong>Wifi:</strong> {formatMoney(detailModal.sharedCommonFee)}
+                  </p>
+                ) : null}
+                {detailModal.otherFee ? (
+                  <p>
+                    <strong>Phí khác:</strong> {formatMoney(detailModal.otherFee)}
+                  </p>
+                ) : null}
+                {detailModal.personalServiceFee ? (
+                  <p>
+                    <strong>Dịch vụ cá nhân:</strong> {formatMoney(detailModal.personalServiceFee)}
+                  </p>
+                ) : null}
+                {(detailModal.personalServiceBreakdown?.length || 0) > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <strong>Chi tiết dịch vụ cá nhân:</strong>
+                    <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                      {detailModal.personalServiceBreakdown?.map((it, idx) => (
+                        <li key={`${it.service || it.name || "svc"}-${idx}`}>{formatPersonalServiceLine(it)}</li>
+                      ))}
+                    </ul>
         </div>
+                )}
+                {detailModal.note ? (
+                  <p style={{ color: "#6b7280" }}>
+                    <strong>Cách tính:</strong> {detailModal.note}
+                  </p>
+                ) : null}
+              </>
+            )}
+            <p>
+              <strong>{isTransferSupplementBill(detailModal.billType) ? "Phụ thu còn lại:" : "Tổng cộng:"}</strong>{" "}
+              <span style={{ fontSize: 18, color: "#0d9488" }}>{formatMoney(detailModal.total)}</span>
+            </p>
+            <hr style={{ margin: "12px 0" }} />
+            <p>
+              <strong>Hạn thanh toán:</strong> {new Date(detailModal.dueDate).toLocaleDateString("vi-VN")}
+            </p>
+            <p>
+              <strong>Ngày tạo:</strong> {formatDateTimeVi(detailModal.createdAt)}
+            </p>
+            {detailModal.paidAt && (
+              <p>
+                <strong>Ngày thanh toán:</strong> {formatDateTimeVi(detailModal.paidAt)}
+              </p>
+            )}
+            {detailModal.status === "paid" && (
+              <>
+                <p>
+                  <strong>Phương thức thanh toán:</strong> {billPaymentMethodLabel(detailModal.paymentMethod)}
+                </p>
+                <p>
+                  <strong>Người thanh toán:</strong> {billPaymentPayerLabel(detailModal)}
+                </p>
+                {detailModal.paymentReference ? (
+                  <p>
+                    <strong>Mã tham chiếu:</strong> {detailModal.paymentReference}
+                  </p>
+                ) : null}
+              </>
+            )}
+            <p>
+              <strong>Trạng thái:</strong>{" "}
+              <Tag color={statusMap[detailModal.status]?.color}>{statusMap[detailModal.status]?.text}</Tag>
+            </p>
       </div>
-
-      {loading ? (
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-10 text-center text-slate-500">Đang tải hóa đơn…</div>
-      ) : (
-        <BillsTable rows={rows} payingId={payingId} onView={openDetail} onPay={payOnline} />
       )}
-
-      <BillDetailModal bill={detail} open={detailOpen} loading={detailLoading} onClose={() => setDetailOpen(false)} />
+      </Modal>
     </div>
   );
 };

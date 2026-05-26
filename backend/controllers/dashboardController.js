@@ -7,6 +7,7 @@ const Bill = require("../models/Bill");
 const Violation = require("../models/Violation");
 const Contract = require("../models/Contract");
 const MaintenanceReport = require("../models/MaintenanceReport");
+const { contractIsEffectiveResident } = require("../services/roomOccupancySync");
 
 function startOfDay(d) {
   const x = new Date(d);
@@ -67,6 +68,97 @@ function getRoomStatusForFilter(room) {
   return Number(room.currentOccupancy || 0) >= Number(room.capacity || 0) ? "full" : "available";
 }
 
+/** SV đang ở KTX theo ngành (HĐ active đang hiệu lực). */
+async function buildResidentsByMajor() {
+  const now = new Date();
+  const todayStart = startOfDay(now);
+  const contracts = await Contract.find({
+    status: "active",
+    endDate: { $gte: todayStart },
+  })
+    .populate("user", "major")
+    .select("user startDate endDate status")
+    .lean();
+
+  const majorMap = new Map();
+  for (const c of contracts) {
+    if (!contractIsEffectiveResident(c, now)) continue;
+    const major = String(c.user?.major || "").trim() || "Chưa cập nhật ngành";
+    majorMap.set(major, (majorMap.get(major) || 0) + 1);
+  }
+  return Array.from(majorMap.entries())
+    .map(([major, count]) => ({ major, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
+function monthRange(year, month) {
+  const y = Number(year);
+  const m = Math.min(12, Math.max(1, Number(month)));
+  const start = new Date(y, m - 1, 1);
+  const end = endOfDay(new Date(y, m, 0));
+  return { start, end, daysInMonth: end.getDate() };
+}
+
+function paidBillRevenueDateExpr() {
+  return { $ifNull: ["$paidAt", "$updatedAt"] };
+}
+
+async function aggregatePaidRevenueByDay(year, month) {
+  const { start, end, daysInMonth } = monthRange(year, month);
+  const rows = await Bill.aggregate([
+    { $match: { status: "paid" } },
+    { $addFields: { revenueDate: paidBillRevenueDateExpr() } },
+    { $match: { revenueDate: { $gte: start, $lte: end } } },
+    { $group: { _id: { $dayOfMonth: "$revenueDate" }, total: { $sum: "$total" } } },
+    { $sort: { _id: 1 } },
+  ]);
+  const map = new Map(rows.map((r) => [Number(r._id), Number(r.total || 0)]));
+  return Array.from({ length: daysInMonth }, (_, i) => {
+    const day = i + 1;
+    return {
+      day,
+      label: `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}`,
+      doanhThu: map.get(day) || 0,
+    };
+  });
+}
+
+async function aggregatePaidRevenueByMonth(year) {
+  const y = Number(year);
+  const start = new Date(y, 0, 1);
+  const end = endOfDay(new Date(y, 11, 31));
+  const rows = await Bill.aggregate([
+    { $match: { status: "paid" } },
+    { $addFields: { revenueDate: paidBillRevenueDateExpr() } },
+    { $match: { revenueDate: { $gte: start, $lte: end } } },
+    { $group: { _id: { $month: "$revenueDate" }, total: { $sum: "$total" } } },
+    { $sort: { _id: 1 } },
+  ]);
+  const map = new Map(rows.map((r) => [Number(r._id), Number(r.total || 0)]));
+  return Array.from({ length: 12 }, (_, i) => {
+    const month = i + 1;
+    return { month, label: `T${month}/${y}`, doanhThu: map.get(month) || 0 };
+  });
+}
+
+async function aggregatePaidRevenueByYear() {
+  const now = new Date();
+  const fromYear = now.getFullYear() - 5;
+  const start = new Date(fromYear, 0, 1);
+  const rows = await Bill.aggregate([
+    { $match: { status: "paid" } },
+    { $addFields: { revenueDate: paidBillRevenueDateExpr() } },
+    { $match: { revenueDate: { $gte: start, $lte: endOfDay(now) } } },
+    { $group: { _id: { $year: "$revenueDate" }, total: { $sum: "$total" } } },
+    { $sort: { _id: 1 } },
+  ]);
+  return rows.map((r) => ({
+    year: Number(r._id),
+    label: String(r._id),
+    doanhThu: Number(r.total || 0),
+  }));
+}
+
 exports.getStats = async (req, res) => {
   try {
     const range = resolveRange(String(req.query.range || "7d"));
@@ -76,13 +168,22 @@ exports.getStats = async (req, res) => {
     const maintenanceStatus = String(req.query.maintenanceStatus || "all");
     const violationSeverity = String(req.query.violationSeverity || "all");
     const billingFilterResolved = resolveBillingFilter(req.query);
+    const revenueChartYear = billingFilterResolved.year;
+    const revenueChartMonth = billingFilterResolved.month;
+
+    const notDeleted = { isDeleted: { $ne: true } };
 
     const [
       rooms,
-      pendingDormApplications,
+      residentsByMajor,
+      revenueByDay,
+      revenueByMonthChart,
+      revenueByYear,
+      pendingDormApplicationsOnly,
+      pendingDormRegistrationsLegacy,
       pendingTransferRegistrations,
       pendingContractExtensions,
-      activeContracts,
+      pendingAccountApprovals,
       billsInRange,
       allBillsForDebt,
       maintenanceReports,
@@ -91,10 +192,15 @@ exports.getStats = async (req, res) => {
       Room.find(roomArea !== "all" ? { area: roomArea } : {})
         .populate("area", "name")
         .select("roomNumber area capacity currentOccupancy status"),
+      buildResidentsByMajor(),
+      aggregatePaidRevenueByDay(revenueChartYear, revenueChartMonth),
+      aggregatePaidRevenueByMonth(revenueChartYear),
+      aggregatePaidRevenueByYear(),
       Application.countDocuments({ status: "pending" }),
+      Registration.countDocuments({ status: "pending", registrationType: "dorm" }),
       Registration.countDocuments({ status: "pending", registrationType: "transfer" }),
       ContractExtendRequest.countDocuments({ status: "pending" }),
-      Contract.countDocuments({ status: "active" }),
+      User.countDocuments({ role: "student", status: "pending", ...notDeleted }),
       Bill.find({
         ...billingFilterResolved.filter,
         createdAt: { $gte: range.start, $lte: range.end },
@@ -285,8 +391,14 @@ exports.getStats = async (req, res) => {
     const overdueBills = allBillsForDebt.filter((b) => b.status === "overdue").length;
     const pendingViolations = violations.filter((v) => v.status === "pending").length;
 
+    const pendingDormApplications = pendingDormApplicationsOnly + pendingDormRegistrationsLegacy;
     const pendingApplicationsTotal =
-      pendingDormApplications + pendingTransferRegistrations + pendingContractExtensions;
+      pendingAccountApprovals +
+      pendingDormApplications +
+      pendingTransferRegistrations +
+      pendingContractExtensions;
+
+    const effectiveResidentCount = residentsByMajor.reduce((sum, row) => sum + Number(row.count || 0), 0);
 
     res.json({
       // Legacy fields giữ tương thích UI cũ
@@ -296,6 +408,7 @@ exports.getStats = async (req, res) => {
       totalStudents: await User.countDocuments({ role: "user" }),
       pendingRegistrations: pendingApplicationsTotal,
       pendingApplicationsBreakdown: {
+        pendingAccounts: pendingAccountApprovals,
         dormApplications: pendingDormApplications,
         transferRegistrations: pendingTransferRegistrations,
         contractExtensions: pendingContractExtensions,
@@ -318,13 +431,24 @@ exports.getStats = async (req, res) => {
       overview: {
         pendingApplications: pendingApplicationsTotal,
         pendingApplicationsBreakdown: {
+          pendingAccounts: pendingAccountApprovals,
           dormApplications: pendingDormApplications,
           transferRegistrations: pendingTransferRegistrations,
           contractExtensions: pendingContractExtensions,
         },
         availableRooms: roomSummary.availableRooms,
-        residentStudents: activeContracts,
+        residentStudents: effectiveResidentCount,
         estimatedRevenue,
+      },
+      charts: {
+        residentsByMajor,
+        revenue: {
+          year: revenueChartYear,
+          month: revenueChartMonth,
+          byDay: revenueByDay,
+          byMonth: revenueByMonthChart,
+          byYear: revenueByYear,
+        },
       },
       roomPerformance: {
         summary: roomSummary,

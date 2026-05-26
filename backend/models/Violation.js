@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const resolutionSchema = new mongoose.Schema(
   {
-    actionType: { type: String, enum: ["warning", "fine", "expulsion"], required: true },
+    actionType: { type: String, enum: ["warning", "fine", "compensation", "expulsion"], required: true },
     penaltyAmount: { type: Number, default: 0, min: 0 },
     note: { type: String, default: "" },
     resolvedAt: { type: Date, required: true },

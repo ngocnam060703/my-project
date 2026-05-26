@@ -8,7 +8,8 @@ import { useSearchParams } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
 import { applicationsApi } from "../../api";
 import { areasApi } from "../../api";
-import type { Area, DormApplication, Room } from "../../types";
+import type { Area, DormApplication, Room, StudentPriorityType } from "../../types";
+import { formatPriorityType, PRIORITY_OPTIONS } from "../../utils/priorityDisplay";
 import RegistrationsPanel from "./RegistrationsPage";
 
 const statusBadge: Record<string, { cls: string; text: string }> = {
@@ -17,26 +18,42 @@ const statusBadge: Record<string, { cls: string; text: string }> = {
   rejected: { cls: "text-bg-danger", text: "Từ chối" },
 };
 
-const priorityLabel: Record<string, string> = {
-  none: "Bình thường",
-  ho_ngheo: "Hộ nghèo",
-  con_thuong_binh: "Con thương binh",
-  chinh_sach: "Chính sách",
-  dan_toc_thieu_so: "Dân tộc thiểu số",
-};
-
-type ApplicationPriorityFilter =
-  | "none"
-  | "ho_ngheo"
-  | "con_thuong_binh"
-  | "chinh_sach"
-  | "dan_toc_thieu_so";
-
 function formatGender(g?: string) {
   const s = String(g || "").toLowerCase();
-  if (s === "male" || s.includes("nam")) return "Nam";
-  if (s === "female" || s.includes("nữ")) return "Nữ";
+  if (s === "male" || s === "m" || s.includes("nam")) return "Nam";
+  if (s === "female" || s === "f" || s.includes("nữ") || s.includes("nu")) return "Nữ";
   return "Chưa rõ";
+}
+
+/** Giới tính trên đơn đăng ký (genderSnapshot) — dùng để lọc khu/phòng. */
+function applicationGenderNorm(app: DormApplication | null | undefined): "male" | "female" | "unknown" {
+  return normalizeGenderNorm(app?.genderSnapshot);
+}
+
+function normalizeGenderNorm(g?: string): "male" | "female" | "unknown" {
+  const s = String(g || "").toLowerCase();
+  if (s === "male" || s.includes("nam")) return "male";
+  if (s === "female" || s.includes("nữ") || s.includes("nu")) return "female";
+  return "unknown";
+}
+
+function areaPolicyVi(p?: Area["genderPolicy"]) {
+  if (p === "male") return "KTX nam";
+  if (p === "female") return "KTX nữ";
+  return "Hỗn hợp (nam/nữ khác phòng)";
+}
+
+function areaAllowsGenderForStudent(area: Pick<Area, "genderPolicy">, genderNorm: "male" | "female" | "unknown") {
+  const pol = area.genderPolicy || "mixed";
+  if (pol === "mixed") return true;
+  if (genderNorm === "unknown") return false;
+  return pol === genderNorm;
+}
+
+function preferenceAreaIdOf(app: DormApplication | null | undefined): string {
+  if (!app?.preferenceArea) return "";
+  if (typeof app.preferenceArea === "object" && app.preferenceArea._id) return String(app.preferenceArea._id);
+  return String(app.preferenceArea);
 }
 
 function studentName(app: DormApplication) {
@@ -101,19 +118,26 @@ const ApplicationsPage: React.FC = () => {
   const [faculty, setFaculty] = useState("");
   const [enrollmentYear, setEnrollmentYear] = useState("");
   const [area, setArea] = useState<string>("");
-  const [priorityCategory, setPriorityCategory] = useState<string>("");
+  const [priorityUserFilter, setPriorityUserFilter] = useState<"" | StudentPriorityType>("");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [areas, setAreas] = useState<Array<Pick<Area, "_id" | "name">>>([]);
+  const [areas, setAreas] = useState<Array<Pick<Area, "_id" | "name" | "genderPolicy">>>([]);
 
   const [detail, setDetail] = useState<DormApplication | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState("");
   const [suggest, setSuggest] = useState<{ room: Room; rules: string[] } | null>(null);
   const [datePreset, setDatePreset] = useState<"7d" | "14d" | "month">("14d");
-  const [assignModal, setAssignModal] = useState<{ appId: string; rooms: Room[] } | null>(null);
+  const [assignModal, setAssignModal] = useState<{
+    appId: string;
+    rooms: Room[];
+    genderLabel: string;
+    allowedAreas: Array<Pick<Area, "_id" | "name" | "genderPolicy">>;
+    areaStatsById: Map<string, { availableRooms: number; vacantSlots: number }>;
+  } | null>(null);
+  const [assignAreaId, setAssignAreaId] = useState<string>("");
   const [assignRoomId, setAssignRoomId] = useState<string>("");
   const [chosenRoomByAppId, setChosenRoomByAppId] = useState<Record<string, Room | null>>({});
   const [listStats, setListStats] = useState<{ pending: number; approved: number; total: number }>({ pending: 0, approved: 0, total: 0 });
@@ -141,11 +165,7 @@ const ApplicationsPage: React.FC = () => {
         ...(faculty.trim() ? { faculty: faculty.trim() } : {}),
         ...(enrollmentYear.trim() ? { enrollmentYear: Number(enrollmentYear.trim()) } : {}),
         ...(area ? { area } : {}),
-        ...(priorityCategory === "dan_toc_thieu_so"
-          ? { userPriorityType: "minority" as const }
-          : priorityCategory
-            ? { priorityCategory: priorityCategory as ApplicationPriorityFilter }
-            : {}),
+        ...(priorityUserFilter ? { userPriorityType: priorityUserFilter } : {}),
         ...(presetDays() ? { days: presetDays() } : {}),
       });
       setRows(listRes.data.applications || []);
@@ -156,7 +176,7 @@ const ApplicationsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, limit, sortOrder, status, search, faculty, enrollmentYear, area, priorityCategory, presetDays]);
+  }, [page, limit, sortOrder, status, search, faculty, enrollmentYear, area, priorityUserFilter, presetDays]);
 
   useEffect(() => {
     if (tab === "ktx") load();
@@ -166,7 +186,9 @@ const ApplicationsPage: React.FC = () => {
     if (tab !== "ktx") return;
     areasApi
       .getAll()
-      .then((res) => setAreas((res.data?.areas ?? res.data ?? []) as Array<Pick<Area, "_id" | "name">>))
+      .then((res) =>
+        setAreas((res.data?.areas ?? res.data ?? []) as Array<Pick<Area, "_id" | "name" | "genderPolicy">>)
+      )
       .catch(() => setAreas([]));
   }, [tab]);
 
@@ -182,19 +204,40 @@ const ApplicationsPage: React.FC = () => {
     }
   };
 
+  const noRoomMessage = (genderLabel: string) =>
+    `Chưa có phòng phù hợp cho sinh viên ${genderLabel}. Nam và nữ không ở chung phòng — cần phòng trống hoặc phòng đang có sinh viên cùng giới tính. Vui lòng thêm phòng / chờ có chỗ trống.`;
+
   const onApprove = async (id: string) => {
+    const app = rows.find((r) => r._id === id);
     const chosen = chosenRoomByAppId[id];
+    if (chosen) {
+      const genderNorm = applicationGenderNorm(app);
+      const roomArea =
+        chosen.area && typeof chosen.area === "object" && "genderPolicy" in chosen.area
+          ? (chosen.area as Pick<Area, "genderPolicy">)
+          : null;
+      if (roomArea && !areaAllowsGenderForStudent(roomArea, genderNorm)) {
+        setErr("Phòng đã chọn không phù hợp giới tính trên đơn. Vui lòng chọn lại phòng.");
+        return;
+      }
+    }
     const msg = chosen
       ? `Duyệt đơn và xếp vào phòng ${chosen.roomNumber}?`
       : "Duyệt đơn và tự động phân phòng theo quy tắc hệ thống?";
     if (!window.confirm(msg)) return;
     setLoading(true);
+    setErr(null);
     try {
       await applicationsApi.approve(id, chosen?._id ? { roomId: chosen._id } : undefined);
       setChosenRoomByAppId((m) => ({ ...m, [id]: null }));
       await load();
     } catch (e: unknown) {
-      setErr((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Duyệt thất bại");
+      const apiMsg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      setErr(
+        apiMsg && /không còn phòng|no_room|phù hợp/i.test(apiMsg)
+          ? apiMsg
+          : apiMsg || "Duyệt thất bại"
+      );
     } finally {
       setLoading(false);
     }
@@ -204,10 +247,42 @@ const ApplicationsPage: React.FC = () => {
     setLoading(true);
     setErr(null);
     try {
+      const app = rows.find((r) => r._id === id) || null;
+      const genderNorm = applicationGenderNorm(app);
+      const genderLabel = formatGender(app?.genderSnapshot);
+      const allowedAreas = areas.filter((a) => areaAllowsGenderForStudent(a, genderNorm));
       const { data } = await applicationsApi.getCandidateRooms(id);
-      const rooms = (data as { rooms?: Room[] })?.rooms || [];
+      const res = data as {
+        rooms?: Room[];
+        areaStats?: Array<{ areaId: string; availableRooms: number; vacantSlots: number }>;
+        message?: string;
+      };
+      const rooms = res?.rooms || [];
+      const areaStatsById = new Map((res?.areaStats || []).map((s) => [String(s.areaId), s]));
+
+      if (!rooms.length) {
+        setErr(res?.message || noRoomMessage(genderLabel));
+        return;
+      }
+
+      const roomAreaId = (r: Room) =>
+        r.area && typeof r.area === "object" && "_id" in r.area ? String(r.area._id) : String(r.area || "");
+
+      const areasWithRooms = allowedAreas.filter((a) => rooms.some((r) => roomAreaId(r) === String(a._id)));
+
+      if (!areasWithRooms.length) {
+        setErr(noRoomMessage(genderLabel));
+        return;
+      }
+
+      const prefId = preferenceAreaIdOf(app);
+      const pickArea =
+        (prefId && areasWithRooms.some((a) => String(a._id) === prefId) ? prefId : "") ||
+        areasWithRooms[0]?._id ||
+        "";
+      setAssignAreaId(pickArea ? String(pickArea) : "");
       setAssignRoomId("");
-      setAssignModal({ appId: id, rooms });
+      setAssignModal({ appId: id, rooms, genderLabel, allowedAreas: areasWithRooms, areaStatsById });
     } catch (e: unknown) {
       setErr(formatApiError(e) || "Không lấy được danh sách phòng");
     } finally {
@@ -226,8 +301,19 @@ const ApplicationsPage: React.FC = () => {
       setErr("Không tìm thấy phòng đã chọn");
       return;
     }
+    const app = rows.find((r) => r._id === assignModal.appId);
+    const genderNorm = applicationGenderNorm(app);
+    const roomArea =
+      room.area && typeof room.area === "object" && "genderPolicy" in room.area
+        ? (room.area as Pick<Area, "genderPolicy">)
+        : null;
+    if (roomArea && !areaAllowsGenderForStudent(roomArea, genderNorm)) {
+      setErr("Phòng không phù hợp giới tính sinh viên trên đơn đăng ký.");
+      return;
+    }
     setChosenRoomByAppId((m) => ({ ...m, [assignModal.appId]: room }));
     setAssignModal(null);
+    setAssignAreaId("");
     setAssignRoomId("");
   };
 
@@ -253,11 +339,19 @@ const ApplicationsPage: React.FC = () => {
 
   const loadSuggest = async (id: string) => {
     setLoading(true);
+    setErr(null);
     try {
       const { data } = await applicationsApi.getSuggestedRoom(id);
       setSuggest(data);
     } catch (e: unknown) {
-      setErr((e as { response?: { data?: { message?: string } } })?.response?.data?.message || "Không lấy được gợi ý phòng");
+      const ax = e as { response?: { status?: number; data?: { message?: string } } };
+      const app = rows.find((r) => r._id === id);
+      const genderLabel = formatGender(app?.genderSnapshot);
+      if (ax.response?.status === 404) {
+        setErr(noRoomMessage(genderLabel));
+        return;
+      }
+      setErr(ax.response?.data?.message || "Không lấy được gợi ý phòng");
     } finally {
       setLoading(false);
     }
@@ -351,18 +445,18 @@ const ApplicationsPage: React.FC = () => {
           <label className="form-label small mb-0">Đối tượng ưu tiên</label>
           <select
             className="form-select form-select-sm"
-            value={priorityCategory}
+            value={priorityUserFilter}
             onChange={(e) => {
               setPage(1);
-              setPriorityCategory(e.target.value);
+              setPriorityUserFilter((e.target.value || "") as "" | StudentPriorityType);
             }}
           >
             <option value="">Tất cả</option>
-            <option value="none">Bình thường</option>
-            <option value="ho_ngheo">Hộ nghèo</option>
-            <option value="con_thuong_binh">Con thương binh</option>
-            <option value="chinh_sach">Chính sách</option>
-            <option value="dan_toc_thieu_so">Dân tộc thiểu số</option>
+            {PRIORITY_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
           </select>
         </div>
         <div className="col-md-3">
@@ -443,7 +537,7 @@ const ApplicationsPage: React.FC = () => {
               setFaculty("");
               setEnrollmentYear("");
               setArea("");
-              setPriorityCategory("");
+              setPriorityUserFilter("");
               load();
             }}
           >
@@ -453,7 +547,8 @@ const ApplicationsPage: React.FC = () => {
       </div>
 
       <p className="text-muted small mb-4">
-        Phân phòng khi duyệt: cùng giới tính theo khu, còn chỗ, ưu tiên khu nguyện vọng và phòng gần đầy. Admin có thể chọn phòng thủ công trước khi duyệt.
+        Phân phòng theo giới tính trên đơn đăng ký: khu nam/nữ/hỗn hợp; khu hỗn hợp thì nam và nữ không ở chung phòng. Chỉ hiển thị khu và phòng
+        phù hợp — nếu không còn phòng sẽ báo «Chưa có phòng phù hợp».
       </p>
 
       {err && (
@@ -493,7 +588,7 @@ const ApplicationsPage: React.FC = () => {
                 const su = appStudentUser(app);
                 const st = statusBadge[app.status] || { cls: "text-bg-secondary", text: app.status };
                 const created = app.createdAt ? new Date(app.createdAt).toLocaleString("vi-VN") : "—";
-                const g = formatGender(app.genderSnapshot);
+                const g = formatGender(app.genderSnapshot || (su?.gender as string | undefined));
                 const chosen = chosenRoomByAppId[app._id];
                 const stt = (page - 1) * limit + idx + 1;
                 return (
@@ -503,7 +598,7 @@ const ApplicationsPage: React.FC = () => {
                     <td>{su?.studentId?.trim() ? su.studentId : "—"}</td>
                     <td className="text-break">{su?.email?.trim() ? su.email : "—"}</td>
                     <td>{su?.phone?.trim() ? su.phone : "—"}</td>
-                    <td>{priorityLabel[String(app.priorityCategory || "none")] || "—"}</td>
+                    <td>{formatPriorityType(su?.priorityType)}</td>
                     <td>{created}</td>
                     <td>{g}</td>
                     <td>
@@ -605,6 +700,14 @@ const ApplicationsPage: React.FC = () => {
                   <li>Ngày bắt đầu: {detail.startDate ? new Date(detail.startDate).toLocaleDateString("vi-VN") : "—"}</li>
                   <li>Nguyện vọng khu: {detail.preferenceArea && typeof detail.preferenceArea === "object" ? (detail.preferenceArea as { name?: string }).name : "Không chọn"}</li>
                   <li>Giới tính (snapshot): {formatGender(detail.genderSnapshot)}</li>
+                  <li>
+                    Đối tượng ưu tiên:{" "}
+                    {formatPriorityType(
+                      detail.user && typeof detail.user === "object"
+                        ? (detail.user as { priorityType?: string }).priorityType
+                        : undefined
+                    )}
+                  </li>
                 </ul>
                 <h6>Trạng thái</h6>
                 <p>
@@ -696,33 +799,119 @@ const ApplicationsPage: React.FC = () => {
       {/* Xếp phòng thủ công */}
       {assignModal && (
         <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,.45)" }}>
-          <div className="modal-dialog">
+          <div className="modal-dialog modal-lg">
             <div className="modal-content">
               <div className="modal-header">
                 <h5 className="modal-title">Chọn phòng cho sinh viên</h5>
-                <button type="button" className="btn-close" aria-label="Close" onClick={() => setAssignModal(null)} />
+                <button
+                  type="button"
+                  className="btn-close"
+                  aria-label="Close"
+                  onClick={() => {
+                    setAssignModal(null);
+                    setAssignAreaId("");
+                    setAssignRoomId("");
+                  }}
+                />
               </div>
               <div className="modal-body">
-                <label className="form-label">Chọn phòng</label>
-                <select className="form-select" value={assignRoomId} onChange={(e) => setAssignRoomId(e.target.value)}>
-                  <option value="">-- Chọn phòng --</option>
-                  {assignModal.rooms.map((r) => {
-                    const areaName = r.area && typeof r.area === "object" && "name" in r.area ? String((r.area as { name?: string }).name || "") : "";
-                    const occ = `${Number(r.currentOccupancy || 0)}/${Number(r.capacity || 0)}`;
-                    return (
-                      <option key={r._id} value={r._id}>
-                        {r.roomNumber}{areaName ? ` (${areaName})` : ""} — {occ}
-                      </option>
-                    );
-                  })}
-                </select>
-                {assignModal.rooms.length === 0 && <div className="text-muted small mt-2">Không có phòng phù hợp để chọn.</div>}
+                <div className="alert alert-info small py-2 mb-3">
+                  Sinh viên: <strong>{assignModal.genderLabel}</strong> — <strong>nam và nữ không ở chung phòng</strong> (chỉ phòng
+                  trống hoặc phòng đang có người cùng giới tính).
+                </div>
+                {assignModal.rooms.length === 0 && (
+                  <div className="alert alert-warning small py-2 mb-3 mb-0">{noRoomMessage(assignModal.genderLabel)}</div>
+                )}
+                <div className="mb-3">
+                  <label className="form-label">Chọn khu (theo giới tính)</label>
+                  <select
+                    className="form-select"
+                    value={assignAreaId}
+                    onChange={(e) => {
+                      setAssignAreaId(e.target.value);
+                      setAssignRoomId("");
+                    }}
+                  >
+                    <option value="">-- Chọn khu --</option>
+                    {assignModal.allowedAreas.map((a) => {
+                      const stat = assignModal.areaStatsById.get(String(a._id));
+                      const roomCount =
+                        stat?.availableRooms ??
+                        assignModal.rooms.filter((r) => {
+                          const aid =
+                            r.area && typeof r.area === "object" && "_id" in r.area
+                              ? String(r.area._id)
+                              : String(r.area || "");
+                          return aid === String(a._id);
+                        }).length;
+                      const slotHint =
+                        stat && stat.vacantSlots > 0 ? ` (${stat.vacantSlots} chỗ)` : "";
+                      return (
+                        <option key={a._id} value={a._id}>
+                          {a.name} ({areaPolicyVi(a.genderPolicy)}) — {roomCount} phòng còn chỗ{slotHint}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {assignModal.allowedAreas.length === 0 && (
+                    <div className="text-danger small mt-2">Không có khu phù hợp giới tính sinh viên. Kiểm tra cấu hình khu tại Quản lý khu &amp; phòng.</div>
+                  )}
+                </div>
+                <div className="mb-0">
+                  <label className="form-label">Chọn phòng trong khu</label>
+                  <select
+                    className="form-select"
+                    value={assignRoomId}
+                    disabled={!assignAreaId}
+                    onChange={(e) => setAssignRoomId(e.target.value)}
+                  >
+                    <option value="">{assignAreaId ? "-- Chọn phòng --" : "Chọn khu trước"}</option>
+                    {assignModal.rooms
+                      .filter((r) => {
+                        const aid =
+                          r.area && typeof r.area === "object" && "_id" in r.area
+                            ? String(r.area._id)
+                            : String(r.area || "");
+                        return assignAreaId && aid === String(assignAreaId);
+                      })
+                      .map((r) => {
+                        const occ = `${Number(r.currentOccupancy || 0)}/${Number(r.capacity || 0)}`;
+                        const vacant =
+                          "vacantSlots" in r && typeof (r as Room & { vacantSlots?: number }).vacantSlots === "number"
+                            ? Number((r as Room & { vacantSlots?: number }).vacantSlots)
+                            : Math.max(0, Number(r.capacity || 0) - Number(r.currentOccupancy || 0));
+                        return (
+                          <option key={r._id} value={r._id}>
+                            Phòng {r.roomNumber} — còn {vacant} chỗ ({occ})
+                          </option>
+                        );
+                      })}
+                  </select>
+                  {assignAreaId &&
+                    assignModal.rooms.filter((r) => {
+                      const aid =
+                        r.area && typeof r.area === "object" && "_id" in r.area ? String(r.area._id) : String(r.area || "");
+                      return aid === String(assignAreaId);
+                    }).length === 0 && (
+                      <div className="alert alert-warning small py-2 mt-2 mb-0">
+                        Chưa có phòng phù hợp trong khu này. Nam và nữ không ở chung phòng — chọn khu khác hoặc thêm phòng trống.
+                      </div>
+                    )}
+                </div>
               </div>
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setAssignModal(null)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setAssignModal(null);
+                    setAssignAreaId("");
+                    setAssignRoomId("");
+                  }}
+                >
                   Hủy
                 </button>
-                <button type="button" className="btn btn-primary" onClick={onChooseRoom} disabled={!assignRoomId}>
+                <button type="button" className="btn btn-primary" onClick={onChooseRoom} disabled={!assignAreaId || !assignRoomId}>
                   Chọn phòng
                 </button>
               </div>

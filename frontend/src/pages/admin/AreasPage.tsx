@@ -552,7 +552,7 @@ const AreasPage: React.FC = () => {
           <Form.Item name="genderPolicy" label="Phân khu theo giới tính">
             <Select
               options={[
-                { value: "mixed", label: "Hỗn hợp" },
+                { value: "mixed", label: "Hỗn hợp (nam/nữ cùng khu, khác phòng)" },
                 { value: "male", label: "Khu nam" },
                 { value: "female", label: "Khu nữ" },
               ]}

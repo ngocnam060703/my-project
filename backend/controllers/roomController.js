@@ -6,13 +6,8 @@ const Bed = require("../models/Bed");
 const BedHistory = require("../models/BedHistory");
 const Bill = require("../models/Bill");
 const { syncExpiredActiveContracts, countTakenSlots } = require("../services/bedOccupancy");
-
-function deriveResidencyOperationalStatus(bed) {
-  if (!bed || String(bed.status) !== "occupied") return "no_bed_assigned";
-  if (!bed.checkInAt && bed.assignedAt) return "assigned_pending_checkin";
-  if (bed.checkInAt) return "checked_in_staying";
-  return "assigned_pending_checkin";
-}
+const { syncRoomsOccupancyFromContracts } = require("../services/roomOccupancySync");
+const { listContractResidentsForRoom } = require("../services/roomResidentsListService");
 
 function sanitizeAmenities(input) {
   const list = Array.isArray(input) ? input : [];
@@ -42,6 +37,8 @@ exports.getAll = async (req, res) => {
     }
     const sortField = { price: "price", capacity: "capacity", roomNumber: "roomNumber", area: "area.name" }[sortBy] || "roomNumber";
     const sort = { [sortField]: sortOrder === "desc" ? -1 : 1 };
+    const matchingRoomIds = await Room.find(filter).distinct("_id");
+    await syncRoomsOccupancyFromContracts(matchingRoomIds);
     const rooms = await Room.find(filter)
       .populate("area", "name")
       .skip((page - 1) * limit)
@@ -61,6 +58,7 @@ exports.getAll = async (req, res) => {
 
 exports.getById = async (req, res) => {
   try {
+    await syncRoomsOccupancyFromContracts([req.params.id]);
     const room = await Room.findById(req.params.id).populate("area", "name");
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
     res.json(room);
@@ -72,19 +70,16 @@ exports.getById = async (req, res) => {
 exports.getResidents = async (req, res) => {
   try {
     await syncExpiredActiveContracts();
+    await syncRoomsOccupancyFromContracts([req.params.id]);
     const room = await Room.findById(req.params.id)
       .populate("area", "name genderPolicy")
       .populate("roomLeader", "fullName studentId email phone");
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
-    const contracts = await Contract.find({
-      room: room._id,
-      status: { $in: ["active", "pending_payment"] },
-    })
-      .populate("user", "fullName studentId email phone gender")
-      .populate({ path: "bed", select: "code status assignedAt checkInAt equipmentStatus" })
-      .sort({ createdAt: 1 });
+    const residentRows = await listContractResidentsForRoom(room._id, {
+      roomLeaderId: room.roomLeader?._id || room.roomLeader,
+    });
 
-    const userIds = contracts.filter((c) => c.user).map((c) => c.user._id);
+    const userIds = residentRows.filter((c) => c.user?._id).map((c) => c.user._id);
     let debtMap = {};
     if (userIds.length) {
       const debtAgg = await Bill.aggregate([
@@ -99,23 +94,10 @@ exports.getResidents = async (req, res) => {
     const reservedOnly = await Bed.countDocuments({ room: room._id, status: "reserved" });
     const cap = Math.max(1, Number(room.capacity || 1));
 
-    const residents = contracts
-      .filter((c) => c.user)
-      .map((c) => ({
-        contractId: c._id,
-        status: c.status,
-        contractNumber: c.contractNumber,
-        startDate: c.startDate,
-        endDate: c.endDate,
-        user: c.user,
-        isRoomLeader: String(room.roomLeader?._id || "") === String(c.user?._id || ""),
-        bed: c.bed || null,
-        bedCode: c.bed?.code || "",
-        assignedAt: c.bed?.assignedAt || null,
-        checkInAt: c.bed?.checkInAt || null,
-        debtTotal: debtMap[String(c.user._id)] || 0,
-        residencyOperationalStatus: deriveResidencyOperationalStatus(c.bed),
-      }));
+    const residents = residentRows.map((c) => ({
+      ...c,
+      debtTotal: debtMap[String(c.user._id)] || 0,
+    }));
     res.json({
       room: {
         _id: room._id,
@@ -300,8 +282,17 @@ exports.update = async (req, res) => {
     if (updateData.amenities !== undefined) {
       updateData.amenities = sanitizeAmenities(updateData.amenities);
     }
+    const priceTouched =
+      updateData.currentPrice !== undefined ||
+      updateData.price !== undefined ||
+      updateData.capacity !== undefined ||
+      updateData.maxCapacity !== undefined;
     const room = await Room.findByIdAndUpdate(req.params.id, updateData, { new: true }).populate("area", "name");
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
+    if (priceTouched) {
+      const { refreshPendingContractsInRoom } = require("../services/contractPricing");
+      await refreshPendingContractsInRoom(room._id);
+    }
     res.json(room);
   } catch (error) {
     res.status(500).json({ message: error.message });

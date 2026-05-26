@@ -18,6 +18,8 @@ type Props = {
   onPageReset: () => void;
   onClearFilters: () => void;
   onReload: () => void;
+  /** Placeholder ô tìm kiếm (mặc định: admin). */
+  searchPlaceholder?: string;
 };
 
 const MaintenanceReportFilterBar: React.FC<Props> = ({
@@ -28,6 +30,7 @@ const MaintenanceReportFilterBar: React.FC<Props> = ({
   onPageReset,
   onClearFilters,
   onReload,
+  searchPlaceholder = "Tìm theo tên hoặc MSSV",
 }) => {
   const dateValue = filters.date ? dayjs(filters.date) : null;
 
@@ -44,9 +47,9 @@ const MaintenanceReportFilterBar: React.FC<Props> = ({
           onPageReset();
         }}
       >
-        <Select.Option value="pending">Chờ xử lý</Select.Option>
-        <Select.Option value="processing">Đang xử lý</Select.Option>
-        <Select.Option value="resolved">Đã xử lý</Select.Option>
+        <Select.Option value="pending">Chờ kiểm tra</Select.Option>
+        <Select.Option value="processing">Đang sửa chữa</Select.Option>
+        <Select.Option value="resolved">Đã khắc phục</Select.Option>
         <Select.Option value="cancelled">Đã hủy</Select.Option>
       </Select>
       <DatePicker
@@ -91,12 +94,16 @@ const MaintenanceReportFilterBar: React.FC<Props> = ({
           onPageReset();
         }}
       />
-      <Input
-        placeholder="Tên SV, MSSV, mã yêu cầu"
+      <Input.Search
+        placeholder={searchPlaceholder}
         allowClear
-        style={{ width: 240 }}
+        style={{ width: 260 }}
         value={searchInput}
         onChange={(e) => onSearchChange(e.target.value)}
+        onSearch={(v) => {
+          onSearchChange(v);
+          onPageReset();
+        }}
       />
       <Button onClick={onClearFilters}>Xóa lọc</Button>
       <Button icon={<ReloadOutlined />} onClick={onReload}>

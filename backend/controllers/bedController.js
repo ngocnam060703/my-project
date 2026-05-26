@@ -8,9 +8,11 @@ const {
   syncExpiredActiveContracts,
   clearOccupiedBedDocument,
   countTakenSlots,
+  reconcileRoomBeds,
+  isContractBedAssignable,
 } = require("../services/bedOccupancy");
 const { syncOccupancyForRooms } = require("../services/roomOccupancySync");
-const { genderAllowsStay } = require("../utils/genderPolicy");
+const { genderAllowsStay, studentMayJoinRoom, normalizeStudentGender } = require("../utils/genderPolicy");
 
 function normalizeBedStatus(s) {
   const v = String(s || "").toLowerCase().trim();
@@ -19,10 +21,7 @@ function normalizeBedStatus(s) {
 }
 
 function isContractAssignable(contract) {
-  const now = new Date();
-  if (!["pending_payment", "active"].includes(String(contract.status))) return false;
-  if (contract.endDate && new Date(contract.endDate) < now) return false;
-  return true;
+  return isContractBedAssignable(contract);
 }
 
 function enrichBedLean(b) {
@@ -48,6 +47,7 @@ exports.getRoomBeds = async (req, res) => {
     const room = await Room.findById(roomId).populate("area", "name genderPolicy").select("_id capacity roomNumber area").lean();
     if (!room) return res.status(404).json({ message: "Không tìm thấy phòng" });
     await ensureBedsForRoom(roomId, room.capacity, room.roomNumber);
+    const { cleared: reconciledCleared } = await reconcileRoomBeds(roomId, req.user?._id || null);
     let beds = await Bed.find({ room: roomId })
       .populate("currentUser", "fullName studentId email phone gender")
       .populate("currentContract", "contractNumber status startDate endDate")
@@ -61,6 +61,7 @@ exports.getRoomBeds = async (req, res) => {
     res.json({
       room,
       beds,
+      reconciledCleared,
       slotStats: {
         totalSlots: cap,
         occupiedSlots: occupiedOnly,
@@ -122,7 +123,15 @@ exports.assignBed = async (req, res) => {
     if (!bed) return res.status(404).json({ message: "Không tìm thấy giường trong phòng" });
     if (!contract) return res.status(404).json({ message: "Không tìm thấy hợp đồng" });
     if (!roomDoc) return res.status(404).json({ message: "Không tìm thấy phòng" });
-    if (String(contract.room) !== String(roomId)) return res.status(400).json({ message: "Hợp đồng không thuộc phòng này" });
+
+    const { resolveContractEntitledRoomId, alignContractRoomToEntitledRoom } = require("../services/violationResidentsService");
+    const entitledRoomId = await resolveContractEntitledRoomId(contract);
+    if (!entitledRoomId || entitledRoomId !== String(roomId)) {
+      return res.status(400).json({
+        message: "Hợp đồng không thuộc phòng này (phòng hiệu lực khác — chỉ phân giường cho SV có HĐ đúng phòng)",
+      });
+    }
+    await alignContractRoomToEntitledRoom(contract);
 
     if (!isContractAssignable(contract)) {
       return res.status(400).json({ message: "Hợp đồng không còn hiệu lực để phân giường (trạng thái hoặc đã quá hạn)" });
@@ -134,6 +143,21 @@ exports.assignBed = async (req, res) => {
     if (!genderAllowsStay(uGender, areaPol)) {
       return res.status(400).json({
         message: `Giới tính sinh viên không khớp chính sách khu (${areaPol === "male" ? "nam" : areaPol === "female" ? "nữ" : ""})`,
+      });
+    }
+
+    const otherBeds = await Bed.find({
+      room: roomId,
+      status: { $in: ["occupied", "reserved"] },
+      _id: { $ne: bed._id },
+    })
+      .populate("currentUser", "gender")
+      .lean();
+    const occGenders = otherBeds.map((b) => (b.currentUser && typeof b.currentUser === "object" ? b.currentUser.gender : null)).filter(Boolean);
+    const genderNorm = normalizeStudentGender(uGender) || "unknown";
+    if (!studentMayJoinRoom(areaPol, genderNorm, occGenders)) {
+      return res.status(400).json({
+        message: "Khu hỗn hợp: nam và nữ có thể ở cùng khu nhưng không được ở chung một phòng.",
       });
     }
 
@@ -158,8 +182,21 @@ exports.assignBed = async (req, res) => {
     const existingBed = await Bed.findOne({
       currentUser: userRef,
       status: { $in: ["occupied", "reserved"] },
-    }).lean();
-    if (existingBed) return res.status(400).json({ message: "Sinh viên đã có giường đang hoạt động hoặc đang giữ chỗ" });
+    });
+    if (existingBed) {
+      if (String(existingBed.room) === String(roomId)) {
+        if (String(existingBed._id) !== String(bed._id)) {
+          return res.status(400).json({ message: "Sinh viên đã có giường trong phòng này" });
+        }
+      } else {
+        await clearOccupiedBedDocument(
+          existingBed,
+          req.user?._id || null,
+          `Gỡ giường cũ (${existingBed.code || ""}) — phân lại theo HĐ phòng ${roomDoc.roomNumber || roomId}`
+        );
+        await syncOccupancyForRooms([existingBed.room]);
+      }
+    }
 
     bed.status = "occupied";
     bed.currentUser = contract.user._id || contract.user;
@@ -181,6 +218,8 @@ exports.assignBed = async (req, res) => {
       toStatus: "occupied",
       performedBy: req.user?._id || null,
     });
+
+    await syncOccupancyForRooms([roomId]);
 
     const bedOut = await Bed.findById(bed._id)
       .populate("currentUser", "fullName studentId email phone gender")
@@ -275,6 +314,23 @@ exports.transferBed = async (req, res) => {
       (await Bed.findOne({ currentContract: contract._id, room: sourceRoomId }));
     if (!sourceBed || sourceBed.status !== "occupied") {
       return res.status(400).json({ message: "Sinh viên chưa có giường occupied trong phòng nguồn để chuyển" });
+    }
+
+    const otherDestBeds = await Bed.find({
+      room: destRoomId,
+      status: { $in: ["occupied", "reserved"] },
+      _id: { $ne: sourceBed._id },
+    })
+      .populate("currentUser", "gender")
+      .lean();
+    const destOccGenders = otherDestBeds
+      .map((b) => (b.currentUser && typeof b.currentUser === "object" ? b.currentUser.gender : null))
+      .filter(Boolean);
+    const transferGenderNorm = normalizeStudentGender(uGender) || "unknown";
+    if (!studentMayJoinRoom(destAreaPol, transferGenderNorm, destOccGenders)) {
+      return res.status(400).json({
+        message: "Khu hỗn hợp: nam và nữ có thể ở cùng khu nhưng không được ở chung một phòng.",
+      });
     }
 
     const targetBed = await Bed.findOne({ _id: targetBedId, room: destRoomId });

@@ -2,7 +2,15 @@ import type { AxiosResponse } from "axios";
 import { isAxiosError } from "axios";
 import client from "./client";
 import { authApi } from "./auth";
-import type { Area, Room, ZoneDetailResponse, DormApplication, MyContractOverview } from "../types";
+import type {
+  Area,
+  Room,
+  User,
+  ZoneDetailResponse,
+  DormApplication,
+  MyContractOverview,
+  StudentPriorityType,
+} from "../types";
 
 export { client, authApi };
 
@@ -241,12 +249,34 @@ export const registrationsApi = {
   }) => client.post("/registrations", { ...data, registrationType: "transfer" }),
   cancel: (id: string) => client.put(`/registrations/${id}/cancel`),
   getTransferEligibility: () => client.get("/registrations/transfer-eligibility"),
+  getTransferCandidateRooms: () =>
+    client.get<{
+      studentGender: string;
+      currentAreaId: string | null;
+      currentRoomNumber: string | null;
+      groups: Array<{
+        areaId: string;
+        areaName: string;
+        genderPolicy: string;
+        isCurrentArea: boolean;
+        isGenderZone: boolean;
+        rooms: Array<{
+          _id: string;
+          roomNumber: string;
+          capacity: number;
+          currentOccupancy: number;
+          vacantSlots: number;
+          status?: string;
+        }>;
+      }>;
+    }>("/registrations/transfer-candidate-rooms"),
   getTransferSummary: (id: string) => client.get(`/registrations/${id}/transfer-summary`),
   confirmTransfer: (id: string) => client.post(`/registrations/${id}/confirm-transfer`),
   getAll: (params?: { status?: string; page?: number; limit?: number }) =>
     client.get("/registrations", { params }),
   approve: (id: string) => client.put(`/registrations/${id}/approve`),
   reject: (id: string, reason?: string) => client.put(`/registrations/${id}/reject`, { reason }),
+  adminDelete: (id: string) => client.delete(`/registrations/${id}`),
 };
 
 /** Thử lần lượt các đường dẫn “đơn của tôi” (alias / router khác nhau). */
@@ -284,8 +314,8 @@ export const applicationsApi = {
     enrollmentYear?: number;
     area?: string;
     priorityCategory?: "none" | "ho_ngheo" | "con_thuong_binh" | "chinh_sach" | "dan_toc_thieu_so";
-    /** Lọc theo priorityType trên hồ sơ User (vd. minority = dân tộc thiểu số) */
-    userPriorityType?: "minority";
+    /** Lọc theo priorityType trên hồ sơ User (hồ sơ sinh viên) */
+    userPriorityType?: StudentPriorityType;
     days?: number;
     sortOrder?: "asc" | "desc";
     page?: number;
@@ -370,6 +400,30 @@ export const billsApi = {
     page?: number;
     limit?: number;
   }) => client.get("/bills", { params }),
+  getRoomBillingPreview: (roomId: string) =>
+    client.get<{
+      roomId: string;
+      roomNumber?: string;
+      roomPrice?: number;
+      occupants: number;
+      lines: Array<{
+        contractId: string;
+        contractNumber?: string;
+        studentName?: string;
+        studentId?: string;
+        roomFee: number;
+      }>;
+    }>("/bills/room-billing-preview", { params: { roomId } }),
+  getRoomUtilityFees: (params: { roomId: string; month: number; year: number }) =>
+    client.get<{
+      electricityFee: number;
+      waterFee: number;
+      wifiMonthlyFee: number;
+      hasElectricityReading: boolean;
+      hasWaterReading: boolean;
+      hasElectricityMeter: boolean;
+      hasWaterMeter: boolean;
+    }>("/bills/room-utility-fees", { params }),
   create: (data: { contract?: string; roomId?: string; month: number; year: number; roomFee?: number; electricityFee?: number; waterFee?: number; sharedCommonFee?: number; otherFee?: number; dueDate?: string }) =>
     client.post("/bills", data),
   generate: (data: { month: number; year: number; dueDate?: string }) => client.post("/bills/generate", data),
@@ -494,7 +548,13 @@ async function getMyMaintenanceReports(): Promise<AxiosResponse<unknown>> {
 /** Khai báo hư hỏng theo loại sự cố (điện/nước/thiết bị/khác) — REST: my-reports + reports */
 export const maintenanceReportsApi = {
   getMy: () => getMyMaintenanceReports(),
-  create: (data: { type: string; description: string; images?: string[] }) => client.post("/reports", data),
+  getRoomFacilities: () => client.get("/reports/room-facilities"),
+  create: (data: {
+    facilityLocationId?: string;
+    damagedItemLabel?: string;
+    description: string;
+    images?: string[];
+  }) => client.post("/reports", data),
   getById: (id: string) => client.get(`/reports/${id}`),
   cancel: (id: string) => client.delete(`/reports/${id}`),
 };
@@ -580,6 +640,16 @@ export const servicesApi = {
   remove: (id: string) => client.delete(`/services/${id}`),
   toggle: (id: string) => client.put(`/services/${id}/toggle`),
   getMyRegistrations: (params?: { month?: number; year?: number }) => client.get("/services/my-registrations", { params }),
+  getMyRoomMeterServices: () =>
+    client.get<{ roomId: string | null; serviceIds: string[] }>("/services/my-room-meters"),
+  getPeriodLockStatus: (params: { month: number; year: number }) =>
+    client.get<{
+      month: number;
+      year: number;
+      serviceRegistrationLocked: boolean;
+      lockMessage?: string | null;
+      bannerMessage?: string | null;
+    }>("/services/period-lock-status", { params }),
   upsertMyRegistration: (data: { serviceId: string; month: number; year: number; quantity?: number; enabled?: boolean }) =>
     client.post("/services/my-registrations", data),
 };
@@ -637,6 +707,11 @@ export const violationsApi = {
   }) => client.get("/violations", { params }),
   getById: (id: string) => client.get(`/violations/${id}`),
   getStudentsSummary: (params: { schoolYear: string; semester: string }) => client.get("/violations/students-summary", { params }),
+  getRoomResidents: (roomId: string) =>
+    client.get<{ room?: { _id: string; roomNumber?: string }; residents: Array<{ user: User }>; totalResidents: number }>(
+      "/violations/room-residents",
+      { params: { roomId } }
+    ),
   create: (data: Record<string, unknown>) => client.post("/violations", data),
   update: (id: string, data: Record<string, unknown>) => client.put(`/violations/${id}`, data),
   remove: (id: string) => client.delete(`/violations/${id}`),

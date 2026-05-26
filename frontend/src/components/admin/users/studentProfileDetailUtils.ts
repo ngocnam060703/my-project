@@ -61,6 +61,14 @@ export function residencyStayStatusDisplay(status?: string | null): { color: str
       return { color: "success", text: "Đang ở", emoji: "🟢" };
     case "checked_out":
       return { color: "default", text: "Đã check-out", emoji: "⚪" };
+    case "ended_cancelled":
+      return { color: "error", text: "Đã kết thúc (HĐ hủy)", emoji: "🔴" };
+    case "ended_transfer_settled":
+      return { color: "purple", text: "Đã thanh lý (chuyển phòng)", emoji: "🟣" };
+    case "ended_terminated":
+      return { color: "default", text: "Đã chấm dứt HĐ", emoji: "⚪" };
+    case "ended_expired":
+      return { color: "default", text: "Hết hạn HĐ", emoji: "⚪" };
     case "pending_bed":
       return { color: "processing", text: "Chờ phân giường" };
     case "not_started":
