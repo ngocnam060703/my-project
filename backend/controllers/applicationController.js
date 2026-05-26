@@ -8,6 +8,7 @@ const { getIO } = require("../socket");
 const { isSchoolYearNotPast } = require("../utils/schoolYear");
 const RegistrationPeriod = require("../models/RegistrationPeriod");
 const { findOpenRegistrationPeriod } = require("../services/registrationPeriodPolicy");
+const { countEffectiveResidentsByRoom } = require("../services/roomOccupancySync");
 const { hasDormRegistrationProfile, REQUIRED_DORM_REGISTRATION_FIELDS } = require("../utils/profileComplete");
 const {
   normalizeGender,
@@ -20,6 +21,7 @@ const {
   countRoomSlotHoldersByRoom,
   roomFitsStudentGender,
   buildAreaVacancyStats,
+  applyLiveOccupancyToAssignedRooms,
 } = require("../services/applicationRoomAssignment");
 
 function isStudentAccount(user) {
@@ -185,6 +187,7 @@ exports.list = async (req, res) => {
         .skip(skip)
         .limit(lim)
         .lean();
+      await applyLiveOccupancyToAssignedRooms(rows);
       const total = await Application.countDocuments(filter);
       const [pendingCount, approvedCount, totalAll] = await Promise.all([
         Application.countDocuments({ ...statsFilter, status: "pending" }),
@@ -226,6 +229,7 @@ exports.list = async (req, res) => {
 
     const total = filtered.length;
     const slice = filtered.slice((pageNum - 1) * lim, (pageNum - 1) * lim + lim);
+    await applyLiveOccupancyToAssignedRooms(slice);
 
     const allStats = await Application.find(statsFilter)
       .populate("preferenceArea", "name genderPolicy")
@@ -281,7 +285,9 @@ exports.getById = async (req, res) => {
       if (!okPending && !inArea) return res.status(403).json({ message: "Không có quyền xem đơn ngoài khu quản lý" });
     }
 
-    res.json(app);
+    const plain = app.toObject();
+    await applyLiveOccupancyToAssignedRooms([plain]);
+    res.json(plain);
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
@@ -391,7 +397,7 @@ exports.getSuggestedRoom = async (req, res) => {
           "Chưa có phòng phù hợp. Nam và nữ không ở chung phòng — cần phòng trống hoặc phòng đang có sinh viên cùng giới tính.",
       });
     }
-    const heldMap = await countRoomSlotHoldersByRoom([room._id], null);
+    const heldMap = await countEffectiveResidentsByRoom([room._id]);
     const held = heldMap.get(String(room._id)) ?? Number(room.currentOccupancy || 0);
     const cap = Number(room.capacity) || 0;
     const full = await Room.findById(room._id).populate("area", "name genderPolicy").lean();

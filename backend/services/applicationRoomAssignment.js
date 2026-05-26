@@ -6,7 +6,7 @@ const Application = require("../models/Application");
 const Bed = require("../models/Bed");
 const { normalizeGender } = require("../utils/assignRoom");
 const { areaAllowsStudentGender, studentMayJoinRoom } = require("../utils/genderPolicy");
-const { contractHoldsRoomSlot, syncRoomsOccupancyFromContracts } = require("./roomOccupancySync");
+const { contractHoldsRoomSlot, syncRoomsOccupancyFromContracts, countEffectiveResidentsByRoom } = require("./roomOccupancySync");
 
 function withSession(query, session) {
   return session ? query.session(session) : query;
@@ -192,12 +192,9 @@ async function findCandidateRooms({ genderNorm, preferenceAreaId }, session = nu
   ).lean();
 
   const roomIds = rooms.map((r) => r._id);
-  if (roomIds.length) {
-    await syncRoomsOccupancyFromContracts(roomIds);
-  }
-  const [occupantByRoom, slotHolders] = await Promise.all([
+  const slotHolders = roomIds.length ? await countEffectiveResidentsByRoom(roomIds) : new Map();
+  const [occupantByRoom] = await Promise.all([
     loadOccupantGendersByRoom(roomIds, session),
-    countRoomSlotHoldersByRoom(roomIds, session),
   ]);
 
   return rooms
@@ -299,6 +296,37 @@ function buildAreaVacancyStats(rooms) {
   return [...byArea.values()];
 }
 
+/** Gắn currentOccupancy thực tế (HĐ active + đơn approved) lên assignedRoom trong danh sách đơn. */
+async function applyLiveOccupancyToAssignedRooms(applications) {
+  if (!Array.isArray(applications) || !applications.length) return applications;
+
+  const roomIds = [
+    ...new Set(
+      applications
+        .map((a) => a.assignedRoom?._id || a.assignedRoom)
+        .filter(Boolean)
+        .map(String)
+    ),
+  ];
+  if (!roomIds.length) return applications;
+
+  const heldMap = await countEffectiveResidentsByRoom(roomIds);
+
+  for (const app of applications) {
+    const ar = app.assignedRoom;
+    if (!ar || typeof ar !== "object") continue;
+    const rid = String(ar._id || ar);
+    const held = heldMap.get(rid);
+    if (held == null) continue;
+    ar.currentOccupancy = held;
+    const cap = Number(ar.capacity) || 0;
+    if (cap > 0 && ar.status !== "maintenance") {
+      ar.status = held >= cap ? "full" : "available";
+    }
+  }
+  return applications;
+}
+
 module.exports = {
   findCandidateRooms,
   pickBestRoomForApplication,
@@ -306,6 +334,7 @@ module.exports = {
   refreshRoomOccupancyFromSlots,
   tryAssignRoomForApplication,
   buildAreaVacancyStats,
+  applyLiveOccupancyToAssignedRooms,
   areaAllowsGender,
   loadOccupantGendersByRoom,
   countRoomSlotHoldersByRoom,

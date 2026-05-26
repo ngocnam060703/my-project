@@ -30,7 +30,8 @@ function contractHoldsRoomSlot(c, now = new Date()) {
  * Đếm SV giữ slot phòng theo phòng hiệu lực trên HĐ (đơn chuyển / KTX / contract.room).
  * Mỗi SV chỉ tính một phòng; đơn KTX cũ không cộng thêm sau khi đã có HĐ phòng mới.
  */
-async function countContractOccupancyByRoom(roomIds, now = new Date()) {
+async function countContractOccupancyByRoom(roomIds, now = new Date(), options = {}) {
+  const { includeApprovedHolds = true, activeEffectiveOnly = false } = options;
   const ids = [...new Set((roomIds || []).filter((id) => id && mongoose.isValidObjectId(String(id))).map(String))];
   const userSets = new Map(ids.map((id) => [id, new Set()]));
   if (!ids.length) return new Map();
@@ -77,7 +78,9 @@ async function countContractOccupancyByRoom(roomIds, now = new Date()) {
 
   for (const c of contracts) {
     const st = String(c.status || "");
-    if (st === "active") {
+    if (activeEffectiveOnly) {
+      if (!contractIsEffectiveResident(c, now)) continue;
+    } else if (st === "active") {
       if (!contractIsEffectiveResident(c, now)) continue;
     } else if (!contractHoldsRoomSlot(c, now)) {
       continue;
@@ -90,19 +93,29 @@ async function countContractOccupancyByRoom(roomIds, now = new Date()) {
     usersPlaced.add(uid);
   }
 
-  for (const a of approvedApps) {
-    const uid = String(a.user || "");
-    if (!uid || usersPlaced.has(uid)) continue;
-    const k = String(a.assignedRoom || "");
-    if (userSets.has(k)) {
-      userSets.get(k).add(uid);
-      usersPlaced.add(uid);
+  if (includeApprovedHolds) {
+    for (const a of approvedApps) {
+      const uid = String(a.user || "");
+      if (!uid || usersPlaced.has(uid)) continue;
+      const k = String(a.assignedRoom || "");
+      if (userSets.has(k)) {
+        userSets.get(k).add(uid);
+        usersPlaced.add(uid);
+      }
     }
   }
 
   const map = new Map();
   for (const [rid, set] of userSets) map.set(rid, set.size);
   return map;
+}
+
+/** Chỉ SV có HĐ active đang hiệu lực (trong kỳ ở) — không tính đơn approved chưa có HĐ. */
+async function countEffectiveResidentsByRoom(roomIds, now = new Date()) {
+  return countContractOccupancyByRoom(roomIds, now, {
+    includeApprovedHolds: false,
+    activeEffectiveOnly: true,
+  });
 }
 
 /**
@@ -161,6 +174,7 @@ module.exports = {
   contractIsEffectiveResident,
   contractHoldsRoomSlot,
   countContractOccupancyByRoom,
+  countEffectiveResidentsByRoom,
   syncRoomsOccupancyFromContracts,
   recountRoomOccupancyForRoom,
   syncOccupancyForRooms,
