@@ -428,6 +428,7 @@ export const billsApi = {
     client.post("/bills", data),
   generate: (data: { month: number; year: number; dueDate?: string }) => client.post("/bills/generate", data),
   update: (id: string, data: Record<string, unknown>) => client.patch(`/bills/${id}`, data),
+  delete: (id: string) => client.delete(`/bills/${id}`),
   revenueSummary: (params?: { year?: number }) => client.get("/bills/revenue/summary", { params }),
   refreshOverdue: () => client.post("/bills/overdue/refresh"),
 };

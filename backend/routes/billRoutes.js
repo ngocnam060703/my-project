@@ -27,6 +27,7 @@ router.post("/", auth, admin, billController.create);
 router.post("/generate", auth, admin, billController.generateByMonth);
 router.post("/overdue/refresh", auth, admin, billController.runOverdueRefresh);
 router.patch("/:id", auth, admin, billController.updateBill);
+router.delete("/:id", auth, admin, billController.deleteBill);
 
 /** Chi tiết (staff + chủ hóa đơn) */
 router.get("/:id", auth, billController.getById);

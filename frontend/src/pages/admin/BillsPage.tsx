@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Table, Button, Modal, Form, Select, InputNumber, message, Tag, Space, Card, Row, Col, Statistic, Input, Popover, Typography } from "antd";
-import { CheckOutlined, EyeOutlined } from "@ant-design/icons";
+import { CheckOutlined, EyeOutlined, DeleteOutlined } from "@ant-design/icons";
 import { exportToExcel } from "../../utils/exportExcel";
 import { formatDateTimeVi } from "../../utils/formatDateTime";
 import {
@@ -34,6 +34,31 @@ const formatPersonalServiceLine = (it: PersonalLine) => {
   const amt = formatMoney(it.amount || 0);
   const suffix = it.unit === "once" ? ` (${it.quantity ?? 0} lần)` : " (/ tháng)";
   return `${name}: ${amt}${suffix}`;
+};
+
+type PenaltyLine = NonNullable<Bill["penaltyBreakdown"]>[number];
+
+const isTransferSupplementDeductionLine = (label?: string) => {
+  const n = String(label || "").toLowerCase();
+  return n.includes("(trừ)") || n.includes("bù trừ");
+};
+
+/** Dòng bù trừ phụ thu CP hiển thị âm; tổng thu = dòng "Phụ thu còn phải thu" hoặc bill.total. */
+const formatTransferSupplementLineAmount = (line: PenaltyLine, billType?: Bill["billType"]) => {
+  const amount = Number(line.amount || 0);
+  if (isTransferSupplementBill(billType) && isTransferSupplementDeductionLine(line.label) && amount > 0) {
+    return `−${amount.toLocaleString("vi-VN")}đ`;
+  }
+  return formatMoney(amount);
+};
+
+const transferSupplementDisplayTotal = (bill: Bill) => {
+  if (!isTransferSupplementBill(bill.billType)) return bill.total ?? 0;
+  const resultLine = (bill.penaltyBreakdown || []).find((line) =>
+    String(line.label || "").includes("Phụ thu còn phải thu"),
+  );
+  if (resultLine?.amount != null) return Number(resultLine.amount);
+  return bill.total ?? 0;
 };
 
 const isWifiServiceName = (name?: string) => {
@@ -277,6 +302,41 @@ const BillsPage: React.FC = () => {
     });
   };
 
+  const handleDeleteTransferOldBill = (r: Bill) => {
+    Modal.confirm({
+      title: "Xóa hóa đơn phòng cũ",
+      width: 480,
+      content: (
+        <div>
+          <p style={{ marginBottom: 8 }}>
+            Sinh viên <strong>{(r.user as { fullName?: string })?.fullName || "—"}</strong> chuyển phòng khi{" "}
+            <strong>chưa ở ngày nào</strong>. Xóa hóa đơn <strong>{billCodeDisplay(r)}</strong> (
+            {formatMoney(r.total)}, {r.month}/{r.year})?
+          </p>
+          <p style={{ margin: 0, color: "#6b7280", fontSize: 13 }}>
+            Chỉ áp dụng HĐ tháng phòng cũ chưa thanh toán. Hành động không thể hoàn tác.
+          </p>
+        </div>
+      ),
+      okText: "Xóa",
+      okType: "danger",
+      cancelText: "Hủy",
+      onOk: async () => {
+        try {
+          await billsApi.delete(r._id);
+          message.success("Đã xóa hóa đơn phòng cũ");
+          if (detailModal?._id === r._id) setDetailModal(null);
+          load();
+        } catch (err: unknown) {
+          message.error(
+            (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+              "Không xóa được hóa đơn",
+          );
+        }
+      },
+    });
+  };
+
   const searchStudents = async (q: string) => {
     if (!q.trim()) {
       setStudentOptions([]);
@@ -448,7 +508,8 @@ const BillsPage: React.FC = () => {
                 <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
                   {(r.penaltyBreakdown || []).map((line, idx) => (
                     <li key={idx}>
-                      {line.label}: <strong>{formatMoney(line.amount)}</strong>
+                      {line.label}:{" "}
+                      <strong>{formatTransferSupplementLineAmount(line, r.billType)}</strong>
                     </li>
                   ))}
                 </ul>
@@ -505,7 +566,11 @@ const BillsPage: React.FC = () => {
       dataIndex: "total",
       key: "total",
       width: 110,
-      render: (v: number) => <strong style={{ color: "#134e4a" }}>{formatMoney(v)}</strong>,
+      render: (_: unknown, r: Bill) => (
+        <strong style={{ color: "#134e4a" }}>
+          {formatMoney(isTransferSupplementBill(r.billType) ? transferSupplementDisplayTotal(r) : r.total)}
+        </strong>
+      ),
     },
     {
       title: "Hạn TT",
@@ -551,14 +616,19 @@ const BillsPage: React.FC = () => {
     {
       title: "Thao tác",
       key: "action",
-      width: 160,
+      width: 200,
       fixed: "right" as const,
       render: (_: unknown, r: Bill) => (
-        <Space>
+        <Space wrap>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetailModal(r)}>Chi tiết</Button>
           {(r.status === "pending" || r.status === "unpaid" || r.status === "overdue") && (
             <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => handleMarkPaid(r)}>Đã TT</Button>
           )}
+          {r.canDeleteTransferOldBill ? (
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteTransferOldBill(r)}>
+              Xóa
+            </Button>
+          ) : null}
         </Space>
       ),
     },
@@ -829,6 +899,11 @@ const BillsPage: React.FC = () => {
         onCancel={() => setDetailModal(null)}
         footer={[
           <Button key="close" onClick={() => setDetailModal(null)}>Đóng</Button>,
+          detailModal?.canDeleteTransferOldBill ? (
+            <Button key="delete" danger icon={<DeleteOutlined />} onClick={() => handleDeleteTransferOldBill(detailModal)}>
+              Xóa HĐ phòng cũ
+            </Button>
+          ) : null,
           detailModal && (detailModal.status === "pending" || detailModal.status === "unpaid" || detailModal.status === "overdue") && (
             <Button key="pay" type="primary" icon={<CheckOutlined />} onClick={() => { handleMarkPaid(detailModal); setDetailModal(null); }}>Xác nhận đã thanh toán</Button>
           ),
@@ -851,7 +926,8 @@ const BillsPage: React.FC = () => {
                     <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
                       {detailModal.penaltyBreakdown?.map((line, idx) => (
                         <li key={idx}>
-                          {line.label}: <strong>{formatMoney(line.amount)}</strong>
+                          {line.label}:{" "}
+                          <strong>{formatTransferSupplementLineAmount(line, detailModal.billType)}</strong>
                         </li>
                       ))}
                     </ul>
@@ -874,20 +950,6 @@ const BillsPage: React.FC = () => {
                 <p><strong>Tiền phòng:</strong> {formatMoney(detailModal.roomFee)}</p>
                 <p><strong>Tiền điện:</strong> {formatMoney(detailModal.electricityFee)}</p>
                 <p><strong>Tiền nước:</strong> {formatMoney(detailModal.waterFee)}</p>
-                {(detailModal.commonServiceBreakdown?.length || 0) > 0 ? (
-                  <div style={{ marginTop: 4 }}>
-                    <strong>Dịch vụ phòng chung:</strong>
-                    <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
-                      {(detailModal.commonServiceBreakdown ?? []).map((it, idx) => (
-                        <li key={`${it.service || it.name || "common"}-${idx}`}>
-                          {it.name || "Dịch vụ"}: <strong>{formatMoney(it.totalAmount)}</strong>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : detailModal.sharedCommonFee ? (
-                  <p><strong>Dịch vụ phòng chung:</strong> {formatMoney(detailModal.sharedCommonFee)}</p>
-                ) : null}
                 {detailModal.otherFee ? <p><strong>Phí khác:</strong> {formatMoney(detailModal.otherFee)}</p> : null}
                 {detailModal.personalServiceFee ? <p><strong>Dịch vụ cá nhân:</strong> {formatMoney(detailModal.personalServiceFee)}</p> : null}
                 {(detailModal.personalServiceBreakdown?.length || 0) > 0 && (
@@ -905,7 +967,13 @@ const BillsPage: React.FC = () => {
             )}
             <p>
               <strong>{isTransferSupplementBill(detailModal.billType) ? "Phụ thu còn lại:" : "Tổng cộng:"}</strong>{" "}
-              <span style={{ fontSize: 18, color: "#0d9488" }}>{formatMoney(detailModal.total)}</span>
+              <span style={{ fontSize: 18, color: "#0d9488" }}>
+                {formatMoney(
+                  isTransferSupplementBill(detailModal.billType)
+                    ? transferSupplementDisplayTotal(detailModal)
+                    : detailModal.total,
+                )}
+              </span>
             </p>
             <hr style={{ margin: "12px 0" }} />
             <p><strong>Hạn thanh toán:</strong> {new Date(detailModal.dueDate).toLocaleDateString("vi-VN")}</p>

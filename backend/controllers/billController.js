@@ -23,6 +23,7 @@ const {
   getClientReturnBaseUrl,
 } = require("../services/vnpayGateway");
 const { effectiveContractPrice } = require("../services/contractPricing");
+const { evaluateTransferOldBillDeletion } = require("../services/roomTransferService");
 const {
   loadMeterServicesAssignedToRoom,
   applyRoomMeterAssignment,
@@ -94,6 +95,9 @@ function applyLiveOccupantsToBill(plain, countByRoom) {
 
 async function enrichBillsForResponse(bills) {
   const arr = Array.isArray(bills) ? bills : [bills];
+  for (const bill of arr) {
+    if (bill?.save) await reconcileWaterCommonFeeOnUnpaidBill(bill);
+  }
   const monthly = arr.filter((b) => !b.billType || b.billType === "monthly");
   const roomIds = monthly.map((b) => String(b.room?._id || b.room || "")).filter(Boolean);
   const countByRoom = await getActiveOccupantCountByRoomIds(roomIds);
@@ -146,6 +150,7 @@ function buildCommonServicesPerStudent(commonServices, roomLike) {
   let commonPerStudent = 0;
   for (const s of commonServices) {
     if (String(s.name || "").toLowerCase().includes("tiền phòng")) continue;
+    if (isWaterNamedService(s)) continue;
     const roomAmt = Number(s.price || 0);
     const perStudent = Math.round(roomAmt / slots);
     commonPerStudent += perStudent;
@@ -157,6 +162,58 @@ function buildCommonServicesPerStudent(commonServices, roomLike) {
 function isWifiNamedService(s) {
   const n = String(s.name || "").toLowerCase();
   return n.includes("wifi") || n.includes("wi-fi") || n.includes("wi fi");
+}
+
+/** Nước phòng chung (type common) — đã tính riêng qua waterFee / đồng hồ, không cộng trùng. */
+function isWaterNamedService(nameOrService) {
+  const n = String(typeof nameOrService === "string" ? nameOrService : nameOrService?.name || "").toLowerCase();
+  return n.includes("nước") || n.includes("nuoc") || n === "water";
+}
+
+function computeBillTotalFromFeeParts(bill) {
+  return (
+    Number(bill.roomFee || 0) +
+    Number(bill.electricityFee || 0) +
+    Number(bill.waterFee || 0) +
+    Number(bill.otherFee || 0) +
+    Number(bill.sharedCommonFee || 0) +
+    Number(bill.personalServiceFee || 0)
+  );
+}
+
+function stripWaterFromCommonServiceBreakdown(breakdown) {
+  return (breakdown || []).filter((it) => !isWaterNamedService(it));
+}
+
+/** Hóa đơn chưa paid: bỏ dòng nước trong DV phòng chung và trừ khỏi tổng. */
+async function reconcileWaterCommonFeeOnUnpaidBill(bill) {
+  const billType = bill.billType || "monthly";
+  if (billType !== "monthly" || bill.status === "paid") return bill;
+
+  const original = bill.commonServiceBreakdown || [];
+  const filtered = stripWaterFromCommonServiceBreakdown(original);
+  if (filtered.length === original.length) return bill;
+
+  const removedAmount = original
+    .filter((it) => isWaterNamedService(it))
+    .reduce((s, it) => s + Number(it.totalAmount || 0), 0);
+  if (removedAmount <= 0) return bill;
+
+  bill.commonServiceBreakdown = filtered;
+  bill.sharedCommonFee = filtered.reduce((s, it) => s + Number(it.totalAmount || 0), 0);
+  const grossTotal = computeBillTotalFromFeeParts(bill);
+  const walletApplied = Math.max(0, Number(bill.walletCreditApplied || 0));
+  bill.total = Math.max(0, grossTotal - walletApplied);
+  bill.markModified("commonServiceBreakdown");
+  bill.paymentHistory = bill.paymentHistory || [];
+  bill.paymentHistory.push({
+    at: new Date(),
+    action: "adjusted",
+    amount: Math.round(bill.total),
+    note: `Loại bỏ phí nước trùng trong DV phòng chung (−${removedAmount.toLocaleString("vi-VN")}đ)`,
+  });
+  await bill.save();
+  return bill;
 }
 
 /** Chỉ DV common đã gán cho phòng (RoomService) — không lấy toàn bộ catalog. */
@@ -376,6 +433,10 @@ exports.getAll = async (req, res) => {
       .sort({ year: -1, month: -1, createdAt: -1 });
     await ensureBillCodesForList(bills);
     const billsOut = await enrichBillsForResponse(bills);
+    for (let i = 0; i < bills.length; i++) {
+      const check = await evaluateTransferOldBillDeletion(bills[i]);
+      billsOut[i].canDeleteTransferOldBill = check.allowed;
+    }
     const total = await Bill.countDocuments(filter);
     const [summaryAgg] = await Bill.aggregate([
       { $match: filter },
@@ -1026,6 +1087,29 @@ exports.getById = async (req, res) => {
     const [enriched] = await enrichBillsForResponse([bill]);
     enriched.amount = bill.total;
     res.json(enriched);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/** Admin: xóa HĐ tháng phòng cũ — chỉ khi SV chuyển phòng chưa ở ngày nào. */
+exports.deleteBill = async (req, res) => {
+  try {
+    const bill = await Bill.findById(req.params.id)
+      .populate("contract", "contractNumber status")
+      .populate("user", "fullName studentId");
+    if (!bill) return res.status(404).json({ message: "Không tìm thấy hóa đơn" });
+
+    const check = await evaluateTransferOldBillDeletion(bill);
+    if (!check.allowed) {
+      return res.status(400).json({ message: check.reason || "Không được phép xóa hóa đơn này" });
+    }
+
+    await Bill.findByIdAndDelete(bill._id);
+    res.json({
+      ok: true,
+      message: "Đã xóa hóa đơn phòng cũ (sinh viên chuyển phòng khi chưa ở ngày nào)",
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

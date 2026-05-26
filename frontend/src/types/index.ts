@@ -505,6 +505,8 @@ export interface Bill {
   paymentReference?: string;
   paymentHistory?: BillPaymentHistoryEntry[];
   note?: string;
+  /** Admin: HĐ tháng phòng cũ có thể xóa khi SV chuyển phòng chưa ở ngày nào */
+  canDeleteTransferOldBill?: boolean;
   billType?: "monthly" | "penalty" | "damage_reimbursement";
   violation?: string | { _id?: string; ruleName?: string; description?: string; fineAmount?: number; compensationAmount?: number; createdAt?: string };
   penaltyBreakdown?: Array<{ label?: string; amount?: number }>;

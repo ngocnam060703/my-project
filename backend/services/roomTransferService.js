@@ -6,7 +6,8 @@
  * 3. HĐ mới: startDate = ngày nộp đơn; endDate = +1 năm; giá đóng băng.
  * 3. Tài chính tiền phòng:
  *    - Admin chưa tạo HĐ tiền phòng tháng cũ → không phụ thu CP; admin tự tạo HĐ tháng lẻ sau (không auto).
- *    - Đã có HĐ tiền phòng (đã trả hoặc chưa trả) + phòng mới giá cao hơn → phụ thu = phần thiếu (bù trừ nếu đã trả).
+ *    - Đã có HĐ tiền phòng + phòng mới giá cao hơn + SV đã ở phòng cũ ≥ 1 ngày → phụ thu chênh lệch giá/tháng (chưa trả HĐ) hoặc bù trừ (đã trả).
+ *    - Chuyển phòng khi chưa ở ngày nào (startDate HĐ = ngày chuyển) → không phụ thu.
  *    - Hóa đơn phạt / bồi thường HH: không đụng tới.
  * 4. HĐ gia hạn upcoming: hủy + hoàn 100% tiền đã đóng (chỉ billType monthly) vào ví.
  */
@@ -89,6 +90,22 @@ function addOneCalendarYear(startDate) {
 
 function daysInCalendarMonth(year, month1to12) {
   return new Date(year, month1to12, 0).getDate();
+}
+
+/** Số ngày đã ở phòng cũ trước ngày nộp đơn chuyển (từ startDate HĐ, không tính từ đầu tháng). */
+function computeDaysUsedInOldRoom(oldContract, settlementDay) {
+  const regDay = startOfDay(settlementDay);
+  const contractStart = oldContract?.startDate ? startOfDay(oldContract.startDate) : null;
+  if (!contractStart || regDay <= contractStart) return 0;
+
+  const y = regDay.getFullYear();
+  const m = regDay.getMonth();
+  const monthStart = startOfDay(new Date(y, m, 1));
+  const periodStart = contractStart > monthStart ? contractStart : monthStart;
+  if (regDay <= periodStart) return 0;
+
+  const msPerDay = 86400000;
+  return Math.max(0, Math.round((regDay - periodStart) / msPerDay));
 }
 
 function buildOldContractCancelReason(reg, newRoomNumber) {
@@ -221,8 +238,8 @@ async function computeTransferFinancials({
   const y = settlementDay.getFullYear();
   const m = settlementDay.getMonth() + 1;
   const dim = daysInCalendarMonth(y, m);
-  const daysUsedOldInMonth = settlementDay.getDate();
-  const daysRemainingOldInMonth = Math.max(0, dim - daysUsedOldInMonth);
+  const daysUsedOldInMonth = computeDaysUsedInOldRoom(oldContract, settlementDay);
+  const daysRemainingOldInMonth = Math.max(0, dim - settlementDay.getDate());
 
   const oldActualCharge = Math.round((oldPrice * daysUsedOldInMonth) / dim);
   const unusedOldRoomCredit = Math.round((oldPrice * daysRemainingOldInMonth) / dim);
@@ -258,10 +275,18 @@ async function computeTransferFinancials({
     if (supplementAmount > 0) financialAction = "supplement";
     else if (walletCreditAmount > 0) financialAction = "wallet_credit";
     else financialAction = "none";
-  } else if (hasAnyOldRoomBill && newPrice > oldPrice) {
+  } else if (hasAnyOldRoomBill && newPrice > oldPrice && daysUsedOldInMonth > 0) {
+    /** HĐ tháng cũ chưa trả + đã ở phòng cũ: phụ thu = chênh lệch giá phòng/tháng (không gồm DV). */
     financialMode = "room_offset";
-    supplementAmount = Math.max(0, Math.round(((newPrice - oldPrice) * daysNewFirstMonth) / regDim));
+    supplementAmount = Math.max(0, Math.round(newPrice - oldPrice));
     if (supplementAmount > 0) financialAction = "supplement";
+  }
+
+  if (daysUsedOldInMonth <= 0) {
+    supplementAmount = 0;
+    if (financialAction === "supplement") {
+      financialAction = walletCreditAmount > 0 ? "wallet_credit" : "none";
+    }
   }
 
   const priceComparison =
@@ -423,7 +448,7 @@ async function createTransferSupplementBill({
         amount: Math.round(Math.min(totalCreditFromOld, newFirstMonthProrated)),
       }
     : {
-        label: "Chênh lệch giá phòng cao hơn (prorate tháng đầu, chưa bù trừ tiền đã trả)",
+        label: `Chênh lệch giá phòng/tháng (${Math.round(newMonthlySlotPrice).toLocaleString("vi-VN")}đ − ${Math.round(financialSnapshot.oldMonthlySlotPrice || 0).toLocaleString("vi-VN")}đ, chưa bù trừ tiền đã trả)`,
         amount: supplementAmount,
       };
 
@@ -1093,6 +1118,68 @@ async function listTransferCandidateRoomGroups(studentUserId) {
   };
 }
 
+const TRANSFER_OLD_CONTRACT_STATUSES = new Set([
+  OLD_CONTRACT_SETTLED_STATUS,
+  "terminated_due_to_transfer",
+]);
+
+/**
+ * Admin được xóa HĐ tháng phòng cũ khi SV chuyển phòng hoàn tất và chưa ở ngày nào (daysUsedOld = 0).
+ */
+async function evaluateTransferOldBillDeletion(bill) {
+  if (!bill) return { allowed: false, reason: "Không tìm thấy hóa đơn" };
+  if (bill.status === "paid") {
+    return { allowed: false, reason: "Không xóa hóa đơn đã thanh toán" };
+  }
+  const billType = bill.billType || "monthly";
+  if (billType !== "monthly") {
+    return { allowed: false, reason: "Chỉ xóa hóa đơn tháng tiền phòng" };
+  }
+
+  const contractId = String(bill.contract?._id || bill.contract || "");
+  const userId = String(bill.user?._id || bill.user || "");
+  if (!contractId || !userId) {
+    return { allowed: false, reason: "Thiếu thông tin hợp đồng hoặc sinh viên" };
+  }
+
+  const contract = await Contract.findById(contractId).select("status").lean();
+  if (contract && !TRANSFER_OLD_CONTRACT_STATUSES.has(String(contract.status))) {
+    return { allowed: false, reason: "Hợp đồng không phải phòng cũ đã chuyển" };
+  }
+
+  const registrations = await Registration.find({
+    user: userId,
+    registrationType: "transfer",
+    transferPhase: "completed",
+    status: "approved",
+  }).lean();
+
+  for (const reg of registrations) {
+    const snap = reg.financialSnapshot || {};
+    const oldContractId = String(snap.oldContractId || reg.currentContract || "");
+    if (oldContractId !== contractId) continue;
+
+    if (snap.month && snap.year && (bill.month !== snap.month || bill.year !== snap.year)) {
+      continue;
+    }
+
+    let daysUsed = Number(snap.daysUsedOld);
+    const oldContract = await Contract.findById(oldContractId).select("startDate").lean();
+    const regDate = snap.registrationDate || reg.createdAt;
+    daysUsed = computeDaysUsedInOldRoom(oldContract, regDate);
+
+    if (daysUsed <= 0) {
+      return {
+        allowed: true,
+        reason: "Sinh viên chuyển phòng khi chưa ở ngày nào — hóa đơn phòng cũ",
+        registrationId: reg._id,
+      };
+    }
+  }
+
+  return { allowed: false, reason: "Hóa đơn không thuộc trường hợp chuyển phòng chưa ở ngày nào" };
+}
+
 module.exports = {
   approveTransferRequest,
   executeRoomTransfer,
@@ -1106,6 +1193,7 @@ module.exports = {
   listTransferCandidateRoomGroups,
   computeTransferFinancials,
   computePaidMonthlyRoomFeesForContract,
+  evaluateTransferOldBillDeletion,
   getRegistrationApplicationDate,
   findUpcomingRenewalForActive,
   OLD_CONTRACT_SETTLED_STATUS,
